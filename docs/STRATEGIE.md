@@ -140,3 +140,27 @@ paroles d'Ézéchiel et de Samaël**.
 - Dans un monde divergent (civilisation non humaine), la règle suit **le niveau technologique réel**
   de la simulation, pas la date du calendrier.
 - Tests : pour chaque ère, aucune carte, option ou fait au-dessus de son époque n'est disponible.
+
+## 10. Deux modes : Éternité (par défaut) et Épreuve
+
+Le créateur veut avant tout **un jeu de table extrêmement calme, jouable presque à l'infini**, où l'on
+regarde son monde évoluer encore et encore. Choix validé : **Éternité par défaut, Épreuve en option**.
+
+| | **Éternité** (par défaut) | **Épreuve** |
+|---|---|---|
+| Fin de partie | **Aucune.** Une défaite devient la fin d'un **chapitre** : la vie repart (ruines, retour de la nature, nouvelles espèces) | Victoire (4 Grands Œuvres) ou défaite (§4) |
+| Manches | Chapitres tranquilles, sans compte à rebours pressant | Comme au §2 |
+| Samaël | **Rival doux** : il propose des **défis** facultatifs (« Garde les hadrosaures en vie jusqu'à la prochaine glaciation ») et commente ; ses menaces restent des événements que l'on peut laisser passer | Adversaire (§8) |
+| Grands Œuvres | Jalons à collectionner, sans limite : le monde peut les accomplir plusieurs fois, de façons différentes | Objectifs de victoire |
+| Rythme | Le joueur peut tout laisser tourner et regarder | Comme au §2 |
+
+### Un futur sans fin
+
+- Après la post-singularité, **l'histoire continue** : civilisations qui montent et tombent, une autre
+  lignée qui devient consciente, exode vers les étoiles, retour de la nature sur les ruines, nouveaux
+  âges glaciaires, dérive des continents… La simulation produit ces cycles, rien n'est écrit à la main.
+- **Horizon lointain** : le Soleil vieillit ; dans environ un milliard d'années, la Terre devient trop
+  chaude pour la vie complexe. C'est l'horizon ultime, pas une limite de partie.
+- La Chronique devient un **grand livre** découpé en chapitres, qu'on feuillette.
+- **Sauvegarde automatique** et reprise de la partie, des semaines plus tard.
+- Mémoire et performance **bornées** sur des parties de dizaines d'heures.

@@ -10,6 +10,7 @@ const Contract := preload("res://tests/test_parcel.gd")
 
 const CELL := Vector2i(70, 40)
 const YUCATAN := Vector2i(60, 50)
+const INDUSTRIAL := WorldSim.Eras.FIRST_SAPIENT_ERA + 4
 
 
 func _frame(sim: RefCounted) -> Array[Dictionary]:
@@ -125,7 +126,7 @@ func test_development_hysteresis() -> String:
 
 
 func test_ice_hysteresis() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var cell := _inland_cell(sim, CELL)
 	var i := cell.y * WorldSim.WIDTH + cell.x
 	var parcel := ParcelSim.new(sim, cell)
@@ -142,7 +143,7 @@ func test_ice_hysteresis() -> String:
 
 
 func test_trends_do_not_flicker() -> String:
-	var sim := WorldSim.new(11)
+	var sim := WorldSim.new(11, true, WorldSim.SCENARIO_CRETACEOUS)
 	var parcel := ParcelSim.new(sim, Contract._land_cell(sim, CELL))
 	var last := {}
 	var changes := 0
@@ -162,7 +163,7 @@ func test_trends_do_not_flicker() -> String:
 
 
 func test_crater_after_meteor() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var cell := _inland_cell(sim, CELL)
 	var parcel := ParcelSim.new(sim, cell)
 	var events := _advance(sim, parcel, 5)
@@ -203,7 +204,7 @@ func test_crater_after_meteor() -> String:
 
 func test_impact_nearby_raises_crisis() -> String:
 	# Hors du cratère mais dans la zone dévastée : les espèces s'effondrent, le joueur est alerté.
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var target := _inland_cell(sim, CELL)
 	var cell := _inland_ring(sim, target, 11.0, 16.0)
 	if cell.x < 0:
@@ -230,7 +231,7 @@ func test_impact_nearby_raises_crisis() -> String:
 func test_decline_leaves_ruins_then_nature() -> String:
 	# Une ville sans habitants (aucun peuple au Crétacé) : déclin palier par palier, ruines,
 	# végétation qui les envahit, puis nature sauvage. On place l'état de départ à la main.
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var parcel := ParcelSim.new(sim, _inland_cell(sim, CELL))
 	parcel.development = 6.0
 	parcel._built = 6.0
@@ -255,7 +256,7 @@ func test_decline_leaves_ruins_then_nature() -> String:
 
 
 func test_sapient_progression_on_accelerated_game() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	sim.apply_divine_action({type = "meteor", region = YUCATAN, species_id = -1, radius = 12})
 	var origin := Vector2i(-1, -1)
 	var guard := 0
@@ -274,7 +275,7 @@ func test_sapient_progression_on_accelerated_game() -> String:
 	var usec := 0
 	var worst := 0
 	guard = 0
-	while sim.era_index() < 6 and guard < 8000:
+	while sim.era_index() < INDUSTRIAL and guard < 8000:
 		guard += 1
 		var world_events := _frame(sim)
 		var t0 := Time.get_ticks_usec()
@@ -293,7 +294,7 @@ func test_sapient_progression_on_accelerated_game() -> String:
 		usec / 1000.0 / maxi(guard, 1), worst / 1000.0, guard])
 	if usec / 1000.0 / maxi(guard, 1) > 1.0:
 		return "update() trop lent en ère sapiente"
-	if sim.era_index() < 6:
+	if sim.era_index() < INDUSTRIAL:
 		return "ère industrielle non atteinte (%s)" % sim.current_era()
 	if not saw_people:
 		return "le peuple n'apparaît jamais dans la faune de sa parcelle d'origine"
