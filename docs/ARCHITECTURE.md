@@ -55,27 +55,29 @@ qui permet d'afficher « pourquoi » le monde est devenu ce qu'il est.
 
 ---
 
-## Deux vues : globe et parcelle (contrat d'octobre 2026)
+## La parcelle, seule vue du jeu (contrat d'octobre 2026)
 
-Vision détaillée : [`PARCELLE.md`](PARCELLE.md). Le jeu se regarde sur **une parcelle de terrain
-grande comme l'écran**, suivie de -66 Ma jusqu'à la fin. Le **globe** sert à voir la planète entière,
-choisir la parcelle et lancer les pouvoirs à grande échelle.
+Vision détaillée : [`PARCELLE.md`](PARCELLE.md). Le jeu se regarde **uniquement** sur une parcelle de
+terrain grande comme l'écran, suivie de -66 Ma jusqu'à la fin. Pas de globe ni de carte du monde : la
+simulation mondiale tourne en fond et façonne la parcelle.
 
 | Dossier / scène | Branche | Rôle |
 |---|---|---|
-| `src/globe/`, `scenes/globe.tscn`, `shaders/globe*.gdshader` | `feature/globe` | Planète 3D : rotation, zoom, couches, choix de la parcelle, pouvoirs au clic. |
 | `src/parcel/`, `scenes/parcel_view.tscn`, `shaders/parcel*.gdshader`, `assets/parcel/` | `feature/parcel-view` | Vue de haut de la parcelle : terrain, végétation, créatures animées, structures. |
 | `src/sim/parcel_sim.gd` | `feature/simulation-core` | État local de la parcelle (contrat ci-dessous). |
 | `src/ui/stats/`, `scenes/stats_panel.tscn` | `feature/hud-stats` | Statistiques à l'écran : chaleur, populations montantes / descendantes, courbes. |
 
-`scenes/main.tscn` charge les vues **par chemin** (`src/ui/main.gd`) : `globe.tscn` (sinon l'ancienne
-carte 2D `world_map.tscn`), `parcel_view.tscn` et `stats_panel.tscn` si elle existe. Une branche de
-module livre sa scène sans toucher `main`. **Tab** bascule globe ↔ parcelle. La vue inactive est
-masquée et ne reçoit plus d'entrées (`PROCESS_MODE_DISABLED`) ; la simulation continue.
+`scenes/main.tscn` charge les vues **par chemin** (`src/ui/main.gd`) : `parcel_view.tscn` et
+`stats_panel.tscn` si elle existe. Une branche de module livre sa scène sans toucher `main`.
+Le HUD se branche (`bind_map`) sur `src/ui/parcel_powers.gd`, qui garde l'API de l'ancienne carte
+(`power`, `radius`, `target_species`, `set_*`, `apply_power_at`, signaux `state_changed` /
+`region_hovered`) et vise toujours la cellule de la parcelle. L'ancienne carte 2D (`src/map/world_map.gd`,
+`world_camera.gd`, `scenes/world_map.tscn`, `shaders/planet.gdshader`) n'est plus chargée.
 
 ### `GameState` (ajouts)
 
-- `parcel: ParcelSim`, `view_mode: String` (`"globe"` | `"parcel"`, départ : `"parcel"`)
+- `parcel: ParcelSim`, `view_mode: String` (toujours `"parcel"` ; `"globe"` est conservé pour la
+  compatibilité mais plus utilisé)
 - `select_parcel(cell: Vector2i)`, `set_view_mode(mode: String)`
 - signaux `parcel_updated` (≤ 4 Hz), `parcel_changed(cell: Vector2i)`, `view_mode_changed(mode: String)`
 - Les événements de parcelle passent aussi par `event_occurred` (type préfixé `parcel_`).
