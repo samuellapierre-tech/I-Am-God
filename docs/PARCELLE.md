@@ -73,3 +73,29 @@ uniquement**, en continu.
   ne fait que les mettre en scène. Le temps ralentit pendant le choix ; sans réponse, rien n'est fait.
 
 Le nom est configurable en un seul endroit (`src/ai/ai_config.gd`).
+
+## Retour de la carte du monde (octobre 2026)
+
+Le créateur veut aussi **voir toute la planète vivre** :
+
+- **Carte du monde** plein écran : molette pour zoomer / dézoomer, glisser pour déplacer (défilement
+  gauche-droite sans fin, la planète boucle), clic pour agir. Zoom maximal sur la parcelle → on entre
+  dans la vue parcelle ; dézoom depuis la parcelle → retour à la carte. **Tab** bascule aussi.
+- **Les continents bougent** : un supercontinent qui se forme puis se fracture (Pangée), des océans
+  qui s'ouvrent, des montagnes qui se soulèvent. La dérive est **simulée** (plaques), déterministe,
+  et façonne le climat et la vie. La parcelle voyage avec sa plaque.
+- **Tout se voit en temps réel** : biomes, glaces, espèces (vie terrestre **et** marine), villes,
+  cratères, conséquences des actes divins.
+
+## Des choix déchirants
+
+Le jeu doit **toujours** pousser vers des choix qui coûtent :
+
+- **Aucune option gratuite.** Chaque dilemme oppose des choses auxquelles le joueur tient : sauver une
+  espèce en condamne une autre, protéger une civilisation en affame une voisine, arrêter une
+  glaciation empêche une lignée de devenir consciente. « Ne rien faire » a aussi un prix, visible.
+- **Le prix est montré**, pas caché : une vision de l'Oracle esquisse ce que chaque option coûtera.
+- **Personnel** : les dilemmes visent ce que le joueur a protégé, nommé ou fait naître.
+- **Rythme** : au moins un grand dilemme par chapitre, plus lors des grands tournants (Pangée qui se
+  fracture, météore, première conscience, première ville, première guerre mondiale, IA…).
+- Pas de retour en arrière : chaque choix réécrit l'avenir pour toujours.
