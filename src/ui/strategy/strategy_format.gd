@@ -41,18 +41,38 @@ static func group(n: int) -> String:
 	return ("-" if n < 0 else "") + s + out
 
 
-## État d'une menace : texte et couleur.
-static func threat_status(t: Dictionary, now_year: float) -> Array:
+## État d'une menace : texte et couleur. En Éternité, les menaces sont des événements qu'on peut
+## laisser passer : ton plus doux.
+static func threat_status(t: Dictionary, now_year: float, mode := "trial") -> Array:
+	var calm := mode == "eternity"
 	match String(t.get("state", "pending")):
 		"countered":
 			return ["Contrée", SAFE]
 		"struck":
-			return ["A frappé", DANGER]
+			return ["Passée", DIM] if calm else ["A frappé", DANGER]
 		"fizzled":
 			return ["Dissipée", DIM]
 	if not t.get("revealed", true):
-		return ["Manche suivante", DIM]
-	return ["Frappe dans %s" % years(float(t.strikes_year) - now_year), GOLD]
+		return ["Chapitre suivant" if calm else "Manche suivante", DIM]
+	var left := years(float(t.strikes_year) - now_year)
+	return ["Dans %s environ" % left, TEXT] if calm else ["Frappe dans %s" % left, GOLD]
+
+
+## Défi de Samaël : [titre, texte, ligne d'état].
+static func challenge_lines(c: Dictionary) -> Array:
+	var state := "Récompense : %s" % c.get("reward_text", "")
+	match String(c.get("state", "open")):
+		"won":
+			state = "Relevé : %s" % c.get("reward_text", "")
+		"lost":
+			state = "Manqué, sans conséquence"
+	if String(c.get("kind", "")) == "counter" and String(c.get("state", "open")) == "open":
+		state = "%d/%d · %s" % [int(c.get("progress", 0)), int(c.get("goal", 0)), state]
+	return ["Défi de Samaël · %s" % c.get("title", ""), String(c.get("text", "")), state]
+
+
+static func mode_text(id: String) -> String:
+	return String(Rules.MODES.get(id, {}).get("text", ""))
 
 
 static func threat_target(t: Dictionary) -> String:

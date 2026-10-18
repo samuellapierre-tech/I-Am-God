@@ -17,8 +17,8 @@ const RANK_SEEDS := [11, 23, 37, 58, 71, 94]
 const COLLAPSE_DAMAGE := 0.6
 
 
-func _setup(seed_value: int, difficulty: String, aspect := "guardian") -> Dictionary:
-	return Base.new()._setup(seed_value, aspect, difficulty)
+func _setup(seed_value: int, difficulty: String, aspect := "guardian", scenario := "") -> Dictionary:
+	return Base.new()._setup(seed_value, aspect, difficulty, "trial", scenario)
 
 
 func _frame(g: Dictionary) -> Array:
@@ -60,17 +60,46 @@ func _reference_damage(chosen: Array, world: RefCounted, cell: Vector2i, horizon
 	return total
 
 
+## Instantané d'une partie (copie du monde) et une main de Samaël tirée à cet instant.
+func _hand_point(g: Dictionary, seed_value: int) -> Dictionary:
+	var sim: RefCounted = g.sim.fork()
+	var parcel := ParcelSim.new(sim, g.parcel.cell)
+	parcel.update([])
+	var st := Strategy.new(seed_value, "guardian", "divin", "trial")
+	st.start(sim, parcel)
+	var copy := {sim = sim, parcel = parcel, st = st}
+	return {seed = seed_value, g = copy, hand = st._draw_hand(sim, parcel).filter(func(t): return not t.cataclysm)}
+
+
 func test_levels_are_ranked() -> String:
 	var sums := {random = 0.0, greedy = 0.0, oracle = 0.0}
 	var samples := 0
-	for sample in RANK_SEEDS.size() * 2:
-		var s: int = RANK_SEEDS[sample % RANK_SEEDS.size()]
-		var g := _setup(s, "divin")
-		# Deux moments par graine : monde sauvage, puis après l'éveil d'une civilisation.
-		for i in (40 if sample < RANK_SEEDS.size() else 170):
+	# Mains prises à trois moments de chaque partie : prologue, Mésozoïque, Antiquité ; la moitié des
+	# graines part du prologue (-3,8 Ga), l'autre du scénario Crétacé (-66 Ma).
+	var points := []
+	for si in RANK_SEEDS.size():
+		var s: int = RANK_SEEDS[si]
+		var g := _setup(s, "eveil", "guardian", "" if si % 2 == 0 else WorldSim.SCENARIO_CRETACEOUS)
+		var player := Base.new()
+		var marks := [func(): return g.sim.era_index() >= 1,
+			func(): return g.sim.era_index() >= Eras.MESOZOIC,
+			func(): return g.sim.era_index() >= Eras.FIRST_SAPIENT_ERA + 1]
+		var m := 0
+		for i in 2500:
+			if m >= marks.size() or g.st.over:
+				break
 			_frame(g)
+			player._auto_play(g.st)
+			if marks[m].call():
+				points.append(_hand_point(g, s))
+				m += 1
+	for p in points:
+		if p.is_empty():
+			continue
+		var s: int = p.seed
+		var g: Dictionary = p.g
 		var st: RefCounted = g.st
-		var hand: Array = st._draw_hand(g.sim, g.parcel).filter(func(t): return not t.cataclysm)
+		var hand: Array = p.hand
 		if hand.size() < 3:
 			continue
 		var n := 2
@@ -84,10 +113,6 @@ func test_levels_are_ranked() -> String:
 			var copy := hand.duplicate(true)
 			if sam.level == "oracle":
 				sam.plan(copy, g.sim, g.parcel.cell, horizon)
-				var guard := 0
-				while sam.oracle_pending() > 0 and guard < 500:
-					sam.think()
-					guard += 1
 			var dmg := 0.0
 			if sam.level == "random":
 				# Éveil : moyenne sur plusieurs tirages (le hasard est son seul talent).
@@ -198,22 +223,24 @@ func test_no_anachronism_each_era() -> String:
 
 
 func test_apocalypse_time_budget() -> String:
-	var g := _setup(31, "apocalypse")
-	var st: RefCounted = g.st
-	var reasons := {}
-	st.samael_move.connect(func(m): reasons[m.reason_code] = true)
-	var finished := false
-	for i in 400:
-		_frame(g)
-		finished = finished or (not st.samael._oracle.is_empty())
-		if st.over:
-			break
-	var max_ms: float = st.samael.max_think_usec / 1000.0
-	print("  Oracle de Samaël : %.2f ms au plus par image (budget %.1f ms)" % [max_ms, Samael.ORACLE_BUDGET_USEC / 1000.0])
-	if st.samael.max_think_usec > Samael.ORACLE_BUDGET_USEC:
-		return "budget de temps dépassé : %.2f ms" % max_ms
-	if not finished:
-		return "l'Oracle n'a jamais terminé de projection"
+	# Départ au prologue (pas idéaux énormes) et scénario Crétacé.
+	for scenario in ["", WorldSim.SCENARIO_CRETACEOUS]:
+		var g := _setup(31, "apocalypse", "guardian", scenario)
+		var st: RefCounted = g.st
+		var finished := false
+		for i in 400:
+			_frame(g)
+			finished = finished or (not st.samael._oracle.is_empty())
+			if st.over:
+				break
+		var max_ms: float = st.samael.max_think_usec / 1000.0
+		print("  Oracle de Samaël (%s) : %.2f ms au plus par image (budget %.1f ms), attente au choix %.1f ms" % [
+			"prologue" if scenario == "" else scenario, max_ms, Samael.ORACLE_BUDGET_USEC / 1000.0,
+			st.samael.max_wait_usec / 1000.0])
+		if st.samael.max_think_usec > Samael.ORACLE_BUDGET_USEC:
+			return "budget de temps dépassé : %.2f ms" % max_ms
+		if not finished:
+			return "l'Oracle n'a jamais terminé de projection (%s)" % scenario
 	# Divin ne consulte jamais l'Oracle.
 	var d := _setup(31, "divin")
 	for i in 60:

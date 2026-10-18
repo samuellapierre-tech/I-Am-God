@@ -74,7 +74,8 @@ func refresh(now_year: float) -> void:
 		return
 	_title.text = Fmt.threat_title(threat)
 	_target.text = Fmt.threat_target(threat)
-	var st: Array = Fmt.threat_status(threat, now_year)
+	var mode: String = GameState.strategy.mode if GameState.strategy != null else "trial"
+	var st: Array = Fmt.threat_status(threat, now_year, mode)
 	_status.text = st[0]
 	_status.add_theme_color_override("font_color", st[1])
 	var state := String(threat.get("state", "pending"))

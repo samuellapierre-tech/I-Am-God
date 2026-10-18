@@ -22,6 +22,8 @@ signal game_over(victory: bool, reason: String)
 ## lui donne la parole), et les habitudes du joueur qu'il a apprises : {power, weight, share}.
 signal samael_move(move: Dictionary)
 signal samael_learned(habit: Dictionary)
+## Éternité : un chapitre se ferme (fin douce d'une « défaite ») et le monde continue.
+signal chapter_closed(chapter: Dictionary)
 
 const WorldSim := preload("res://src/sim/world_sim.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
@@ -39,6 +41,8 @@ var strategy: Strategy
 ## Aspect divin et difficulté choisis au lancement (gardés d'une partie à l'autre).
 var strategy_aspect := Strategy.Rules.DEFAULT_ASPECT
 var strategy_difficulty := Strategy.Rules.DEFAULT_DIFFICULTY
+## "eternity" (par défaut : calme, sans fin) | "trial" (victoire ou défaite).
+var strategy_mode := Strategy.Rules.DEFAULT_MODE
 var view_mode := "parcel"
 var paused := false
 ## Années simulées par seconde réelle.
@@ -112,14 +116,19 @@ func apply_divine_action(action: Dictionary) -> Array:
 
 ## Change l'aspect divin et la difficulté (écran de lancement) : la stratégie repart de zéro sur le
 ## même monde. À appeler avant que la partie n'avance.
-func configure_strategy(aspect: String, difficulty: String) -> void:
+func configure_strategy(aspect: String, difficulty: String, mode := "") -> void:
 	strategy_aspect = aspect
 	strategy_difficulty = difficulty
+	if mode != "":
+		strategy_mode = mode
 	_make_strategy()
 
 
 func _make_strategy() -> void:
-	strategy = Strategy.new(sim.seed, strategy_aspect, strategy_difficulty)
+	strategy = Strategy.new(sim.seed, strategy_aspect, strategy_difficulty, strategy_mode)
+	# Éternité : la simulation ne s'arrête jamais (si elle sait le faire).
+	if sim.has_method("set_endless"):
+		sim.set_endless(strategy_mode == "eternity")
 	strategy.round_started.connect(round_started.emit)
 	strategy.threat_revealed.connect(threat_revealed.emit)
 	strategy.threat_resolved.connect(threat_resolved.emit)
@@ -127,6 +136,7 @@ func _make_strategy() -> void:
 	strategy.game_over.connect(game_over.emit)
 	strategy.samael_move.connect(samael_move.emit)
 	strategy.samael_learned.connect(samael_learned.emit)
+	strategy.chapter_closed.connect(chapter_closed.emit)
 	strategy.start(sim, parcel)
 
 

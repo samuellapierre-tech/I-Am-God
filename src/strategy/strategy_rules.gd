@@ -24,12 +24,29 @@ const ASPECTS := {
 const DIFFICULTY_ORDER := ["eveil", "divin", "apocalypse"]
 ## deck : taille de la pioche (sablier cosmique), cataclysmes compris.
 const DIFFICULTIES := {
-	eveil = {label = "Éveil", actions = 5, cataclysms = 4, collapse_limit = 10, deck = 96,
+	eveil = {label = "Éveil", actions = 5, cataclysms = 4, collapse_limit = 10, deck = 120,
 		samael = "Samaël tire ses menaces au hasard."},
-	divin = {label = "Divin", actions = 4, cataclysms = 5, collapse_limit = 8, deck = 84,
+	divin = {label = "Divin", actions = 4, cataclysms = 5, collapse_limit = 8, deck = 108,
 		samael = "Samaël joue ce qui fait le plus mal tout de suite, vise tes Grands Œuvres et apprend tes habitudes."},
-	apocalypse = {label = "Apocalypse", actions = 3, cataclysms = 6, collapse_limit = 6, deck = 72,
+	apocalypse = {label = "Apocalypse", actions = 3, cataclysms = 6, collapse_limit = 6, deck = 96,
 		samael = "Samaël consulte l'Oracle comme toi pour viser ce qui fera le plus mal dans plusieurs manches."},
+}
+
+## Modes (§10) : Éternité (par défaut, calme, sans fin) ou Épreuve (victoire ou défaite).
+const MODE_ORDER := ["eternity", "trial"]
+const DEFAULT_MODE := "eternity"
+const MODES := {
+	eternity = {label = "Éternité",
+		text = "Calme et sans fin. Une défaite ferme un chapitre, puis la vie repart. Samaël propose des défis facultatifs ; ses menaces peuvent passer sans pénalité. Les Grands Œuvres se collectionnent."},
+	trial = {label = "Épreuve",
+		text = "Toi contre le monde : quatre Grands Œuvres pour gagner ; effondrements, parcelle morte ou sablier vide pour perdre. Samaël joue selon la difficulté."},
+}
+## Éternité : pourquoi un chapitre se ferme (le texte d'Ézéchiel vient de src/ai/).
+const CHAPTER_REASONS := {
+	collapses = "Les effondrements se sont enchaînés : un chapitre se ferme, le monde continue.",
+	parcel_dead = "La parcelle s'est tue : un chapitre se ferme, la vie reviendra.",
+	deck_empty = "Le sablier s'est retourné : un nouveau chapitre commence.",
+	works_complete = "Les quatre Grands Œuvres sont accomplis : un chapitre se ferme en beauté.",
 }
 
 const DEFAULT_ASPECT := "guardian"
@@ -53,6 +70,8 @@ const ROUND_STEPS := 600.0
 ## Avant toute civilisation, le temps est ralenti (GameState.pace_factor) : manches plus courtes en
 ## pas (≈ 5 Ma au Mésozoïque, environ une minute à x1 une fois l'ouverture lancée).
 const ROUND_STEPS_WILD := 100.0
+## Fin de la dernière étape du prologue pour le calcul de sa durée (fin du Trias inférieur).
+const PROLOGUE_END_YEAR := -201.0e6
 ## Un changement d'ère n'ouvre une manche que si la manche courante a duré au moins cette fraction
 ## (évite une rafale de manches quand une civilisation oscille entre deux ères).
 const MIN_ROUND_FRACTION := 0.2
@@ -184,6 +203,19 @@ const WORKS := {
 }
 ## Seuil technologique de la Civilisation pérenne (niveau 5 = ère Moderne).
 const LEGACY_TECH := 5.0
+
+
+## Durée d'une manche en pas idéaux. Prologue : une manche par étape, d'après la durée de
+## référence de l'étape (eras.gd, PROLOGUE_REFERENCE_YEARS) au pas idéal de l'ère.
+static func round_steps(era: int, act: String) -> float:
+	if act == "act3":
+		return ROUND_STEPS
+	if act == "prologue":
+		var refs: Array = Eras.PROLOGUE_REFERENCE_YEARS
+		if era >= 0 and era < refs.size():
+			var end_year: float = refs[era + 1] if era + 1 < refs.size() else PROLOGUE_END_YEAR
+			return clampf((end_year - float(refs[era])) / Eras.ideal_dt(era), ROUND_STEPS_WILD, ROUND_STEPS)
+	return ROUND_STEPS_WILD
 
 
 static func aspect_label(id: String) -> String:

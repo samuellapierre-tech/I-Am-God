@@ -13,11 +13,12 @@ const CELL := Vector2i(70, 40)
 
 
 ## Monde + parcelle + stratégie, première manche ouverte.
-func _setup(seed_value := SEED, aspect := "guardian", difficulty := "divin") -> Dictionary:
-	var sim := WorldSim.new(seed_value)
+## scenario : "" (départ au prologue, -3,8 Ga) ou WorldSim.SCENARIO_CRETACEOUS (-66 Ma).
+func _setup(seed_value := SEED, aspect := "guardian", difficulty := "divin", mode := "trial", scenario := "") -> Dictionary:
+	var sim := WorldSim.new(seed_value) if scenario == "" else WorldSim.new(seed_value, true, scenario)
 	var parcel := ParcelSim.new(sim, _lively_cell(sim))
 	parcel.update([])
-	var st := Strategy.new(seed_value, aspect, difficulty)
+	var st := Strategy.new(seed_value, aspect, difficulty, mode)
 	st.start(sim, parcel)
 	return {sim = sim, parcel = parcel, st = st}
 
@@ -173,6 +174,7 @@ func test_cataclysm_increases_intensity() -> String:
 	var g := _setup()
 	var st: RefCounted = g.st
 	var before: int = st.current_intensity()
+	var cats0: int = st.cataclysms
 	# Défausse connue, puis deux Cataclysmes.
 	st._discard = [{kind = "drought", severity = 0.5}, {kind = "epidemic", severity = 0.5}] as Array[Dictionary]
 	var deck_before: int = st.deck_left()
@@ -183,7 +185,7 @@ func test_cataclysm_increases_intensity() -> String:
 	if not top.kind in ["drought", "epidemic"] or float(top.severity) <= 0.5:
 		return "la menace de retour n'est pas sur le dessus ni plus forte : %s" % top
 	st._cataclysm()
-	if st.cataclysms != 2 or st.current_intensity() <= before:
+	if st.cataclysms != cats0 + 2 or st.current_intensity() <= before:
 		return "intensité non augmentée (%d -> %d)" % [before, st.current_intensity()]
 	# Par le jeu : un Cataclysme sur le dessus est révélé à la manche suivante.
 	var g2 := _setup()
