@@ -102,3 +102,35 @@ Le HUD se branche (`bind_map`) sur `src/ui/parcel_powers.gd`, qui garde l'API de
 Règles : on peut **ajouter** des champs, jamais en retirer ou en changer le sens sans mettre à jour
 ce document et `tests/test_parcel.gd`. La vue n'invente rien : ce qu'elle montre vient de ces champs
 (les déplacements des créatures sont cosmétiques, leur nombre et leur rôle ne le sont pas).
+
+---
+
+## Stratégie : manches, menaces, pistes (contrat d'octobre 2026)
+
+Règles : [`STRATEGIE.md`](STRATEGIE.md). Module `src/strategy/` (branche `feature/strategy`), scène
+d'interface `scenes/strategy_hud.tscn` chargée par chemin par `main.gd`.
+
+`GameState.strategy` (créé par `new_world`, `null` tant que le module n'est pas fusionné) expose :
+
+- `aspect: String`, `difficulty: String`
+- `round: Dictionary` — `{index, name, stage, starts_year, ends_year, threats: Array[Dictionary]}`
+- `actions_left: int`, `actions_per_round: int`
+- `tracks: Dictionary` — `{collapses: int, collapse_limit: int, vitality: float 0..1, works: {life, land, mind, legacy: bool}, deck_left: int}`
+- `func can_act() -> bool`, `func spend_action(kind: String) -> bool`
+- `func counters_for(threat: Dictionary) -> Array[String]` (types de pouvoirs qui la contrent)
+
+Carte de menace : `{id, kind, title, target: {region: Vector2i, species_id: int}, strikes_year: float, severity: float, countered: bool, counters: Array[String]}`.
+
+Signaux relayés par `GameState` : `round_started(round)`, `threat_revealed(threat)`,
+`threat_resolved(threat, countered: bool)`, `tracks_changed(tracks)`, `game_over(victory: bool, reason: String)`.
+
+Tout pouvoir lancé par le joueur passe par `strategy.spend_action()` (refusé si le budget est épuisé).
+Les menaces frappent via `WorldSim.apply_divine_action` ou des perturbations de la simulation : la
+chaîne causale reste la seule source de vérité.
+
+## Prologue (contrat d'octobre 2026)
+
+La partie commence à **-3 800 000 000** ans. Étapes du prologue (avant `MESOZOIC`) : Archéen, Grande
+Oxydation, Terre boule de neige, Explosion cambrienne, Sortie des eaux, Carbonifère, Grande Mourance
+(détails dans `STRATEGIE.md` §1). Les indices d'ères existants changent : le code ne doit plus
+supposer `MESOZOIC == 0` mais utiliser les constantes de `src/sim/eras.gd`.
