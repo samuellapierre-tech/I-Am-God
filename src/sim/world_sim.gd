@@ -31,11 +31,16 @@ const ERAS := [
 const BIOME_NAMES := WorldGen.BIOME_NAMES
 
 ## Dérive d'intelligence (par million d'années) d'une lignée prospère et généraliste.
-const INTELLIGENCE_DRIFT := 0.02
+const INTELLIGENCE_DRIFT := 0.008
+## Échelle (années) de la pression vers la complexité : x2 après ce délai sans sapience.
+const COMPLEXITY_PRESSURE_YEARS := 20.0e6
 ## Taux de spéciation de base (par an).
 const SPECIATION_RATE := 1.0 / 2500000.0
 ## Diversité visée : la spéciation ralentit à l'approche de ce nombre d'espèces vivantes.
 const DIVERSITY_TARGET := 64
+## Nombre de pas idéaux par ère sapiente, et pas idéaux par seconde à vitesse x1 (=> ~1 min/ère).
+const STEPS_PER_ERA := 1200.0
+const PACING_STEPS_PER_SECOND := 20.0
 ## Nombre maximal de pas internes pour une projection du futur.
 const MAX_PROJECTION_SUBSTEPS := 600
 ## Au-delà, les espèces éteintes les plus anciennes sont retirées du dictionnaire `species`.
@@ -249,8 +254,36 @@ func era_index() -> int:
 
 
 ## Pas de temps idéal (années) pour l'ère courante : utile pour régler la vitesse de jeu.
+## Avant la sapience : pas fixe de l'ère géologique. Ensuite, le rythme suit la technologie :
+## le temps que met la civilisation de tête à franchir son niveau actuel, divisé par
+## STEPS_PER_ERA. Une ère dure donc toujours environ STEPS_PER_ERA pas idéaux, quelle que soit
+## l'année du calendrier (un monde sans civilisation en 2000 reste au rythme géologique).
 func ideal_step_years() -> float:
-	return Eras.ideal_dt(_era_idx)
+	var lead := _leading_species()
+	if lead < 0:
+		return Eras.ideal_dt(_era_idx)
+	var level: float = species[lead].tech_level
+	if level >= Eras.MAX_TECH:
+		return 1.0  # Post-singularité achevée : l'histoire continue à un rythme posé.
+	var era_years := Eras.level_years(level) / maxf(_tech_speed(lead), 0.05)
+	return clampf(era_years / STEPS_PER_ERA, 0.005, Eras.ideal_dt(Eras.CENOZOIC))
+
+
+## Années par seconde réelle pour qu'une ère dure environ une minute à vitesse x1.
+func pacing_years_per_second() -> float:
+	return ideal_step_years() * PACING_STEPS_PER_SECOND
+
+
+## Vitesse de progression technologique d'un peuple (multiplicateur des LEVEL_YEARS).
+func _tech_speed(id: int) -> float:
+	var sp: Dictionary = species[id]
+	var mods := 1.0
+	for m in _rt[id].mods:
+		if m.until >= year:
+			mods *= m.factor
+	mods = clampf(mods, 0.3, 2.5)
+	var popf := clampf(sqrt(float(sp.regions) / 120.0), 0.15, 1.6)
+	return popf * mods * (0.8 + 0.5 * float(sp.traits.intelligence))
 
 
 func get_event(event_id: int) -> Dictionary:
@@ -566,6 +599,11 @@ func _extinguish(id: int, cause: int, out: Array[Dictionary], how := "") -> Dict
 func _evolve(dt: float, out: Array[Dictionary]) -> void:
 	var n_alive := _alive.size()
 	var diversity := clampf(1.0 - float(n_alive) / DIVERSITY_TARGET, 0.0, 1.0)
+	# Pression vers la complexité : tant qu'aucun esprit n'a émergé, elle croît avec le temps
+	# (convergence évolutive). Garantit qu'une civilisation finit par naître, quelle que soit la graine.
+	var pressure := 1.0
+	if _leading_species() < 0:
+		pressure = 1.0 + maxf(0.0, year + 66.0e6) / COMPLEXITY_PRESSURE_YEARS
 	for id in _alive.duplicate():
 		if not species.has(id) or not species[id].alive:
 			continue
@@ -574,20 +612,22 @@ func _evolve(dt: float, out: Array[Dictionary]) -> void:
 		var rt: Dictionary = _rt[id]
 		if sp.sapient:
 			continue
-		var success := minf(1.0, float(sp.regions) / 60.0)
+		var success := 0.3 + 0.7 * minf(1.0, float(sp.regions) / 60.0)
 		# Dérive d'intelligence : généralistes de taille moyenne et prospères.
 		var bias: float = (1.0 if t.diet == "omnivore" else 0.45) * (0.4 + t.adaptability) \
 			* clampf(1.0 - absf(float(t["size"]) - 0.35) * 1.6, 0.1, 1.0)
 		var i0: float = t.intelligence
-		var di: float = dt / 1.0e6 * INTELLIGENCE_DRIFT * bias * success * (1.0 - i0) * (1.0 if i0 > 0.2 else 0.3)
+		# Linéaire en dt : le résultat ne dépend pas du découpage en sous-pas.
+		var di: float = dt / 1.0e6 * INTELLIGENCE_DRIFT * bias * success * pressure * (1.0 if i0 > 0.2 else 0.3)
 		t.intelligence = minf(1.0, i0 + di)
-		if t.intelligence >= Species.SAPIENCE_THRESHOLD and sp.regions >= 6:
+		if t.intelligence >= Species.SAPIENCE_THRESHOLD and sp.regions >= 3:
 			_become_sapient(id, out)
 			continue
 		# Spéciation.
 		var rad := 4.0 if rt.radiation_until >= year else 1.0
 		var p: float = dt * SPECIATION_RATE * (0.4 + t.adaptability) * minf(1.0, sp.regions / 12.0) * rad * diversity
-		if _rng.randf() < minf(p, 0.9):
+		# Probabilité exacte d'au moins une spéciation sur dt (correcte même pour un dt géant).
+		if _rng.randf() < 1.0 - exp(-p):
 			_speciate(id, out)
 
 
@@ -661,16 +701,12 @@ func _advance_civilisations(dt: float, out: Array[Dictionary]) -> void:
 		var sp: Dictionary = species[id]
 		var rt: Dictionary = _rt[id]
 		var t: Dictionary = sp.traits
-		var mods := 1.0
 		var kept := []
 		for m in rt.mods:
 			if m.until >= year:
-				mods *= m.factor
 				kept.append(m)
 		rt.mods = kept
-		mods = clampf(mods, 0.3, 2.5)
-		var popf := clampf(sqrt(float(sp.regions) / 120.0), 0.15, 1.6)
-		var speed := popf * mods * (0.8 + 0.5 * float(t.intelligence))
+		var speed := _tech_speed(id)
 		var level: float = sp.tech_level
 		# Au plus un tiers de niveau par sous-pas : même un pas géant traverse les ères une à une,
 		# avec leurs jalons et leurs événements, au lieu de sauter directement au futur.
