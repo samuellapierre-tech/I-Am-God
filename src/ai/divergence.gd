@@ -6,6 +6,8 @@ extends RefCounted
 ## - dinosaurs_survived : des dinosaures non aviens ou des ptérosaures vivent encore longtemps après la fin
 ##   du Crétacé (2 Ma après le météore, ou après DINOSAUR_CUTOFF s'il n'est jamais tombé) ;
 ## - dinosaurs_spared : Dieu a refusé le météore (dilemme de la fin du Crétacé) ;
+## - anaerobic_world / giants_kept / no_great_dying : choix du prologue contraires à l'histoire réelle
+##   (freiner l'oxygène, garder l'air du Carbonifère, empêcher la Grande Mourance), voir CHOICE_CRITERIA ;
 ## - non_human_sapient : une espèce intelligente qui n'est pas issue des primates ;
 ## - early_sapience : une espèce intelligente bien avant l'apparition du genre humain ;
 ## - divine_creation : Dieu a éveillé ou créé une espèce (uplift, spawn_species) ;
@@ -24,6 +26,8 @@ const NON_AVIAN_CLADES := ["dinosaure", "ptérosaure"]
 const HUMAN_CLADES := ["primate"]
 const DIVERGENT_ACTS := ["uplift", "spawn_species", "spawn"]
 const FUTURE_ERAS := ["Cyberpunk", "Post-singularité"]
+## Choix de dilemme (variante du geste) qui font quitter l'histoire réelle : variante -> critère.
+const CHOICE_CRITERIA := {"slow_oxygen": "anaerobic_world", "high_oxygen": "giants_kept", "prevent": "no_great_dying"}
 ## Fenêtres (larges) où chaque ère est plausible dans l'histoire réelle.
 const ERA_WINDOWS := {
 	"Mésozoïque": [-1.0e9, DINOSAUR_CUTOFF],
@@ -40,6 +44,9 @@ const ERA_WINDOWS := {
 const REASON_TEXTS := {
 	"dinosaurs_survived": "les dinosaures ont survécu à la fin du Crétacé",
 	"dinosaurs_spared": "tu as épargné les dinosaures en retenant la pierre",
+	"anaerobic_world": "tu as freiné l'oxygène, et le monde est resté aux microbes qui craignent l'air",
+	"giants_kept": "l'air du Carbonifère est resté riche en oxygène, et les géants avec lui",
+	"no_great_dying": "la Grande Mourance n'a pas eu lieu",
 	"non_human_sapient": "une espèce intelligente non humaine est apparue",
 	"early_sapience": "l'intelligence est apparue des millions d'années trop tôt",
 	"divine_creation": "tu as toi-même éveillé ou façonné une espèce",
@@ -66,9 +73,11 @@ static func assess(ctx: Dictionary) -> Array[String]:
 			dino_limit = minf(dino_limit, float(act["year"]) + AFTER_METEOR_GRACE)
 			break
 	for c in ctx.get("choices", []):
-		if str(c.get("trigger", "")) == "meteor_decision" and str(c.get("action_type", "")) != "meteor":
+		if str(c.get("trigger", "")) == "meteor_decision" and str(c.get("action_type", "")) != "meteor" and not "dinosaurs_spared" in out:
 			out.append("dinosaurs_spared")
-			break
+		var crit: String = CHOICE_CRITERIA.get(str(c.get("variant", "")), "")
+		if crit != "" and not crit in out:
+			out.append(crit)
 	for sp in ctx.get("species", []):
 		if not bool(sp.get("alive", true)):
 			continue

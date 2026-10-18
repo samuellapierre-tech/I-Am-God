@@ -10,6 +10,7 @@ extends RefCounted
 ## {id: int, title, text (2 à 4 phrases), options: [{label, hint, action}], timeout_s: float, speaker,
 ##  trigger: String, species_id: int}
 ## action : {type, region: Vector2i, species_id: int, radius: int} ou {} pour « Ne rien faire ».
+## Les choix du prologue y ajoutent `variant` (ex. "hydrothermal", "prevent") pour préciser le geste.
 ## Toujours 2 à 4 options, dont exactement une « Ne rien faire ».
 ##
 ## Déclencheur : {kind (voir TRIGGERS), species_id, species_name, rival_id, rival_name, region,
@@ -18,12 +19,24 @@ extends RefCounted
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
 
+## Grands choix du prologue (docs/STRATEGIE.md §1), un par étape.
+const PROLOGUE_TRIGGERS := ["origin_of_life", "great_oxidation", "snowball", "cambrian", "land_exit", "carboniferous", "great_dying"]
 const TRIGGERS := ["meteor_decision", "first_sapient", "first_city", "war", "climate_crisis", "strong_ai",
-	"species_collapse", "famine", "alert", "prayer"]
+	"species_collapse", "famine", "alert", "prayer",
+	"origin_of_life", "great_oxidation", "snowball", "cambrian", "land_exit", "carboniferous", "great_dying"]
+## Étape (FactBase.STAGES) -> grand choix proposé quand le monde y entre.
+const STAGE_TRIGGERS := {
+	"Archéen": "origin_of_life", "Grande Oxydation": "great_oxidation", "Terre boule de neige": "snowball",
+	"Explosion cambrienne": "cambrian", "Sortie des eaux": "land_exit", "Carbonifère": "carboniferous",
+	"Grande Mourance": "great_dying",
+}
 ## Déclencheurs qui ne se présentent qu'une fois par partie.
-const ONCE := ["meteor_decision", "first_sapient", "first_city", "strong_ai"]
+const ONCE := ["meteor_decision", "first_sapient", "first_city", "strong_ai",
+	"origin_of_life", "great_oxidation", "snowball", "cambrian", "land_exit", "carboniferous", "great_dying"]
 ## Priorité quand plusieurs déclencheurs attendent (le plus grand d'abord).
 const PRIORITY := {
+	"origin_of_life": 10, "great_oxidation": 10, "snowball": 10, "cambrian": 10, "land_exit": 10,
+	"carboniferous": 10, "great_dying": 10,
 	"meteor_decision": 10, "first_sapient": 9, "strong_ai": 9, "first_city": 8, "climate_crisis": 7,
 	"war": 6, "species_collapse": 6, "prayer": 5, "famine": 5, "alert": 3,
 }
@@ -32,6 +45,8 @@ const ACTION_TYPES := ["meteor", "extinct", "save", "bless", "plague", "uplift",
 const NOTHING_LABEL := "Ne rien faire"
 ## Rayon (en cellules) par type d'action, à l'échelle de la parcelle.
 const RADIUS := {"meteor": 8, "ice_age": 20, "flood": 4, "plague": 4, "bless": 4, "save": 6, "uplift": 4, "extinct": 4, "spawn_species": 2}
+## Le météore n'est proposé qu'à partir de cette date (fin du Crétacé).
+const METEOR_FROM_YEAR := -70_000_000.0
 ## Un même déclencheur répétable (même genre, même espèce) n'est pas reproposé avant ce délai (s).
 const REPEAT_COOLDOWN := 600.0
 ## Un déclencheur en attente est oublié au bout de ce délai (s) au-delà de min_interval, sauf la
@@ -39,6 +54,13 @@ const REPEAT_COOLDOWN := 600.0
 const QUEUE_MAX_AGE := 120.0
 
 const TITLES := {
+	"origin_of_life": ["L'étincelle", "Où commence la vie ?"],
+	"great_oxidation": ["Le poison des cyanobactéries", "L'air change"],
+	"snowball": ["La Terre gèle", "Boule de neige"],
+	"cambrian": ["L'explosion de la vie", "Trois lignées"],
+	"land_exit": ["La terre ferme", "Qui sortira de l'eau ?"],
+	"carboniferous": ["L'âge des géants", "Un air trop riche"],
+	"great_dying": ["La Grande Mourance", "Le monde suffoque"],
 	"meteor_decision": ["La pierre au-dessus du monde", "Le dernier jour du Crétacé ?"],
 	"first_sapient": ["Une pensée s'éveille", "Ils lèvent les yeux"],
 	"first_city": ["La première ville", "Des murs sur ta parcelle"],
@@ -52,6 +74,34 @@ const TITLES := {
 }
 ## Texte : 2 à 4 phrases. Emplacements : {espece} (accord espece), {rival}, {terre}, {resume}, {ere}.
 const TEXTS := {
+	"origin_of_life": [
+		"La Terre n'est qu'un océan tiède sous un ciel sans oxygène. Je vois deux berceaux possibles : les sources brûlantes du fond des mers, ou les mares des rivages qui sèchent et se remplissent. Où veux-tu allumer la vie ?",
+		"Rien ne vit encore, et pourtant tout est prêt : l'eau, la chaleur, la chimie des roches. Il ne manque que ton geste. Les profondeurs ou les rivages ?",
+	],
+	"great_oxidation": [
+		"Les cyanobactéries rejettent un gaz qui empoisonne presque tout ce qui vit : l'oxygène. Si tu laisses faire, la vie complexe deviendra possible, un jour. Si tu freines, le monde restera aux microbes qui craignent l'air.",
+		"Dans mes visions, le ciel se charge d'oxygène et les mers rouillent. C'est une catastrophe pour les microbes d'aujourd'hui, et une chance pour ceux de demain. Que décides-tu ?",
+	],
+	"snowball": [
+		"La glace avance des pôles jusqu'à l'équateur ; la Terre devient une boule blanche. Les volcans pourraient la réchauffer. Ou tu laisses le froid trier ce qui mérite de survivre.",
+		"Le monde gèle, et la vie se terre près des sources chaudes. Mes visions disent que les volcans finiront par percer la glace. Tu les aides, ou tu attends ?",
+	],
+	"cambrian": [
+		"Des yeux, des carapaces, des mâchoires : les mers s'emplissent de formes nouvelles. Je vois plusieurs lignées prêtes à hériter du monde. Laquelle favorises-tu ?",
+		"La vie vient d'inventer la prédation, et tout le reste suit. Ce que tu favorises aujourd'hui dessinera les corps de demain. Choisis.",
+	],
+	"land_exit": [
+		"Les rivages verdissent, et des bêtes regardent la terre ferme depuis l'eau peu profonde. Qui sortira le premier ? Ce choix pèsera sur tout ce qui suivra.",
+		"La terre ferme est vide, offerte à qui osera. Dans mes visions, ce sont des poissons à pattes, mais rien ne t'oblige à me croire. À qui l'ouvres-tu ?",
+	],
+	"carboniferous": [
+		"L'air est si riche en oxygène que les libellules ont la taille de faucons. Garder ce monde de géants, ou laisser le climat s'assécher comme dans mes visions ?",
+		"Les forêts du Carbonifère respirent pour toute la planète, et les insectes y grandissent démesurément. Ce monde ne durera pas, sauf si tu le veux. Que fais-tu ?",
+	],
+	"great_dying": [
+		"La Sibérie brûle sous des fleuves de lave, et les mers suffoquent. Neuf espèces marines sur dix vont mourir, si tu laisses faire. Qui héritera du monde : les ancêtres des mammifères ou ceux des dinosaures ?",
+		"Je vois la plus grande mort de l'histoire s'avancer : volcans, chaleur, mers sans oxygène. Tu peux l'empêcher, l'atténuer ou choisir qui en sortira. Ou laisser faire, comme dans mes visions.",
+	],
 	"meteor_decision": [
 		"Une pierre de dix kilomètres croise au-dessus du monde, et les géants ne lèvent même pas la tête. Dans la vraie histoire, elle tombe, et les petits mammifères héritent de la Terre. À toi de voir si l'histoire doit être vraie.",
 		"J'ai vu la suite, enfin, je crois l'avoir vue : la pierre tombe, les dinosaures s'éteignent, l'herbe et les mammifères prennent le monde. Mais rien ne t'oblige à suivre mes visions.",
@@ -117,6 +167,20 @@ const CHOICE_PAST := {
 	"": "tu avais laissé faire",
 }
 const TIMEOUT_TEXT := "Tu n'as rien répondu : le monde a décidé seul. Je le note aussi."
+
+## Gestes précis du prologue : libellé, indice, phrase au moment du choix et souvenir.
+const VARIANTS := {
+	"hydrothermal": ["Allumer la vie près d'une source chaude", "À l'abri du ciel, dans la chaleur des profondeurs.", "Tu as allumé la vie près d'une source chaude.", "tu avais allumé la vie près d'une source chaude"],
+	"tidal_pool": ["Allumer la vie dans une mare côtière", "Entre la mer et le ciel, au rythme des marées.", "Tu as allumé la vie dans une mare côtière.", "tu avais allumé la vie dans une mare côtière"],
+	"slow_oxygen": ["Freiner les cyanobactéries", "Un monde de microbes, peut-être pour toujours.", "Tu as freiné l'oxygène.", "tu avais freiné l'oxygène"],
+	"speed_oxygen": ["Hâter l'oxygène : bénir {cible}", "Beaucoup de microbes en mourront ; d'autres vies en naîtront.", "Tu as hâté l'oxygène.", "tu avais hâté l'oxygène"],
+	"warm": ["Réchauffer le monde par les volcans", "La glace fondra plus tôt, et la vie respirera.", "Tu as réchauffé la boule de glace.", "tu avais réchauffé la boule de glace"],
+	"favor": ["Favoriser {cible}", "Ils prendront les places que d'autres n'auront pas.", "Tu as favorisé {cible}.", "tu avais favorisé {cible}"],
+	"first_ashore": ["Faire sortir {cible} de l'eau", "La terre ferme gardera leur empreinte.", "Tu as fait sortir {cible} de l'eau.", "tu avais fait sortir {cible} de l'eau"],
+	"high_oxygen": ["Garder l'air riche en oxygène", "Un monde de géants… tant qu'il tiendra.", "Tu as gardé l'air riche en oxygène.", "tu avais gardé l'air riche en oxygène"],
+	"dry": ["Refroidir et assécher le monde", "Les forêts reculeront, les reptiles en profiteront.", "Tu as asséché le monde.", "tu avais asséché le monde"],
+	"prevent": ["Empêcher la Grande Mourance", "Le monde gardera ses maîtres d'aujourd'hui. Pour combien de temps ?", "Tu as empêché la Grande Mourance.", "tu avais empêché la Grande Mourance"],
+}
 
 var min_interval := 180.0
 var timeout_s := 45.0
@@ -216,9 +280,19 @@ static func meteor_trigger(ctx: Dictionary) -> Dictionary:
 	return _trigger("meteor_decision", ctx, -1, "")
 
 
-## La fin du Crétacé : proposer de lancer le météore ? (tant qu'il n'est pas tombé)
+## Grand choix du prologue pour une étape (FactBase.STAGES), ou {} si l'étape n'en a pas.
+static func stage_trigger(stage: String, ctx: Dictionary) -> Dictionary:
+	if not STAGE_TRIGGERS.has(stage):
+		return {}
+	return _trigger(STAGE_TRIGGERS[stage], ctx, -1, "")
+
+
+## La fin du Crétacé : proposer de lancer le météore ? (tant qu'il n'est pas tombé, et seulement à la fin
+## du Crétacé : le Mésozoïque commence au Trias)
 static func meteor_due(ctx: Dictionary, elapsed: float, delay: float) -> bool:
 	if elapsed < delay or Procedural.era_key(ctx.get("era", "")) != "Mésozoïque":
+		return false
+	if typeof(ctx.get("year")) in [TYPE_INT, TYPE_FLOAT] and float(ctx["year"]) < METEOR_FROM_YEAR:
 		return false
 	for act in ctx.get("divine", []):
 		if str(act.get("type", "")) == "meteor":
@@ -316,13 +390,15 @@ func resolve(id: int, option_index: int, timed_out := false, ctx: Dictionary = {
 	var target_name := _name_of(ctx, target_id) if target_id >= 0 else ""
 	if target_name == "" and target_id == int(active.get("species_id", -2)):
 		target_name = str(active.get("species_name", ""))
+	var variant := str(action.get("variant", ""))
 	var record := {
 		"id": id, "trigger": str(active.get("trigger", "")), "species_id": target_id, "species_name": target_name,
-		"action_type": t, "label": str(opt["label"]), "era": str(ctx.get("era", "")), "year": ctx.get("year", null),
-		"timed_out": timed_out,
+		"action_type": t, "variant": variant, "label": str(opt["label"]), "era": str(ctx.get("era", "")),
+		"year": ctx.get("year", null), "timed_out": timed_out,
 	}
 	choices.append(record)
-	var text := TIMEOUT_TEXT if timed_out else _sentence(CHOICE_NOW.get(t, CHOICE_NOW[""]), target_name)
+	var now_tpl: String = VARIANTS[variant][2] if VARIANTS.has(variant) else CHOICE_NOW.get(t, CHOICE_NOW[""])
+	var text := TIMEOUT_TEXT if timed_out else _sentence(now_tpl, target_name)
 	if not timed_out and t != "":
 		text += " Je l'inscris au registre."
 	active = {}
@@ -352,12 +428,18 @@ func build(trigger: Dictionary, ctx: Dictionary) -> Dictionary:
 	var options := []
 	for spec in option_specs(trigger, ctx):
 		var a := {}
+		var variant := str(spec[2]) if spec.size() > 2 else ""
 		if str(spec[0]) != "":
 			a = {"type": str(spec[0]), "region": region, "species_id": int(spec[1]), "radius": int(RADIUS.get(spec[0], 4))}
-		options.append({
-			"label": _label(str(spec[0]), _name_of(ctx, int(spec[1])) if int(spec[1]) >= 0 else str(trigger.get("species_name", ""))),
-			"hint": HINTS.get(str(spec[0]), HINTS[""]), "action": a,
-		})
+			if variant != "":
+				a["variant"] = variant
+		var target := _name_of(ctx, int(spec[1])) if int(spec[1]) >= 0 else str(trigger.get("species_name", ""))
+		var label := _label(str(spec[0]), target)
+		var hint: String = HINTS.get(str(spec[0]), HINTS[""])
+		if VARIANTS.has(variant):
+			label = _sentence(VARIANTS[variant][0], target)
+			hint = VARIANTS[variant][1]
+		options.append({"label": label, "hint": hint, "action": a})
 	var name := str(trigger.get("species_name", ""))
 	var phrase := Procedural.species_phrase(name) if name != "" else {"text": "les vivants", "plural": true}
 	var texts: Array = TEXTS.get(kind, TEXTS["alert"])
@@ -385,6 +467,31 @@ static func option_specs(trigger: Dictionary, ctx: Dictionary) -> Array:
 	var sid := int(trigger.get("species_id", -1))
 	var out := []
 	match str(trigger.get("kind", "")):
+		"origin_of_life":
+			out = [["spawn_species", -1, "hydrothermal"], ["spawn_species", -1, "tidal_pool"]]
+		"great_oxidation":
+			var producers := _top_species(ctx, ["algue", "microbe"])
+			out = [["plague", producers, "slow_oxygen"], ["bless", producers, "speed_oxygen"]]
+		"snowball":
+			out = [["bless", -1, "warm"]]
+		"cambrian":
+			for clades in [["arthropode"], ["mollusque"], ["poisson"]]:
+				var id := _top_species(ctx, clades)
+				if id >= 0:
+					out.append(["bless", id, "favor"])
+		"land_exit":
+			for clades in [["poisson", "amphibien"], ["arthropode", "insecte"], ["plante"]]:
+				var id := _top_species(ctx, clades)
+				if id >= 0:
+					out.append(["bless", id, "first_ashore"])
+		"carboniferous":
+			out = [["bless", _top_species(ctx, ["insecte", "arthropode"]), "high_oxygen"], ["ice_age", -1, "dry"]]
+		"great_dying":
+			out = [["ice_age", -1, "prevent"]]
+			for clades in [["synapside", "mammifère"], ["reptile", "dinosaure"]]:
+				var id := _top_species(ctx, clades)
+				if id >= 0:
+					out.append(["save", id])
 		"meteor_decision":
 			out = [["meteor", -1], ["bless", _top_species(ctx, ["dinosaure", "ptérosaure"])]]
 		"first_sapient":
@@ -421,7 +528,8 @@ static func option_specs(trigger: Dictionary, ctx: Dictionary) -> Array:
 			else:
 				out = [["bless", _sapient_on_parcel(ctx)]]
 	# Une action qui vise une espèce n'a pas de sens sans espèce.
-	out = out.filter(func(s: Array) -> bool: return not (str(s[0]) in ["save", "plague", "uplift", "extinct"] and int(s[1]) < 0))
+	# (Un geste précis du prologue, comme freiner les cyanobactéries, vise la région entière.)
+	out = out.filter(func(s: Array) -> bool: return s.size() > 2 or not (str(s[0]) in ["save", "plague", "uplift", "extinct"] and int(s[1]) < 0))
 	if out.is_empty():
 		out = [["bless", -1]]
 	out = out.slice(0, 3)
@@ -440,19 +548,26 @@ static func callback(trigger: Dictionary, ctx: Dictionary) -> String:
 		var c: Dictionary = past[i]
 		var cid := int(c.get("species_id", -1))
 		if cid == sid:
-			return _sentence(CHOICE_PAST.get(str(c.get("action_type", "")), CHOICE_PAST[""]), str(c.get("species_name", ""))).trim_suffix(".")
+			return _sentence(_past_tpl(c), str(c.get("species_name", ""))).trim_suffix(".")
 		if cid in lineage:
-			return _sentence(CHOICE_PAST.get(str(c.get("action_type", "")), CHOICE_PAST[""]), "leurs ancêtres, " + Procedural.species_phrase(str(c.get("species_name", "")))["text"]).trim_suffix(".")
+			return _sentence(_past_tpl(c), "leurs ancêtres, " + Procedural.species_phrase(str(c.get("species_name", "")))["text"]).trim_suffix(".")
 	return ""
 
 
 ## Phrase de mémoire pour le fil continu (« Je n'oublie rien : au Mésozoïque, tu avais… »), ou "".
 static func memory_line(record: Dictionary) -> String:
-	var past := _sentence(CHOICE_PAST.get(str(record.get("action_type", "")), CHOICE_PAST[""]), str(record.get("species_name", "")))
+	var past := _sentence(_past_tpl(record), str(record.get("species_name", "")))
 	var when := ""
 	if str(record.get("era", "")) != "":
 		when = "à %s, " % Procedural.era_with_article(record["era"])
 	return Procedural.polish(Procedural.contract("Je n'oublie rien : %s%s." % [when, past.trim_suffix(".")]))
+
+
+static func _past_tpl(record: Dictionary) -> String:
+	var variant := str(record.get("variant", ""))
+	if VARIANTS.has(variant):
+		return VARIANTS[variant][3]
+	return CHOICE_PAST.get(str(record.get("action_type", "")), CHOICE_PAST[""])
 
 
 ## Le dilemme respecte-t-il le contrat ? "" si oui, sinon la raison.
@@ -469,7 +584,7 @@ static func validate(d: Dictionary) -> String:
 	for o in options:
 		if not (o is Dictionary and o.has("label") and o.has("hint") and o.get("action") is Dictionary):
 			return "option mal formée : %s" % str(o)
-		if str(o["label"]).strip_edges() == "" or str(o["label"]).contains("{"):
+		if str(o["label"]).strip_edges() == "" or str(o["label"]).contains("{") or str(o["label"]).contains("["):
 			return "libellé vide ou non rempli : %s" % str(o["label"])
 		var a: Dictionary = o["action"]
 		if a.is_empty():

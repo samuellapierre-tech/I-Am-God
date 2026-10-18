@@ -87,7 +87,8 @@ func test_chaque_declencheur_produit_un_dilemme_valide() -> String:
 			if str(o["hint"]) == "":
 				return "%s : indice vide" % trig["kind"]
 	for k in GameMaster.TRIGGERS:
-		if not kinds.has(k):
+		# Les grands choix du prologue sont couverts par tests/test_ai_strategy.gd.
+		if not kinds.has(k) and not k in GameMaster.PROLOGUE_TRIGGERS:
 			return "type de déclencheur non couvert : " + k
 	var weak := GameMaster.trigger_from_alert({"kind": "famine", "severity": 0.2}, ctx)
 	if not weak.is_empty():

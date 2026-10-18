@@ -12,6 +12,8 @@ extends Node
 ##   les grands moments mondiaux (importance >= WORLD_PRIORITY, gestes divins) passent avant.
 ## - Maître du jeu (game_master.gd) : de temps en temps, un dilemme (dilemma_ready) que l'interface
 ##   affiche ; resolve_dilemma(id, option) applique le choix. Le narrateur ne met jamais le jeu en pause.
+## - Stratégie (strategy_narrator.gd) : manches, menaces, pistes et épilogue relayés par GameState
+##   (round_started, threat_revealed, threat_resolved, tracks_changed, game_over), s'ils existent.
 ## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance sur la parcelle.
 ##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
@@ -42,6 +44,8 @@ const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const Chronicle := preload("res://src/ai/chronicle.gd")
 const Divergence := preload("res://src/ai/divergence.gd")
 const GameMaster := preload("res://src/ai/game_master.gd")
+const StrategyNarrator := preload("res://src/ai/strategy_narrator.gd")
+const FactBase := preload("res://src/ai/facts/fact_base.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -64,6 +68,8 @@ const PARCEL_RARE_MAX_AGE := 120.0
 const PARCEL_QUEUE_SIZE := 8
 ## Un événement compte comme « récent » pour le choix des faits pendant ce délai (s).
 const RECENT_EVENT_SEC := 60.0
+## Délai minimal (s) entre deux lignes de règles de la stratégie (manche, menaces, pistes).
+const STORY_GAP := 2.0
 ## Types d'événements qui peuvent déclencher un dilemme (voir GameMaster.trigger_from_event).
 const DILEMMA_EVENT_TYPES := ["sapience", "war", "discovery", "volcanism", "parcel_land_use", "parcel_heat", "parcel_cold"]
 
@@ -99,6 +105,13 @@ var _ambient_rng := RandomNumberGenerator.new()
 ## Gestes divins déjà accomplis, du plus ancien au plus récent : [{type, year, species_id}].
 var _divine_history: Array[Dictionary] = []
 var _meteor_offered := false
+## Étape datée de l'histoire (prologue…) où se trouve le monde, pour proposer son grand choix.
+var _last_stage := ""
+## Lignes de la stratégie prêtes à dire (règles : jamais réécrites par le LLM) : [{text, meta}].
+var _story_pending: Array[Dictionary] = []
+var _announced_threats := {}
+var _tracks := {}
+var _game_over := false
 ## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
 var _recent_events: Array[Dictionary] = []
 
@@ -250,6 +263,12 @@ func _connect_game_state() -> void:
 		"divine_action_applied": _on_divine_action_applied,
 		"parcel_updated": _on_parcel_updated,
 		"parcel_changed": _on_parcel_changed,
+		# Stratégie (src/strategy/) : ces signaux n'existent que si le module est fusionné.
+		"round_started": _on_round_started,
+		"threat_revealed": _on_threat_revealed,
+		"threat_resolved": _on_threat_resolved,
+		"tracks_changed": _on_tracks_changed,
+		"game_over": _on_game_over,
 	}
 	for sig in links:
 		if _game_state.has_signal(sig) and not _game_state.is_connected(sig, links[sig]):
@@ -592,8 +611,13 @@ func _consider_event(event: Dictionary) -> void:
 
 
 func _tick_game_master(delta: float) -> void:
-	if game_master == null or _game_state == null or not bool(config.get_value("narrator", "dilemma_enabled")):
+	if game_master == null or _game_state == null or _game_over or not bool(config.get_value("narrator", "dilemma_enabled")):
 		return
+	# Entrée dans une étape du prologue : son grand choix (docs/STRATEGIE.md §1).
+	var stage := FactBase.stage_for(_current_era(), _current_year())
+	if stage != _last_stage:
+		_last_stage = stage
+		game_master.consider(GameMaster.stage_trigger(stage, _gm_context()))
 	if not _meteor_offered and _clock >= game_master.meteor_delay:
 		var ctx := _gm_context()
 		if GameMaster.meteor_due(ctx, _clock, game_master.meteor_delay):
@@ -628,14 +652,99 @@ func _show_dilemma(d: Dictionary) -> void:
 
 
 func _resolve_dilemma(id: int, option_index: int, timed_out: bool) -> void:
+	var d := game_master.active
+	if d.is_empty() or int(d["id"]) != id or option_index < 0 or option_index >= (d["options"] as Array).size():
+		return
+	# Répondre à un dilemme coûte une action de la manche (STRATEGIE.md §2) : sans budget, rien ne se fait.
+	var strategy := _strategy()
+	var no_budget := false
+	if not (d["options"][option_index]["action"] as Dictionary).is_empty() and strategy != null \
+			and strategy.has_method("can_act") and not strategy.can_act():
+		no_budget = true
+		option_index = GameMaster.nothing_index(d)
 	var r := game_master.resolve(id, option_index, timed_out, _gm_context())
 	if not bool(r.get("ok", false)):
 		return
-	_emit_line(str(r["text"]), {"source": "dilemma", "kind": "choice", "dilemma_id": id, "timed_out": timed_out})
+	var text := str(r["text"])
+	if no_budget:
+		text = "Tu n'as plus d'action dans cette manche : ton geste reste suspendu, et le monde suit sa pente."
+	_emit_line(text, {"source": "dilemma", "kind": "choice", "dilemma_id": id, "timed_out": timed_out, "no_budget": no_budget})
 	var action: Dictionary = r["action"]
 	if not action.is_empty() and _game_state != null and _game_state.has_method("apply_divine_action"):
+		if strategy != null and strategy.has_method("spend_action"):
+			strategy.spend_action("dilemma")
 		_game_state.apply_divine_action(action)
 	dilemma_closed.emit(id, option_index, timed_out)
+
+
+# ---------------------------------------------------------------------------
+# Stratégie : le narrateur raconte les règles (manches, menaces, pistes, fin)
+# ---------------------------------------------------------------------------
+
+func _strategy() -> Object:
+	if _game_state != null and "strategy" in _game_state:
+		return _game_state.strategy
+	return null
+
+
+func _push_story(text: String, kind: String, extra: Dictionary = {}) -> void:
+	if text == "":
+		return
+	var meta := {"source": "strategy", "kind": kind}
+	meta.merge(extra, true)
+	_story_pending.append({"text": text, "meta": meta})
+	while _story_pending.size() > 8:
+		_story_pending.pop_front()
+
+
+func _on_round_started(rd: Dictionary) -> void:
+	var actions := -1
+	var strategy := _strategy()
+	if strategy != null and "actions_per_round" in strategy:
+		actions = int(strategy.actions_per_round)
+	for t in rd.get("threats", []):
+		if t is Dictionary and t.has("id"):
+			_announced_threats[t["id"]] = true
+	_push_story(StrategyNarrator.round_line(rd, actions), "round", {"round": int(rd.get("index", 0))})
+
+
+func _on_threat_revealed(threat: Dictionary) -> void:
+	if threat.has("id") and _announced_threats.has(threat["id"]):
+		return
+	if threat.has("id"):
+		_announced_threats[threat["id"]] = true
+	_push_story(StrategyNarrator.threat_line(threat, _current_year()), "threat", {"threat_id": threat.get("id", -1)})
+
+
+func _on_threat_resolved(threat: Dictionary, countered: bool) -> void:
+	var target: Variant = threat.get("target", {})
+	var sid := int(target.get("species_id", -1)) if target is Dictionary else -1
+	_push_story(StrategyNarrator.resolved_line(threat, countered, _species_name_for(sid)), "threat_countered" if countered else "threat_struck",
+		{"threat_id": threat.get("id", -1)})
+
+
+func _on_tracks_changed(tracks: Dictionary) -> void:
+	# Le premier relevé sert de référence : il n'y a encore rien à commenter.
+	if _tracks.is_empty():
+		_tracks = tracks.duplicate(true)
+		return
+	for line in StrategyNarrator.tracks_lines(_tracks, tracks):
+		_push_story(str(line), "tracks")
+	_tracks = tracks.duplicate(true)
+
+
+func _on_game_over(victory: bool, reason: String) -> void:
+	var memory := ""
+	for i in range(game_master.choices.size() - 1, -1, -1):
+		if not bool(game_master.choices[i].get("timed_out", false)):
+			memory = GameMaster.memory_line(game_master.choices[i])
+			break
+	_game_over = true
+	_story_pending.clear()
+	_pending.clear()
+	_parcel_pending.clear()
+	# L'épilogue passe tout de suite, avant toute autre ligne.
+	_emit_line(StrategyNarrator.epilogue(victory, reason, memory), {"source": "strategy", "kind": "epilogue", "victory": victory})
 
 
 func _parcel() -> Object:
@@ -673,7 +782,15 @@ func _process(delta: float) -> void:
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
 	_world_cooldown = maxf(_world_cooldown - delta, 0.0)
+	# Les règles d'abord (manche, menaces, pistes), à leur propre rythme, plus serré que le reste.
+	if not _story_pending.is_empty() and not _auto_in_flight and _since_line >= STORY_GAP:
+		var s: Dictionary = _story_pending.pop_front()
+		_cooldown = maxf(_cooldown, STORY_GAP)
+		_emit_line(str(s["text"]), s["meta"])
+		return
 	if _auto_in_flight or _cooldown > 0.0:
+		return
+	if _game_over:
 		return
 	if not _parcel_pending.is_empty():
 		_parcel_pending = expire_parcel_moments(_parcel_pending, _clock)
