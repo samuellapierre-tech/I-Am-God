@@ -54,7 +54,7 @@ const TITLES := {
 const TEXTS := {
 	"meteor_decision": [
 		"Une pierre de dix kilomètres croise au-dessus du monde, et les géants ne lèvent même pas la tête. Dans la vraie histoire, elle tombe, et les petits mammifères héritent de la Terre. À toi de voir si l'histoire doit être vraie.",
-		"J'ai vu la suite, enfin, je crois l'avoir vue : la pierre tombe, les dinosaures s'éteignent, l'herbe et les mammifères prennent le monde. Mais rien ne t'oblige à suivre mes livres.",
+		"J'ai vu la suite, enfin, je crois l'avoir vue : la pierre tombe, les dinosaures s'éteignent, l'herbe et les mammifères prennent le monde. Mais rien ne t'oblige à suivre mes visions.",
 	],
 	"first_sapient": [
 		"{espece} [espece:vient|viennent] de penser pour la première fois. [espece:Elle ignore|Ils ignorent] encore tout de toi, mais ça ne durera pas. Que fais-tu de cette étincelle ?",
@@ -275,7 +275,8 @@ func tick(delta: float) -> Dictionary:
 		if str(q["kind"]) == "meteor_decision" or _clock - float(q["_t"]) <= max_age:
 			kept.append(q)
 	_queue = kept
-	if _queue.is_empty() or not can_open():
+	# Le tout premier choix de la partie est celui du météore : rien ne s'ouvre avant qu'il ait pu être proposé.
+	if _queue.is_empty() or not can_open() or _clock < meteor_delay + 0.5:
 		return {}
 	return {"open": _queue.pop_front()}
 
@@ -321,7 +322,9 @@ func resolve(id: int, option_index: int, timed_out := false, ctx: Dictionary = {
 		"timed_out": timed_out,
 	}
 	choices.append(record)
-	var text := TIMEOUT_TEXT if timed_out else _sentence(CHOICE_NOW.get(t, CHOICE_NOW[""]), target_name) + " Je l'inscris au registre."
+	var text := TIMEOUT_TEXT if timed_out else _sentence(CHOICE_NOW.get(t, CHOICE_NOW[""]), target_name)
+	if not timed_out and t != "":
+		text += " Je l'inscris au registre."
 	active = {}
 	_deadline = -1.0
 	return {"ok": true, "action": action.duplicate(), "text": Procedural.polish(text), "record": record}
@@ -487,12 +490,12 @@ static func validate(d: Dictionary) -> String:
 static func _label(action_type: String, target: String) -> String:
 	if action_type == "":
 		return NOTHING_LABEL
-	var cible: String = Procedural.species_phrase(target)["text"] if target != "" else "les vivants"
+	var cible: String = Procedural.species_phrase(target)["text"] if target != "" else "ta parcelle"
 	return Procedural.contract(" " + str(LABELS.get(action_type, action_type)).format({"cible": cible})).strip_edges()
 
 
 static func _sentence(tpl: String, target: String) -> String:
-	var cible: String = Procedural.species_phrase(target)["text"] if target != "" else "les vivants"
+	var cible: String = Procedural.species_phrase(target)["text"] if target != "" else "ta parcelle"
 	if target.begins_with("leurs "):
 		cible = target
 	return Procedural.contract(" " + tpl.format({"cible": cible})).strip_edges()

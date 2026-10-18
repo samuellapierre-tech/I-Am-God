@@ -50,6 +50,9 @@ const DEFAULTS := {
 		## Délai minimal entre deux lignes du fil (secondes réelles) : un événement est raconté dès
 		## que ce délai est écoulé.
 		"min_interval_sec": 3.0,
+		## Les événements ordinaires du monde (importance < 0.9) ne passent qu'une fois par ce délai :
+		## le fil parle surtout de la parcelle. Les grands moments passent toujours aussitôt.
+		"world_min_interval_sec": 20.0,
 		## Nombre maximal d'événements résumés dans une seule narration.
 		"max_batch": 5,
 		## Importance minimale (0..1) pour qu'un événement de la simulation soit raconté.
@@ -178,7 +181,7 @@ func _sanitize(section: String, key: String, value: Variant) -> Variant:
 			out = clampi(out, 1, 32)
 		"min_importance", "parcel_min_importance":
 			out = clampf(out, 0.0, 1.0)
-		"parcel_min_interval_sec":
+		"parcel_min_interval_sec", "world_min_interval_sec":
 			out = clampf(out, 0.0, 600.0)
 		"ambient_min_sec", "ambient_max_sec":
 			out = clampf(out, 1.0, 600.0)

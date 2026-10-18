@@ -3,7 +3,9 @@ extends RefCounted
 ## vrais (facts/) ; dès qu'il diverge, il invente (inventor.gd). La divergence est définitive.
 ##
 ## Critères (assess) :
-## - dinosaurs_survived : des dinosaures non aviens ou des ptérosaures vivent encore après la fin du Crétacé ;
+## - dinosaurs_survived : des dinosaures non aviens ou des ptérosaures vivent encore longtemps après la fin
+##   du Crétacé (2 Ma après le météore, ou après DINOSAUR_CUTOFF s'il n'est jamais tombé) ;
+## - dinosaurs_spared : Dieu a refusé le météore (dilemme de la fin du Crétacé) ;
 ## - non_human_sapient : une espèce intelligente qui n'est pas issue des primates ;
 ## - early_sapience : une espèce intelligente bien avant l'apparition du genre humain ;
 ## - divine_creation : Dieu a éveillé ou créé une espèce (uplift, spawn_species) ;
@@ -11,8 +13,11 @@ extends RefCounted
 ## - future : la date dépasse notre présent, ou le monde est entré dans une ère future.
 
 const PRESENT_YEAR := 2026.0
-## Au-delà, des dinosaures non aviens vivants sont une anomalie (l'impact a eu lieu il y a 66 Ma).
-const DINOSAUR_CUTOFF := -65_000_000.0
+## Sans météore, des dinosaures non aviens vivants au-delà de cette date sont une anomalie. La marge
+## (l'impact réel date de -66 Ma) laisse au joueur le temps de décider : le jeu va vite au Crétacé.
+const DINOSAUR_CUTOFF := -60_000_000.0
+## Après le météore, les derniers dinosaures ont ce délai (années) pour disparaître.
+const AFTER_METEOR_GRACE := 2_000_000.0
 ## Le genre humain apparaît vers -2,8 Ma : une sapience plus ancienne n'a rien de réel.
 const EARLY_SAPIENCE_YEAR := -2_500_000.0
 const NON_AVIAN_CLADES := ["dinosaure", "ptérosaure"]
@@ -21,7 +26,7 @@ const DIVERGENT_ACTS := ["uplift", "spawn_species", "spawn"]
 const FUTURE_ERAS := ["Cyberpunk", "Post-singularité"]
 ## Fenêtres (larges) où chaque ère est plausible dans l'histoire réelle.
 const ERA_WINDOWS := {
-	"Mésozoïque": [-1.0e9, -65_000_000.0],
+	"Mésozoïque": [-1.0e9, DINOSAUR_CUTOFF],
 	"Cénozoïque": [-66_500_000.0, PRESENT_YEAR],
 	"Préhistoire": [-2_500_000.0, -1_500.0],
 	"Antiquité": [-10_000.0, 1_000.0],
@@ -34,6 +39,7 @@ const ERA_WINDOWS := {
 ## Raisons lisibles, pour le narrateur et pour le prompt LLM.
 const REASON_TEXTS := {
 	"dinosaurs_survived": "les dinosaures ont survécu à la fin du Crétacé",
+	"dinosaurs_spared": "tu as épargné les dinosaures en retenant la pierre",
 	"non_human_sapient": "une espèce intelligente non humaine est apparue",
 	"early_sapience": "l'intelligence est apparue des millions d'années trop tôt",
 	"divine_creation": "tu as toi-même éveillé ou façonné une espèce",
@@ -54,11 +60,20 @@ static func assess(ctx: Dictionary) -> Array[String]:
 	var has_year := typeof(year) in [TYPE_INT, TYPE_FLOAT]
 	var y := float(year) if has_year else 0.0
 	var era := str(ctx.get("era", ""))
+	var dino_limit := DINOSAUR_CUTOFF
+	for act in ctx.get("divine", []):
+		if act is Dictionary and str(act.get("type", "")) == "meteor" and typeof(act.get("year")) in [TYPE_INT, TYPE_FLOAT]:
+			dino_limit = minf(dino_limit, float(act["year"]) + AFTER_METEOR_GRACE)
+			break
+	for c in ctx.get("choices", []):
+		if str(c.get("trigger", "")) == "meteor_decision" and str(c.get("action_type", "")) != "meteor":
+			out.append("dinosaurs_spared")
+			break
 	for sp in ctx.get("species", []):
 		if not bool(sp.get("alive", true)):
 			continue
 		var clade := str(sp.get("clade", ""))
-		if has_year and y > DINOSAUR_CUTOFF and clade in NON_AVIAN_CLADES and not "dinosaurs_survived" in out:
+		if has_year and y > dino_limit and clade in NON_AVIAN_CLADES and not "dinosaurs_survived" in out:
 			out.append("dinosaurs_survived")
 		if bool(sp.get("sapient", false)):
 			if not clade in HUMAN_CLADES and not "non_human_sapient" in out:

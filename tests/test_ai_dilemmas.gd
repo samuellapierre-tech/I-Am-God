@@ -60,6 +60,7 @@ func test_chaque_declencheur_produit_un_dilemme_valide() -> String:
 	var ctx := _ctx()
 	var kinds := {}
 	var gm := GameMaster.new(1)
+	gm.meteor_delay = 0.0  # pas de délai de début de partie dans ce test
 	for trig in _all_triggers(ctx):
 		if trig.is_empty():
 			return "déclencheur non reconnu (voir _all_triggers)"
@@ -116,6 +117,7 @@ func test_options_par_regles() -> String:
 func test_cadence_un_seul_dilemme_a_la_fois() -> String:
 	var ctx := _ctx()
 	var gm := GameMaster.new(2)
+	gm.meteor_delay = 0.0  # pas de délai de début de partie dans ce test
 	gm.min_interval = 180.0
 	gm.consider(GameMaster.trigger_from_event({"type": "sapience", "species_id": 2}, ctx))
 	gm.consider(GameMaster.trigger_from_alert({"kind": "famine", "severity": 0.9}, ctx))
@@ -138,6 +140,7 @@ func test_cadence_un_seul_dilemme_a_la_fois() -> String:
 			return "déclencheur inattendu : %s" % str(r)
 	# Nouveau déclencheur juste après une ouverture : il doit attendre min_interval.
 	var gm2 := GameMaster.new(3)
+	gm2.meteor_delay = 0.0  # pas de délai de début de partie dans ce test
 	gm2.min_interval = 180.0
 	gm2.consider(GameMaster.trigger_from_alert({"kind": "decline", "species_id": 3, "severity": 0.9}, ctx))
 	var o := gm2.tick(1.0)
@@ -163,6 +166,7 @@ func test_cadence_un_seul_dilemme_a_la_fois() -> String:
 func test_sans_reponse_ne_rien_faire() -> String:
 	var ctx := _ctx()
 	var gm := GameMaster.new(4)
+	gm.meteor_delay = 0.0  # pas de délai de début de partie dans ce test
 	gm.timeout_s = 30.0
 	gm.consider(GameMaster.meteor_trigger(ctx))
 	var d := gm.open_dilemma(gm.tick(1.0)["open"], ctx)
@@ -195,6 +199,7 @@ func test_sans_reponse_ne_rien_faire() -> String:
 func test_choix_memorises_et_rappeles() -> String:
 	var ctx := _ctx()
 	var gm := GameMaster.new(5)
+	gm.meteor_delay = 0.0  # pas de délai de début de partie dans ce test
 	gm.min_interval = 0.0
 	gm.consider(GameMaster.trigger_from_alert({"kind": "decline", "species_id": 4, "severity": 0.9}, ctx))
 	var d := gm.open_dilemma(gm.tick(1.0)["open"], ctx)
@@ -234,6 +239,22 @@ func test_determinisme_dilemmes() -> String:
 		if str(GameMaster.new(42).build(trig, ctx)) != str(c.build(trig, ctx)):
 			differs = true
 	return "" if differs else "la graine n'a aucun effet"
+
+
+## Le premier choix de la partie est celui du météore : aucun autre dilemme ne s'ouvre avant.
+func test_rien_avant_le_meteore() -> String:
+	var ctx := _ctx()
+	var gm := GameMaster.new(9)
+	gm.meteor_delay = 5.0
+	gm.consider(GameMaster.trigger_from_alert({"kind": "famine", "severity": 0.9}, ctx))
+	for i in 5:
+		if gm.tick(1.0).has("open"):
+			return "dilemme ouvert avant la décision du météore (%d s)" % (i + 1)
+	gm.consider(GameMaster.meteor_trigger(ctx))
+	var r := gm.tick(1.0)
+	if not r.has("open") or r["open"]["kind"] != "meteor_decision":
+		return "le météore devrait passer en premier : %s" % str(r)
+	return ""
 
 
 func test_meteore_propose_seulement_au_cretace() -> String:

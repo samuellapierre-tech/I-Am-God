@@ -181,6 +181,27 @@ func test_fil_continu_rythme() -> String:
 	return ""
 
 
+## Le fil parle surtout de la parcelle : les événements ordinaires du monde ne le monopolisent pas.
+func test_priorites_du_fil() -> String:
+	var cases := [
+		# world_top, parcel_top, parcel_ready, world_ready, ambient_ready, attendu
+		[0.5, -1.0, true, false, true, "ambient"],
+		[0.5, -1.0, true, true, true, "world"],
+		[0.9, -1.0, true, false, true, "world"],
+		[0.9, 0.95, true, false, true, "world"],
+		[0.5, 0.6, true, false, true, "parcel"],
+		[0.5, 0.6, false, false, true, "ambient"],
+		[0.7, 0.6, true, true, false, "world"],
+		[-1.0, -1.0, true, true, false, ""],
+		[-1.0, 0.4, true, true, false, "parcel"],
+	]
+	for c in cases:
+		var got := NarratorScript.next_line_source(c[0], c[1], c[2], c[3], c[4])
+		if got != c[5]:
+			return "%s : « %s » au lieu de « %s »" % [str(c), got, c[5]]
+	return ""
+
+
 func test_fil_determinisme() -> String:
 	var run := func(s: int) -> PackedStringArray:
 		var chron := Chronicle.new(s)
@@ -209,7 +230,11 @@ func test_criteres_de_divergence() -> String:
 	var humans := _species(2, "Humains", "primate", true)
 	var cases := [
 		[{"era": "Mésozoïque", "year": -66_000_000.0, "species": [dino]}, []],
-		[{"era": "Cénozoïque", "year": -60_000_000.0, "species": [dino]}, ["dinosaurs_survived"]],
+		[{"era": "Cénozoïque", "year": -59_000_000.0, "species": [dino]}, ["dinosaurs_survived"]],
+		[{"era": "Mésozoïque", "year": -64_000_000.0, "species": [dino]}, []],
+		[{"era": "Cénozoïque", "year": -63_000_000.0, "species": [dino], "divine": [{"type": "meteor", "year": -66_000_000.0}]}, ["dinosaurs_survived"]],
+		[{"era": "Cénozoïque", "year": -65_500_000.0, "species": [dino], "divine": [{"type": "meteor", "year": -66_000_000.0}]}, []],
+		[{"era": "Mésozoïque", "year": -65_900_000.0, "species": [dino], "choices": [{"trigger": "meteor_decision", "action_type": ""}]}, ["dinosaurs_spared"]],
 		[{"era": "Préhistoire", "year": -100_000.0, "species": [humans]}, []],
 		[{"era": "Antiquité", "year": -500.0, "species": [humans]}, []],
 		[{"era": "Moderne", "year": 2020.0, "species": [humans]}, []],
@@ -250,7 +275,7 @@ func test_bascule_reel_vers_divergent() -> String:
 		return "aucun fait réel raconté dans un monde réel : %s" % str(kinds)
 	if kinds.has("invention"):
 		return "invention dans un monde réel"
-	ctx = _ctx("Cénozoïque", -60_000_000.0, fauna, [dino])
+	ctx = _ctx("Cénozoïque", -59_000_000.0, fauna, [dino])
 	ctx["mode"] = lens.update(ctx)
 	if ctx["mode"]["real"] or not ctx["mode"]["just_diverged"] or not "dinosaurs_survived" in ctx["mode"]["criteria"]:
 		return "bascule non détectée : %s" % str(ctx["mode"])
@@ -259,7 +284,7 @@ func test_bascule_reel_vers_divergent() -> String:
 		return "bascule non annoncée : %s" % str(first)
 	kinds = {}
 	for i in 40:
-		ctx = _ctx("Cénozoïque", -60_000_000.0 + i * 1000.0, fauna, [dino])
+		ctx = _ctx("Cénozoïque", -59_000_000.0 + i * 1000.0, fauna, [dino])
 		ctx["mode"] = lens.update(ctx)
 		if ctx["mode"]["just_diverged"]:
 			return "bascule annoncée deux fois"
@@ -367,7 +392,7 @@ func test_divergence_simulation_reelle() -> String:
 	var lens := Divergence.new()
 	var chron := Chronicle.new(5)
 	var guard := 0
-	while sim.year <= -64_900_000.0 and guard < 2000:
+	while sim.year <= Divergence.DINOSAUR_CUTOFF + 100_000.0 and guard < 2000:
 		guard += 1
 		sim.step(sim.ideal_step_years() * sim.max_substeps)
 	var species := []

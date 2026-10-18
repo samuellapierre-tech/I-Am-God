@@ -354,6 +354,8 @@ func _init(p_seed: int = -1) -> void:
 	else:
 		rng.randomize()
 		_seed = rng.randi()
+	# slots_for() tire avec ce générateur sans le réensemencer : il doit partir de la graine.
+	rng.seed = _seed
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +622,9 @@ static func templates_for(m: Dictionary) -> Array:
 		"heat":
 			return HEAT_TEMPLATES
 		"cold":
-			return COLD_TEMPLATES
+			# Le givre n'a de sens que s'il fait vraiment froid.
+			var temp := float(m.get("temperature_c", m.get("snapshot", {}).get("temperature_c", 0.0)))
+			return COLD_TEMPLATES if temp <= 8.0 else COLD_TEMPLATES.filter(func(t: String) -> bool: return not t.contains("givre"))
 		"focus":
 			return FOCUS_TEMPLATES
 	return GENERIC_TEMPLATES

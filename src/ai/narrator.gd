@@ -52,8 +52,10 @@ const EVENT_IMPORTANCE := {
 }
 ## Délai minimal après un geste divin avant de le raconter (laisse arriver ses conséquences).
 const DIVINE_DELAY := 0.4
-## Un événement mondial au moins aussi important passe toujours avant la parcelle.
-const WORLD_PRIORITY := 0.8
+## Un événement mondial au moins aussi important passe toujours, et aussitôt, avant la parcelle :
+## changement d'ère, météore, éveil, gestes divins. Les extinctions et épidémies ordinaires de la
+## simulation (0.8) sont trop fréquentes pour monopoliser le fil.
+const WORLD_PRIORITY := 0.9
 ## Un moment de parcelle ordinaire non raconté au bout de ce délai (s) est oublié ; un moment rare
 ## (importance >= PARCEL_RARE) attend jusqu'à PARCEL_RARE_MAX_AGE.
 const PARCEL_MAX_AGE := 40.0
@@ -87,6 +89,8 @@ var _game_state: Node
 ## Moments de parcelle en attente (avec "_t", leur heure d'arrivée en secondes).
 var _parcel_pending: Array[Dictionary] = []
 var _parcel_cooldown := 0.0
+## Délai avant de raconter de nouveau un événement ordinaire du monde.
+var _world_cooldown := 0.0
 var _clock := 0.0
 ## Fil continu : temps écoulé depuis la dernière ligne, et délai avant la prochaine phrase d'ambiance.
 var _since_line := 0.0
@@ -668,11 +672,8 @@ func _process(delta: float) -> void:
 	_tick_game_master(delta)
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
+	_world_cooldown = maxf(_world_cooldown - delta, 0.0)
 	if _auto_in_flight or _cooldown > 0.0:
-		return
-	if _pending.is_empty() and _parcel_pending.is_empty():
-		if ambient_due(_since_line, _next_ambient, auto_narrate and bool(config.get_value("narrator", "ambient_enabled")), _game_state != null):
-			_narrate_ambient()
 		return
 	if not _parcel_pending.is_empty():
 		_parcel_pending = expire_parcel_moments(_parcel_pending, _clock)
@@ -680,10 +681,32 @@ func _process(delta: float) -> void:
 	for e in _pending:
 		world_top = maxf(world_top, float(e["_importance"]))
 	var parcel_top := float(_parcel_pending[0]["importance"]) if not _parcel_pending.is_empty() else -1.0
-	if parcel_goes_first(world_top, parcel_top, _parcel_cooldown <= 0.0):
-		_flush_parcel()
-	elif not _pending.is_empty():
-		_flush()
+	var ambient_ready := ambient_due(_since_line, _next_ambient,
+		auto_narrate and bool(config.get_value("narrator", "ambient_enabled")), _game_state != null)
+	match next_line_source(world_top, parcel_top, _parcel_cooldown <= 0.0, _world_cooldown <= 0.0, ambient_ready):
+		"parcel":
+			_flush_parcel()
+		"world":
+			if world_top < WORLD_PRIORITY:
+				_world_cooldown = float(config.get_value("narrator", "world_min_interval_sec"))
+			_flush()
+		"ambient":
+			_narrate_ambient()
+
+
+## Que raconter maintenant ? "parcel", "world", "ambient" ou "" (pure, testée sans GameState).
+## Les grands moments du monde (>= WORLD_PRIORITY) passent aussitôt ; les événements ordinaires du monde
+## ne sont racontés qu'une fois par world_min_interval_sec (world_ready), pour laisser la place à la
+## parcelle et au fil d'ambiance (faits réels, inventions).
+static func next_line_source(world_top: float, parcel_top: float, parcel_ready: bool, world_ready: bool, ambient_ready: bool) -> String:
+	var world_now := world_top >= WORLD_PRIORITY or (world_top >= 0.0 and world_ready)
+	if parcel_goes_first(world_top if world_now else -1.0, parcel_top, parcel_ready):
+		return "parcel"
+	if world_now:
+		return "world"
+	if ambient_ready:
+		return "ambient"
+	return ""
 
 
 func _flush() -> void:
