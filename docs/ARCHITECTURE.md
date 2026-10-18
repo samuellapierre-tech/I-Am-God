@@ -22,7 +22,7 @@ directement au GPU sous forme de texture :
 - `elevation`, `temperature`, `population`, `tech` : `PackedFloat32Array`
 - `dominant_species` : `PackedInt32Array` (-1 = aucune)
 - `species` : `Dictionary` id -> `{name, alive, sapient, population, traits}`
-- `year: float` (commence à -66 000 000)
+- `year: float` (commence à -3 800 000 000 ; -66 000 000 dans le scénario court, voir § Prologue)
 
 Méthodes :
 
@@ -38,7 +38,11 @@ Méthodes :
 {type: String, region: Vector2i, species_id: int, radius: int}
 ```
 
-Types : `meteor`, `extinct`, `save`, `bless`, `plague`, `uplift`, `flood`, `ice_age`, `spawn_species`.
+Types : `meteor`, `extinct`, `save`, `bless`, `plague`, `uplift`, `flood`, `ice_age`, `spawn_species`,
+et (prologue, utilisables à toute époque) `volcano` (éruption : froid passager, l'oxygène baisse, le
+CO2 réchauffera plus tard — de quoi sortir d'une boule de neige), `oxygenate` (souffle divin :
++25 % d'oxygène, fin du fer dissous), `soothe` (apaise la Terre : désamorce les trapps qui
+préparent la Grande Mourance).
 
 ## Événement
 
@@ -92,12 +96,17 @@ Le HUD se branche (`bind_map`) sur `src/ui/parcel_powers.gd`, qui garde l'API de
 | `cell` | `Vector2i` | Cellule de la grille WorldSim (≈ 150 km ; l'écran en montre un échantillon représentatif). |
 | `year` | `float` | Année du dernier calcul. |
 | `biome` | `String` | Nom du biome (`WorldSim.BIOME_NAMES`). |
-| `land_use` | `String` | Une valeur de `ParcelSim.LAND_USES` : `ocean, ice, wild, crater, flooded, camp, pasture, farmland, village, town, city, megacity, arcology, ruins, rewild`. |
+| `land_use` | `String` | Une valeur de `ParcelSim.LAND_USES` : `ocean, ice, wild, crater, flooded, camp, pasture, farmland, village, town, city, megacity, arcology, ruins, rewild`, et pour le prologue `seabed` (fonds marins peuplés), `microbial_mat` (hauts-fonds à tapis microbiens / stromatolites), `reef` (récif animal), `barren` (terre nue, sans plantes), `swamp_forest` (forêt marécageuse du Carbonifère). `ocean` = mer sans vie ; `ice` couvre aussi la banquise. |
 | `temperature_c`, `global_temperature_c` | `float` | °C local et moyenne mondiale. |
 | `vegetation`, `water`, `tech` | `float` 0..1 | Couverture végétale, humidité, niveau technologique local. |
-| `fauna` | `Array[Dictionary]` | ≤ `MAX_FAUNA` espèces : `{species_id, name, count (0..MAX_VISIBLE individus à dessiner), density, trend (-1/0/1), role ("herbivore"/"carnivore"/"omnivore"/"sapient"), size (0..1), clade}`. |
+| `fauna` | `Array[Dictionary]` | ≤ `MAX_FAUNA` espèces : `{species_id, name, count (0..MAX_VISIBLE individus à dessiner), density, trend (-1/0/1), role ("herbivore"/"carnivore"/"omnivore"/"sapient", et "producer" pour les microbes et algues marins), size (0..1), clade, diet, change, habitat ("marine"/"amphibious"/"land")}`. En mer : vie marine et amphibie ; à terre : vie terrestre et amphibie (les plantes ne sont pas listées, elles font `vegetation`). |
 | `structures` | `Array[Dictionary]` | `{kind ("field"/"hut"/"road"/"building"/"tower"/"ruin"), pos: Vector2 0..1, size}` — positions stables d'une frame à l'autre. |
-| `history` | `Array[Dictionary]` | ≤ `HISTORY_SIZE` échantillons `{year, temperature_c, global_temperature_c, population_total, population: {species_id: count}}`. |
+| `history` | `Array[Dictionary]` | ≤ `HISTORY_SIZE` échantillons `{year, temperature_c, global_temperature_c, population_total, population: {species_id: count}, vegetation, development}`, un tous les `HISTORY_STEPS` pas idéaux. |
+| `era`, `land_use_label` | `String` | Ère mondiale ; libellé français de l'usage du sol (« Forêt sauvage », « Tapis microbiens », « Mégapole »…). |
+| `development`, `target_development` | `float` 0..8 | Développement continu (0 sauvage … 8 arcologie) et sa cible. |
+| `sapient_id` | `int` | Peuple conscient présent (-1 : aucun). |
+| `crater_level`, `flood_level`, `scorch_level` | `float` 0..1 | Stigmates d'impact, de crue, de cendres. |
+| `alerts` | `Array[Dictionary]` | Crises en cours `{kind ("species_collapse"/"heat_drift"/"civilization_threat"), species_id, severity 0..1, summary, cause_id}`, de la plus grave à la moins grave. |
 
 Règles : on peut **ajouter** des champs, jamais en retirer ou en changer le sens sans mettre à jour
 ce document et `tests/test_parcel.gd`. La vue n'invente rien : ce qu'elle montre vient de ces champs
@@ -175,4 +184,50 @@ chaîne causale reste la seule source de vérité.
 La partie commence à **-3 800 000 000** ans. Étapes du prologue (avant `MESOZOIC`) : Archéen, Grande
 Oxydation, Terre boule de neige, Explosion cambrienne, Sortie des eaux, Carbonifère, Grande Mourance
 (détails dans `STRATEGIE.md` §1). Les indices d'ères existants changent : le code ne doit plus
-supposer `MESOZOIC == 0` mais utiliser les constantes de `src/sim/eras.gd`.
+supposer `MESOZOIC == 0` mais utiliser les constantes de `src/sim/eras.gd` (`ARCHEAN = 0` …
+`GREAT_DYING = 6`, `MESOZOIC = 7`, `CENOZOIC = 8`, `FIRST_SAPIENT_ERA = 9`, `LAST_ERA = 16`) ;
+`WorldSim.ERAS == Eras.NAMES`.
+
+### Scénarios
+
+`WorldSim.new(seed, generate := true, scenario := WorldSim.SCENARIO_PROLOGUE)`. Le scénario
+`SCENARIO_CRETACEOUS` démarre à -66 Ma avec le roster de la fin du Crétacé (tests, partie courte) ;
+la végétation y est implicite et l'oxygène vaut 1.
+
+### Les étapes sont des conséquences
+
+Aucune date n'est scriptée : chaque étape s'ouvre quand l'état du monde l'atteint (jamais en
+arrière ; une étape peut être sautée). Sans intervention, les dates tombent près de l'histoire réelle.
+
+| Étape | Déclencheur |
+|---|---|
+| Grande Oxydation | les cyanobactéries ont épuisé le fer dissous (`oxygen` commence à monter) |
+| Terre boule de neige | `snowball` : l'oxygène détruit le méthane plus vite que le CO2 ne compense |
+| Explosion cambrienne | ≥ 3 espèces animales (complexité ≥ 3), hors boule de neige |
+| Sortie des eaux | un tétrapode (complexité ≥ 5) hors de l'eau |
+| Carbonifère | un amniote terrestre (complexité 6) |
+| Grande Mourance | trapps (aléa croissant après le Carbonifère, désamorcé par `soothe`) ou extinction de masse (45 % des espèces en 2 Ma) |
+| Mésozoïque | 2 Ma après la Grande Mourance, ou dès que des dinosaures sont établis |
+
+Les clades naissent par évolution (`Species.TRANSITIONS`, sous conditions d'oxygène, de flore
+terrestre, de niches libres) : microbe → algue → éponge → arthropode / mollusque → poisson →
+amphibien → reptile / synapside → dinosaure, ptérosaure, mammifère, oiseau, primate ; algue →
+plante ; arthropode → insecte.
+
+### Ajouts publics de `WorldSim`
+
+- `scenario: String`, `oxygen: float` (fraction du niveau actuel), `max_complexity: float` 0..6,
+  `land_flora`, `land_fauna: float` 0..1 (part des terres couvertes de plantes / d'animaux),
+  `snowball: bool`, `era_years: Dictionary` (indice d'ère -> année d'entrée)
+- `current_period() -> String` (« Archéen », « Cambrien »… « Trias », « Jurassique », « Crétacé »),
+  `is_prologue() -> bool`, `complexity_name() -> String`
+- `region_niches(cell)` : chaque niche porte aussi `habitat`
+- traits d'espèce : `complexity`, `habitat` ("marine"/"amphibious"/"land"), `anaerobic`,
+  `oxygenic` ; régime `"autotrophe"` pour les producteurs
+- événements : `clade` (nouvelle lignée), `snowball`, `thaw`, `traps`, `oxygen`, `soothe`
+
+### Rythme
+
+À x1 avec la boucle du HUD (`MapMath.base_years_per_second(ideal_step_years()) × GameState.pace_factor()`),
+le prologue dure 10 à 15 minutes (`Eras.IDEAL_DT`) ; à l'entrée au Mésozoïque, le pas idéal est calé
+pour qu'on atteigne -66 Ma en ~20 minutes (`WorldSim.MESOZOIC_STEPS`). Voir `tests/test_sim_prologue.gd`.

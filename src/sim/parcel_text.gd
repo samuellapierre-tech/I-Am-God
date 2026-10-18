@@ -9,6 +9,8 @@ const USE_LABELS := {
 	"flooded": "Terres inondées", "camp": "Campement", "pasture": "Pâturages",
 	"farmland": "Terres agricoles", "village": "Village", "town": "Petite ville", "city": "Ville",
 	"megacity": "Mégapole", "arcology": "Arcologie", "ruins": "Ruines", "rewild": "Retour à la nature",
+	"seabed": "Fonds marins", "microbial_mat": "Tapis microbiens", "reef": "Récif",
+	"barren": "Terres nues", "swamp_forest": "Forêt marécageuse",
 }
 ## Libellé de « wild » selon le biome (WorldSim.BIOME_NAMES).
 const WILD_LABELS := {

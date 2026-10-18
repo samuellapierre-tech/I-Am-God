@@ -2,7 +2,11 @@ extends RefCounted
 ## Écosystème régional multicoeur.
 ##
 ## La planète (256x128 cellules) est découpée en régions de RS x RS cellules (64x32 régions).
-## Chaque région abrite jusqu'à K espèces (« niches ») avec une densité 0..1+.
+## Chaque région abrite jusqu'à K espèces (« niches ») avec une densité 0..1+. Une espèce marine
+## vit de la part océanique de la région (r_sea, plateaux continentaux surtout), une espèce
+## terrestre de ses terres (fertilité x ouverture des terres, fermées sans couche d'ozone), une
+## espèce amphibie des deux. Les herbivores dépendent des producteurs de leur milieu quand la flore
+## est explicite (prologue) ; sinon (scénario du Crétacé) la végétation est implicite.
 ## Un pas d'écosystème est un noyau WorkerThreadPool.add_group_task sur des bandes de lignées
 ## de régions : chaque bande lit le tampon courant (cur_*) et n'écrit que SES régions dans le
 ## tampon suivant (nxt_*), puis réécrit SES lignes de cellules dans les grilles fines publiques.
@@ -34,6 +38,7 @@ var r_land := PackedFloat32Array()   # part de terres émergées
 var r_fert := PackedFloat32Array()   # fertilité moyenne des terres
 var r_temp := PackedFloat32Array()   # température de base moyenne
 var r_elev := PackedFloat32Array()   # altitude moyenne des terres
+var r_sea := PackedFloat32Array()    # capacité marine (part d'océan, plateaux pondérés)
 # --- Modificateurs régionaux (écrits par le thread principal entre deux pas) ---
 var r_anom := PackedFloat32Array()   # anomalie thermique locale (volcans, impacts)
 var r_bless := PackedFloat32Array()  # bonus de fertilité (bénédiction, limon)
@@ -43,14 +48,19 @@ var cur_pop := PackedFloat32Array()
 var nxt_sp := PackedInt32Array()
 var nxt_pop := PackedFloat32Array()
 # --- Sorties régionales (chaque bande n'écrit que ses régions) ---
-var r_dom := PackedInt32Array()      # indice de table de l'espèce dominante
+var r_dom := PackedInt32Array()      # indice de table de l'espèce dominante (hors espèces marines)
+var r_mdom := PackedInt32Array()     # indice de table de l'espèce marine dominante
 var r_dens := PackedFloat32Array()
 var r_tech := PackedFloat32Array()
 # --- Tables d'espèces indexées par indice de table (0..MAXS-1) ---
 var t_alive := PackedInt32Array()
 var t_id := PackedInt32Array()       # indice -> id public
 var t_protect := PackedInt32Array()
-var t_diet := PackedInt32Array()     # 0 herbivore, 1 omnivore, 2 carnivore
+var t_diet := PackedInt32Array()     # 0 herbivore, 1 omnivore, 2 carnivore, 3 autotrophe
+var t_hab := PackedInt32Array()      # 0 marine, 1 amphibie, 2 terrestre
+var t_cx := PackedFloat32Array()     # complexité 0..6
+var t_anaer := PackedInt32Array()    # 1 = anaérobie (l'oxygène l'empoisonne)
+var t_oxf := PackedFloat32Array()    # facteur de capacité dû à l'oxygène (set_oxygen)
 var t_topt := PackedFloat32Array()
 var t_tol := PackedFloat32Array()
 var t_comp := PackedFloat32Array()
@@ -87,6 +97,10 @@ var pending_free: Array[int] = []
 var next_idx := 0
 ## false = exécute les bandes en série (mesures comparatives).
 var threaded := true
+## 1 = les herbivores ont besoin de producteurs (prologue) ; 0 = végétation implicite.
+var explicit_flora := 0
+## 0..1 : les terres sont-elles habitables (couche d'ozone) ? Écrit par set_oxygen().
+var land_open := 1.0
 
 # Paramètres du pas courant (lus par les tâches).
 var _step_hash := 0
@@ -96,19 +110,23 @@ var _biome_dirty := false
 
 
 func _init() -> void:
-	for a in [r_land, r_fert, r_temp, r_elev, r_anom, r_bless, r_dens, r_tech]:
+	for a in [r_land, r_fert, r_temp, r_elev, r_sea, r_anom, r_bless, r_dens, r_tech]:
 		a.resize(NR)
-	r_dom.resize(NR)
-	r_dom.fill(-1)
+	for a in [r_dom, r_mdom]:
+		a.resize(NR)
+		a.fill(-1)
 	for a in [cur_sp, nxt_sp]:
 		a.resize(NR * K)
 		a.fill(-1)
 	cur_pop.resize(NR * K)
 	nxt_pop.resize(NR * K)
-	for a in [t_alive, t_id, t_protect, t_diet]:
+	for a in [t_alive, t_id, t_protect, t_diet, t_hab, t_anaer]:
 		a.resize(MAXS)
-	for a in [t_topt, t_tol, t_comp, t_icomp, t_growth, t_disp, t_alpha, t_mig, t_vis, t_tech, t_capmul]:
+	t_hab.fill(2)
+	for a in [t_topt, t_tol, t_comp, t_icomp, t_growth, t_disp, t_alpha, t_mig, t_vis, t_tech, t_capmul, t_cx, t_oxf]:
 		a.resize(MAXS)
+	t_cx.fill(6.0)
+	t_oxf.fill(1.0)
 	t_tol.fill(0.2)
 	t_comp.fill(1.0)
 	t_icomp.fill(1.0)
@@ -141,6 +159,7 @@ func build_static() -> void:
 	r_fert.fill(0.0)
 	r_temp.fill(0.0)
 	r_elev.fill(0.0)
+	r_sea.fill(0.0)
 	for y in H:
 		for x in W:
 			var i := y * W + x
@@ -148,7 +167,10 @@ func build_static() -> void:
 			var r := (y / RS) * RW + x / RS
 			var e := g_elev[i]
 			r_temp[r] += g_base_temp[i]
-			if e >= 0.0:
+			if e < 0.0:
+				# Les mers peu profondes (plateaux) sont bien plus productives que les abysses.
+				r_sea[r] += (0.9 if e > -0.35 else 0.25) / float(RS * RS)
+			else:
 				land_cnt[r] += 1
 				r_fert[r] += WorldGen.BIOME_FERTILITY[g_biome[i]]
 				r_elev[r] += e
@@ -200,6 +222,43 @@ func region_temperature(r: int, goff: float) -> float:
 func suitability(idx: int, r: int, goff: float) -> float:
 	var d := (region_temperature(r, goff) - t_topt[idx]) / t_tol[idx]
 	return maxf(0.0, 1.0 - d * d)
+
+
+## Capacité de base (avant climat) d'une région pour une espèce, selon son milieu.
+func habitat_base(idx: int, r: int) -> float:
+	var sea := r_sea[r] * (1.0 + r_bless[r])
+	var land := r_land[r] * (r_fert[r] + r_bless[r]) * land_open
+	match t_hab[idx]:
+		0:
+			return sea
+		1:
+			return 0.6 * sea + 0.6 * land
+	return land
+
+
+## La région peut-elle accueillir ce milieu ?
+func region_fits(idx: int, r: int) -> bool:
+	match t_hab[idx]:
+		0:
+			return r_sea[r] > 0.0
+		2:
+			return r_land[r] > 0.0
+	return r_land[r] > 0.0 or r_sea[r] > 0.0
+
+
+## Facteurs de capacité dus à l'oxygène (thread principal, entre deux pas) : la vie complexe en
+## exige, il empoisonne les anaérobies, et sans couche d'ozone les terres restent stériles.
+func set_oxygen(oxygen: float, needs: Array[float]) -> void:
+	land_open = smoothstep(0.08, 0.3, oxygen) if explicit_flora == 1 else 1.0
+	for s in MAXS:
+		if t_alive[s] == 0:
+			continue
+		var c := clampi(int(t_cx[s]), 0, needs.size() - 1)
+		var need: float = needs[c]
+		var f := 1.0 if need <= 0.0 else smoothstep(0.4 * need, need, oxygen)
+		if t_anaer[s] == 1:
+			f *= 1.0 - clampf(oxygen / 0.05, 0.0, 0.9)
+		t_oxf[s] = maxf(f, 0.0)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -260,6 +319,7 @@ func run(step_index: int, seed_hash: int, goff: float, temp_dirty: bool, biome_d
 	nxt_sp.set(0, nxt_sp[0])
 	nxt_pop.set(0, nxt_pop[0])
 	r_dom.set(0, r_dom[0])
+	r_mdom.set(0, r_mdom[0])
 	r_dens.set(0, r_dens[0])
 	r_tech.set(0, r_tech[0])
 	b_pop.set(0, b_pop[0])
@@ -292,6 +352,12 @@ func _band_task(b: int) -> void:
 	var alive := t_alive
 	var prot := t_protect
 	var diet := t_diet
+	var hab := t_hab
+	var oxf := t_oxf
+	var rsea := r_sea
+	var mdom := r_mdom
+	var needs_prod := explicit_flora == 1
+	var lopen := land_open
 	var topt := t_topt
 	var tol := t_tol
 	var comp := t_comp
@@ -321,19 +387,36 @@ func _band_task(b: int) -> void:
 		for rx in RW:
 			var r := ry * RW + rx
 			var lf := land[r]
-			if lf <= 0.0:
+			var sea_b := rsea[r] * (1.0 + bless[r])
+			if lf <= 0.0 and sea_b <= 0.0:
 				dom[r] = -1
+				mdom[r] = -1
 				dens[r] = 0.0
 				rtech[r] = 0.0
 				continue
 			var base := r * K
 			var temp := rtemp[r] + goff + anom[r]
-			var capb := lf * (fert[r] + bless[r])
-			var prey := 0.0
+			var land_b := lf * (fert[r] + bless[r]) * lopen
+			var prey_sea := 0.0
+			var prey_land := 0.0
+			var prod_sea := 0.0
+			var prod_land := 0.0
 			for k in K:
 				var s := sp_in[base + k]
-				if s >= 0 and diet[s] < 2:
-					prey += pop_in[base + k]
+				if s < 0:
+					continue
+				var p0 := pop_in[base + k]
+				var h0 := hab[s]
+				if diet[s] < 2:
+					if h0 != 2:
+						prey_sea += p0
+					if h0 != 0:
+						prey_land += p0
+				elif diet[s] == 3:
+					if h0 != 2:
+						prod_sea += p0
+					if h0 != 0:
+						prod_land += p0
 
 			# 1) Dynamique locale : retour vers l'équilibre de Lotka-Volterra (pas stable quel que soit dt).
 			for k in K:
@@ -344,9 +427,15 @@ func _band_task(b: int) -> void:
 					continue
 				var p := pop_in[base + k]
 				var d := (temp - topt[s]) / tol[s]
-				var cap := capb * maxf(0.0, 1.0 - d * d) * capmul[s]
+				var hs := hab[s]
+				var hbase := sea_b if hs == 0 else (land_b if hs == 2 else 0.6 * (sea_b + land_b))
+				var cap := hbase * maxf(0.0, 1.0 - d * d) * capmul[s] * oxf[s]
 				if diet[s] == 2:
+					var prey := prey_sea if hs == 0 else (prey_land if hs == 2 else maxf(prey_sea, prey_land))
 					cap *= minf(1.0, 0.15 + prey * 1.5)
+				elif diet[s] == 0 and needs_prod:
+					var prod := prod_sea if hs == 0 else (prod_land if hs == 2 else maxf(prod_sea, prod_land))
+					cap *= minf(1.0, 0.1 + prod * 2.0)
 				var press := 0.0
 				var row := s * MAXS
 				for j in K:
@@ -414,8 +503,30 @@ func _band_task(b: int) -> void:
 					var suit := 1.0 - d * d
 					if suit < 0.1:
 						continue
-					var potential := capb * suit * capmul[s]
+					var hs := hab[s]
+					var hbase := sea_b if hs == 0 else (land_b if hs == 2 else 0.6 * (sea_b + land_b))
+					var potential := hbase * suit * capmul[s] * oxf[s]
+					if potential <= 0.001:
+						continue
 					var seed_pop := minf(src * 0.5, potential * 0.5)
+					if empty < 0 and lf > 0.0 and sea_b > 0.0:
+						# Rivage : la mer et la terre se partagent les niches au prorata de leur
+						# surface ; un milieu qui déborde de sa part cède sa niche la plus faible.
+						var land_side := hs != 0
+						var quota := maxi(1, int(roundf(K * (lf if land_side else 1.0 - lf))))
+						var other := 0
+						var oweak := -1
+						var oval := 1e9
+						for k in K:
+							var so := sp_out[base + k]
+							if so >= 0 and (hab[so] == 0) == land_side:
+								other += 1
+								var v := pop_out[base + k] * comp[so]
+								if v < oval and prot[so] == 0:
+									oval = v
+									oweak = k
+						if other > K - quota and oweak >= 0:
+							empty = oweak
 					if empty >= 0:
 						sp_out[base + empty] = s
 						pop_out[base + empty] = seed_pop
@@ -431,6 +542,8 @@ func _band_task(b: int) -> void:
 			var best := -1
 			var bestv := 0.0
 			var bestp := 0.0
+			var mbest := -1
+			var mbestv := 0.0
 			var tmax := 0.0
 			for k in K:
 				var s := sp_out[base + k]
@@ -438,7 +551,11 @@ func _band_task(b: int) -> void:
 					continue
 				var p := pop_out[base + k]
 				var v := p * vis[s]
-				if v > bestv:
+				if hab[s] == 0:
+					if v > mbestv:
+						mbestv = v
+						mbest = s
+				elif v > bestv:
 					bestv = v
 					best = s
 					bestp = p
@@ -449,6 +566,7 @@ func _band_task(b: int) -> void:
 				bcnt[bo + s] += 1
 				bsample[bo + s] = r
 			dom[r] = best
+			mdom[r] = mbest
 			dens[r] = minf(1.0, bestp)
 			rtech[r] = tmax
 
@@ -514,15 +632,20 @@ func reduce_stats(idx: int, pick: int) -> void:
 # ---------------------------------------------------------------------------------------------
 
 ## Tue une fraction des populations dans un disque. Renvoie {indice: true} des espèces touchées.
+## Un filtre d'altitude (déluge) ne concerne que les terres : la vie marine est épargnée.
 func kill_area(r: int, rad: int, frac: float, only_idx := -1, respect_protection := true, min_elev := -INF, max_elev := INF) -> Dictionary:
 	var hit := {}
+	var land_only := min_elev > -INF or max_elev < INF
 	for rr in regions_in_radius(r, rad):
-		if r_land[rr] <= 0.0 or r_elev[rr] < min_elev or r_elev[rr] > max_elev:
+		if r_land[rr] <= 0.0 and (land_only or r_sea[rr] <= 0.0):
 			continue
+		var land_ok := r_land[rr] > 0.0 and r_elev[rr] >= min_elev and r_elev[rr] <= max_elev
 		for k in K:
 			var o := rr * K + k
 			var s := cur_sp[o]
 			if s < 0 or (only_idx >= 0 and s != only_idx):
+				continue
+			if (land_only and t_hab[s] == 0) or (t_hab[s] == 2 and not land_ok):
 				continue
 			var f := frac
 			if respect_protection and t_protect[s] == 1:
@@ -548,7 +671,7 @@ func scale_species(idx: int, factor: float) -> void:
 func place_species(idx: int, r: int, rad: int, pop: float, replace_idx := -1) -> int:
 	var placed := 0
 	for rr in regions_in_radius(r, rad):
-		if r_land[rr] <= 0.0:
+		if not region_fits(idx, rr):
 			continue
 		var base := rr * K
 		var slot := -1
@@ -613,11 +736,14 @@ func decay_modifiers(factor: float) -> bool:
 
 func copy() -> RefCounted:
 	var c: RefCounted = get_script().new()
-	for prop in ["r_land", "r_fert", "r_temp", "r_elev", "r_anom", "r_bless", "cur_sp", "cur_pop",
-			"nxt_sp", "nxt_pop", "r_dom", "r_dens", "r_tech", "t_alive", "t_id", "t_protect", "t_diet",
+	for prop in ["r_land", "r_fert", "r_temp", "r_elev", "r_sea", "r_anom", "r_bless", "cur_sp", "cur_pop",
+			"nxt_sp", "nxt_pop", "r_dom", "r_mdom", "r_dens", "r_tech", "t_alive", "t_id", "t_protect", "t_diet",
+			"t_hab", "t_cx", "t_anaer", "t_oxf",
 			"t_topt", "t_tol", "t_comp", "t_icomp", "t_growth", "t_disp", "t_alpha", "t_mig", "t_vis",
 			"t_tech", "t_capmul", "t_ov", "b_pop", "b_cnt", "b_sample", "g_detail"]:
 		c.set(prop, get(prop).duplicate())
+	c.explicit_flora = explicit_flora
+	c.land_open = land_open
 	# Listes de cellules : statiques, partagées en lecture seule entre timelines.
 	c.band_cells = band_cells
 	c.free_idx = free_idx.duplicate()
