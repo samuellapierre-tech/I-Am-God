@@ -15,11 +15,19 @@ const NEON_USES := ["megacity", "arcology"]
 
 var assets: ParcelAssets
 var parcel_size := ParcelLogic.PARCEL_SIZE
+## Repères permanents (ParcelLogic.landmarks) : les constructions s'écartent de la rivière et du
+## rocher ; les routes les franchissent par des ponts.
+var landmarks := {}:
+	set(value):
+		landmarks = value
+		_centers.clear()
+		queue_redraw()
 
 var _items := {} ## key -> {data, alpha, present}
 var _land_use := ""
 var _animating := false
 var _time := 0.0
+var _centers := {} ## clé -> centre monde (après évitement des repères), stable
 
 
 func _ready() -> void:
@@ -111,8 +119,15 @@ func _draw_order(a: Dictionary, b: Dictionary) -> bool:
 
 
 func _center(s: Dictionary) -> Vector2:
+	var key := ParcelLogic.structure_key(s)
+	if _centers.has(key):
+		return _centers[key]
 	var p: Vector2 = s.get("pos", Vector2(0.5, 0.5))
-	return p * parcel_size
+	var c := p * parcel_size
+	if String(s.get("kind", "")) != "road":
+		c = ParcelLogic.avoid_landmarks(c, float(s.get("size", 0.05)) * parcel_size.y * 0.6, landmarks)
+	_centers[key] = c
+	return c
 
 
 func _draw_structure(s: Dictionary, a: float) -> void:
@@ -235,6 +250,7 @@ func _draw_road(center: Vector2, side: float, tex: Texture2D, a: float) -> void:
 		var col := Color("3b3d42") if paved else Color("8a7350")
 		draw_rect(r.grow(2.0), Color(col.darkened(0.3), a * 0.7))
 		draw_rect(r, Color(col, a))
+		_draw_bridges(r, width, paved, a)
 		if paved:
 			var horizontal := r.size.x > r.size.y
 			var dash := Color(0.95, 0.85, 0.4, a * 0.8)
@@ -246,3 +262,33 @@ func _draw_road(center: Vector2, side: float, tex: Texture2D, a: float) -> void:
 				else:
 					draw_line(Vector2(center.x, r.position.y + t), Vector2(center.x, r.position.y + t + 14.0), dash, 2.0)
 				t += 30.0
+
+
+## Ponts là où l'axe de la route croise la rivière.
+func _draw_bridges(r: Rect2, width: float, paved: bool, a: float) -> void:
+	if landmarks.is_empty():
+		return
+	var river: PackedVector2Array = landmarks.river
+	var horizontal := r.size.x > r.size.y
+	var from := Vector2(r.position.x, r.get_center().y) if horizontal else Vector2(r.get_center().x, r.position.y)
+	var to := Vector2(r.end.x, r.get_center().y) if horizontal else Vector2(r.get_center().x, r.end.y)
+	var span := float(landmarks.river_width) + 34.0
+	var deck := Color("7d7a72") if paved else Color("8b6a44")
+	for k in river.size() - 1:
+		var hit = Geometry2D.segment_intersects_segment(from, to, river[k], river[k + 1])
+		if hit == null:
+			continue
+		var c: Vector2 = hit
+		var along := Vector2.RIGHT if horizontal else Vector2.DOWN
+		draw_set_transform(c, along.angle())
+		var body := Rect2(Vector2(-span * 0.5, -width * 0.5 - 5.0), Vector2(span, width + 10.0))
+		draw_rect(Rect2(body.position + Vector2(6, 8), body.size), Color(0, 0, 0, 0.3 * a))
+		draw_rect(body, Color(deck, a))
+		draw_line(Vector2(-span * 0.5, body.position.y + 2.0), Vector2(span * 0.5, body.position.y + 2.0), Color(deck.darkened(0.4), a), 3.0)
+		draw_line(Vector2(-span * 0.5, body.end.y - 2.0), Vector2(span * 0.5, body.end.y - 2.0), Color(deck.darkened(0.4), a), 3.0)
+		if not paved:
+			var x := -span * 0.5 + 6.0
+			while x < span * 0.5:
+				draw_line(Vector2(x, body.position.y + 4.0), Vector2(x, body.end.y - 4.0), Color(deck.darkened(0.2), a * 0.7), 1.0)
+				x += 7.0
+		draw_set_transform(Vector2.ZERO)

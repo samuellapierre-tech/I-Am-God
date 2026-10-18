@@ -20,7 +20,7 @@ func _load_first(candidates: PackedStringArray) -> Texture2D:
 	if _cache.has(key):
 		return _cache[key]
 	var path := ParcelLogic.resolve_asset(candidates, _exists)
-	var tex := _load(path) if path != "" else null
+	var tex: Texture2D = _load(path) if path != "" else null
 	_cache[key] = tex
 	return tex
 

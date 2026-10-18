@@ -22,6 +22,15 @@ uniform float tech : hint_range(0.0, 1.0) = 0.0;
 uniform float snow_cover : hint_range(0.0, 1.0) = 0.0;
 uniform float autumn : hint_range(0.0, 1.0) = 0.0;
 
+// Repères permanents (règle de continuité) : rivière en S et gros rocher plat clair.
+uniform vec2 river_pts[24];
+uniform float river_width = 44.0;
+// (eau, gel, canal, pollution), lissé côté CPU.
+uniform vec4 river_state = vec4(1.0, 0.0, 0.0, 0.0);
+uniform vec2 rock_pos = vec2(500.0, 700.0);
+uniform vec2 rock_radii = vec2(100.0, 70.0);
+uniform float rock_angle = 0.0;
+
 varying vec2 world_pos;
 
 const int GRASS = 0;
@@ -157,6 +166,86 @@ void vertex() {
 	world_pos = VERTEX;
 }
 
+// Distance à la rivière (polyligne) et abscisse le long du cours (pour le courant).
+vec2 river_distance(vec2 p) {
+	float best = 1e6;
+	float along = 0.0;
+	float acc = 0.0;
+	for (int k = 0; k < 23; k++) {
+		vec2 a = river_pts[k];
+		vec2 b = river_pts[k + 1];
+		vec2 ba = b - a;
+		float len = length(ba);
+		float h = clamp(dot(p - a, ba) / max(len * len, 1e-4), 0.0, 1.0);
+		float d = length(p - a - ba * h);
+		if (d < best) {
+			best = d;
+			along = acc + h * len;
+		}
+		acc += len;
+	}
+	return vec2(best, along);
+}
+
+// Rivière : eau qui coule, berges ; lit sec, glace, canal maçonné ou eau polluée selon l'état.
+vec3 apply_river(vec3 col, vec2 p, float n1, float urban, out float water_mask, out float river_d) {
+	vec2 ra = river_distance(p);
+	river_d = ra.x;
+	float wet = river_state.x;
+	float frozen = river_state.y;
+	float canal = river_state.z;
+	float polluted = river_state.w;
+	float wobble = (vnoise(p * 0.02) - 0.5) * 10.0 * (1.0 - canal);
+	float d = ra.x + wobble;
+	float half_w = river_width * 0.5 * mix(0.6, 1.0, wet);
+	float bed = 1.0 - smoothstep(half_w + 2.0, half_w + 5.0, d);
+	water_mask = (1.0 - smoothstep(half_w - 3.0, half_w, d)) * wet;
+	// Berges : galets et boue (nature) ou quai de pierre (canal).
+	float bank = (1.0 - smoothstep(half_w + 4.0, half_w + 16.0, d)) * (1.0 - bed);
+	vec3 bank_col = mix(vec3(0.42, 0.36, 0.26), vec3(0.6, 0.58, 0.55), canal);
+	col = mix(col, bank_col, bank * mix(0.55, 0.95, canal));
+	// Lit à sec : graviers clairs.
+	vec3 gravel = mix(vec3(0.62, 0.56, 0.45), vec3(0.72, 0.67, 0.56), vnoise(p * 0.25));
+	col = mix(col, gravel, bed * (1.0 - wet));
+	// Eau : courant le long du lit.
+	float flow = sin(ra.y * 0.09 - TIME * 3.0 + n1 * 4.0) * 0.5 + 0.5;
+	vec3 water_col = mix(vec3(0.1, 0.3, 0.42), vec3(0.16, 0.42, 0.52), flow * (1.0 - smoothstep(0.0, half_w, d)));
+	water_col = mix(water_col, vec3(0.33, 0.29, 0.2), polluted * 0.8);
+	water_col = mix(water_col, vec3(0.06, 0.12, 0.2), canal * 0.4);
+	// Reflets de néons dans le canal des mégapoles.
+	water_col += vec3(0.2, 0.05, 0.25) * urban * canal * (0.5 + 0.5 * sin(ra.y * 0.05 + TIME * 2.0));
+	vec3 ice = mix(vec3(0.78, 0.88, 0.95), vec3(0.92, 0.96, 1.0), vnoise(p * 0.05));
+	ice *= 1.0 - 0.15 * step(0.92, vnoise(p * 0.3)); // fissures
+	water_col = mix(water_col, ice, frozen);
+	col = mix(col, water_col, water_mask);
+	water_mask *= 1.0 - frozen;
+	return col;
+}
+
+// Gros rocher plat et clair, toujours au même endroit ; place pavée autour en ville.
+vec3 apply_rock(vec3 col, vec2 p, float paved, float urban, out float rock_mask) {
+	vec2 q = p - rock_pos;
+	float ca = cos(-rock_angle);
+	float sa = sin(-rock_angle);
+	q = vec2(q.x * ca - q.y * sa, q.x * sa + q.y * ca);
+	float e = length(q / rock_radii) + (vnoise(p * 0.03) - 0.5) * 0.08;
+	// Place (ville) puis anneau de néon (mégapole).
+	float plaza = (1.0 - smoothstep(1.45, 1.5, e)) * paved;
+	col = mix(col, mix(vec3(0.68, 0.66, 0.62), vec3(0.74, 0.72, 0.68), step(0.5, fract(e * 6.0))), plaza);
+	col += vec3(0.1, 0.6, 0.8) * urban * (1.0 - smoothstep(0.02, 0.06, abs(e - 1.47))) * (0.6 + 0.4 * sin(TIME * 2.0));
+	// Ombre portée vers le bas-droite.
+	vec2 qs = (p - rock_pos - vec2(12.0, 16.0));
+	qs = vec2(qs.x * ca - qs.y * sa, qs.x * sa + qs.y * ca);
+	float shadow = 1.0 - smoothstep(0.9, 1.05, length(qs / rock_radii));
+	col *= 1.0 - shadow * 0.35;
+	rock_mask = 1.0 - smoothstep(0.96, 1.0, e);
+	float light = clamp(0.85 - dot(normalize(q + 1e-3), vec2(0.6, 0.6)) * 0.15 * smoothstep(0.4, 1.0, e), 0.6, 1.0);
+	vec3 stone = mix(vec3(0.74, 0.71, 0.64), vec3(0.84, 0.81, 0.74), vnoise(p * 0.06)) * light;
+	stone *= 1.0 - 0.25 * (1.0 - smoothstep(0.0, 0.04, abs(vnoise(p * 0.035) - 0.5))); // fissures
+	col = mix(col, stone, rock_mask);
+	return col;
+}
+
 void fragment() {
 	vec2 p = world_pos;
 	vec2 uv = p / parcel_size;
@@ -175,19 +264,32 @@ void fragment() {
 	// Herbe fine : petit grain qui casse les aplats.
 	col *= 0.93 + 0.14 * vnoise(sp * 0.35) * (1.0 - liquid);
 
+	// Repères permanents : la rivière (sauf sous l'océan) et le rocher.
+	float paved = mix(kind_a == PAVED || kind_a == URBAN ? 1.0 : 0.0, kind_b == PAVED || kind_b == URBAN ? 1.0 : 0.0, t);
+	float urban = mix(kind_a == URBAN ? 1.0 : 0.0, kind_b == URBAN ? 1.0 : 0.0, t);
+	float river_mask = 0.0;
+	float river_d = 0.0;
+	vec3 with_river = apply_river(col, p, n1, urban, river_mask, river_d);
+	col = mix(with_river, col, liquid);
+	river_mask *= 1.0 - liquid;
+	float rock_mask = 0.0;
+	col = apply_rock(col, p, paved, urban, rock_mask);
+	float clear_ground = (1.0 - river_mask) * (1.0 - rock_mask);
+
 	// Mares et ruisseaux selon l'humidité.
 	float pond_noise = fbm(sp * 0.0026 + 40.0);
 	float wet = clamp((water - 0.35) / 0.65, 0.0, 1.0);
 	float pond_thr = mix(1.02, 0.5, wet);
-	float pond = smoothstep(pond_thr, pond_thr + 0.015, pond_noise) * (1.0 - liquid);
-	float shore = smoothstep(pond_thr - 0.03, pond_thr, pond_noise) * (1.0 - pond) * (1.0 - liquid);
+	float pond = smoothstep(pond_thr, pond_thr + 0.015, pond_noise) * (1.0 - liquid) * clear_ground;
+	float shore = smoothstep(pond_thr - 0.03, pond_thr, pond_noise) * (1.0 - pond) * (1.0 - liquid) * clear_ground;
 	vec3 pond_col = mix(vec3(0.10, 0.30, 0.44), vec3(0.16, 0.40, 0.52), n1)
 		+ 0.03 * sin(TIME * 1.4 + pond_noise * 60.0);
 	col = mix(col, col * 0.75 + vec3(0.04, 0.03, 0.0), shore * 0.6);
 	col = mix(col, pond_col, pond);
 
 	// Végétation : couronnes d'arbres dont la couverture suit parcel.vegetation.
-	float density = clamp(vegetation * mix(veg_a, veg_b, t), 0.0, 1.0) * (1.0 - pond);
+	float near_landmark = smoothstep(0.0, 1.0, (river_d - river_width * 0.5 - 6.0) / 14.0);
+	float density = clamp(vegetation * mix(veg_a, veg_b, t), 0.0, 1.0) * (1.0 - pond) * (1.0 - rock_mask) * mix(1.0, near_landmark, river_state.x);
 	vec2 sway = vec2(sin(TIME * 0.8 + p.y * 0.01), cos(TIME * 0.6 + p.x * 0.01)) * 1.2;
 	float canopy = fbm(sp * 0.021 + sway * 0.021 + 5.0);
 	float thr = mix(0.92, 0.3, density);
@@ -202,7 +304,7 @@ void fragment() {
 	col = mix(col, leaves, tree * step(0.001, density));
 
 	// Neige saisonnière (sol puis cimes) ; mares gelées.
-	float snow = snow_cover * (1.0 - liquid);
+	float snow = snow_cover * (1.0 - liquid) * (1.0 - river_mask);
 	col = mix(col, vec3(0.92, 0.95, 0.99) - 0.06 * n2, snow * smoothstep(0.25, 0.6, n1 + snow * 0.5));
 	col = mix(col, vec3(0.75, 0.86, 0.95), pond * smoothstep(0.4, 0.8, snow_cover));
 

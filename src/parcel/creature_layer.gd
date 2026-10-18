@@ -28,6 +28,8 @@ var _ctx := {}
 var _delta := 0.0
 var _quad: ArrayMesh
 var _rng := RandomNumberGenerator.new()
+var _landmarks := {}
+var _river_wet := true
 
 
 func _ready() -> void:
@@ -45,6 +47,7 @@ func apply_parcel(p: ParcelSim) -> void:
 		if g == null:
 			g = CreatureGroup.new(id, p.cell)
 			_groups[id] = g
+			_give_river(g)
 		if g.set_species(f) or g.mmi == null:
 			_refresh_look(g)
 		g.set_target(int(f.count))
@@ -59,6 +62,29 @@ func clear() -> void:
 		if g.mmi:
 			g.mmi.queue_free()
 	_groups.clear()
+
+
+## Rivière permanente (ParcelLogic.landmarks) et son état : eau libre ou non (sec, gelé).
+func set_landmarks(lm: Dictionary) -> void:
+	_landmarks = lm
+	for g: CreatureGroup in _groups.values():
+		_give_river(g)
+
+
+func set_river_open(open: bool) -> void:
+	if open == _river_wet:
+		return
+	_river_wet = open
+	for g: CreatureGroup in _groups.values():
+		g.river_wet = open
+
+
+func _give_river(g: CreatureGroup) -> void:
+	if _landmarks.is_empty():
+		return
+	g.river = _landmarks.river
+	g.river_width = _landmarks.river_width
+	g.river_wet = _river_wet
 
 
 func _process(delta: float) -> void:
@@ -123,6 +149,9 @@ func _handle_emits(g: CreatureGroup) -> void:
 			CreatureGroup.EMIT_DUST:
 				if trail:
 					trail.emit(TrailLayer.Kind.DUST, p, e[k + 3], e[k + 4])
+			CreatureGroup.EMIT_SPLASH:
+				if trail:
+					trail.emit(TrailLayer.Kind.SPLASH, p, 0.0, e[k + 4])
 			CreatureGroup.EMIT_CATCH:
 				_resolve_catch(p)
 		k += CreatureGroup.EMIT_STRIDE

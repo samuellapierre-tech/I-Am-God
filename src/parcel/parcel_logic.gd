@@ -108,7 +108,7 @@ static func shape_for(clade: String, role: String, size: float) -> int:
 
 ## État affiché par shaders/parcel_creature.gdshader (0 marche, 1 broute, 2 dort, 3 court,
 ## 4 à terre) pour un état de CreatureGroup (WANDER 0, GRAZE 1, SLEEP 2, RUN 3, EAT 4, VISIT 5,
-## POUNCE 6, DOWN 7).
+## POUNCE 6, DOWN 7, DRINK 8).
 static func visual_state(group_state: int) -> float:
 	match group_state:
 		1, 4:
@@ -158,6 +158,97 @@ static func swarm_centers(cell: Vector2i, count: int, water_pts: PackedVector2Ar
 			p = water_pts[rng.randi() % water_pts.size()] + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(50.0, 90.0)
 		out.append(p.clamp(Vector2(40, 40), PARCEL_SIZE - Vector2(40, 40)))
 	return out
+
+
+# --- Repères permanents (règle de continuité, docs/art/PROMPTS_GPT.md) ---
+# Une rivière en S du haut-gauche vers le bas-droite et un gros rocher plat clair au tiers
+# gauche, toujours au même endroit pendant toute la partie (dérivés de la graine et de la cellule).
+
+const RIVER_POINTS := 24
+
+
+static func landmarks(seed_value: int, cell: Vector2i) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([seed_value, cell, "landmarks"])
+	var start := Vector2(rng.randf_range(0.12, 0.24), -0.06) * PARCEL_SIZE
+	var end := Vector2(rng.randf_range(0.76, 0.9), 1.06) * PARCEL_SIZE
+	var amp := rng.randf_range(0.13, 0.18) * PARCEL_SIZE.y
+	var phase := rng.randf_range(-0.08, 0.08)
+	var perp := (end - start).orthogonal().normalized()
+	var river := PackedVector2Array()
+	for k in RIVER_POINTS:
+		var t := float(k) / (RIVER_POINTS - 1)
+		river.append(start.lerp(end, t) + perp * amp * sin((t + phase) * TAU))
+	var width := rng.randf_range(38.0, 50.0)
+	var radii := Vector2(rng.randf_range(90.0, 115.0), rng.randf_range(62.0, 78.0))
+	var rock := Vector2(rng.randf_range(0.2, 0.3), rng.randf_range(0.55, 0.72)) * PARCEL_SIZE
+	# Le rocher ne touche jamais la rivière : on l'écarte vers la gauche si besoin.
+	while distance_to_polyline(rock, river) < width * 0.5 + radii.x + 50.0 and rock.x > radii.x + 20.0:
+		rock.x -= 20.0
+	return {river = river, river_width = width, rock_pos = rock, rock_radii = radii,
+		rock_angle = rng.randf_range(-0.5, 0.5)}
+
+
+static func nearest_on_polyline(p: Vector2, pts: PackedVector2Array) -> Vector2:
+	var best := Vector2(INF, INF)
+	var best_d := INF
+	for k in pts.size() - 1:
+		var q := Geometry2D.get_closest_point_to_segment(p, pts[k], pts[k + 1])
+		var d := q.distance_squared_to(p)
+		if d < best_d:
+			best_d = d
+			best = q
+	return best
+
+
+static func distance_to_polyline(p: Vector2, pts: PackedVector2Array) -> float:
+	if pts.size() < 2:
+		return INF
+	return nearest_on_polyline(p, pts).distance_to(p)
+
+
+## Écarte une structure (centre `p`, demi-taille `half`) de la rivière et du rocher.
+## Fonction de la seule position : le résultat reste stable d'une image à l'autre.
+static func avoid_landmarks(p: Vector2, half: float, lm: Dictionary) -> Vector2:
+	if lm.is_empty():
+		return p
+	var river: PackedVector2Array = lm.river
+	var clear := float(lm.river_width) * 0.5 + half + 8.0
+	for i in 2:
+		var q := nearest_on_polyline(p, river)
+		var d := q.distance_to(p)
+		if d < clear:
+			var n := (p - q).normalized() if d > 0.01 else Vector2.LEFT
+			p = q + n * clear
+		var rock: Vector2 = lm.rock_pos
+		var r: float = Vector2(lm.rock_radii).x + half + 10.0
+		if p.distance_to(rock) < r:
+			p = rock + (p - rock).normalized() * r if p != rock else rock + Vector2(0, r)
+	return p.clamp(Vector2(half, half), PARCEL_SIZE - Vector2(half, half))
+
+
+## État de la rivière pour le shader : (eau 0..1, gel 0..1, canal 0..1, pollution 0..1).
+static func river_state(land_use: String, water: float, snow: float) -> Vector4:
+	var wet := smoothstep(0.08, 0.3, water)
+	if land_use in ["flooded", "ocean"]:
+		wet = 1.0
+	var frozen := 1.0 if land_use == "ice" else smoothstep(0.6, 0.9, snow)
+	var canal := 1.0 if land_use in ["town", "city", "megacity", "arcology"] else 0.0
+	var polluted: float = {"town": 0.25, "city": 0.6, "megacity": 0.35, "arcology": 0.1, "crater": 0.7}.get(land_use, 0.0)
+	return Vector4(wet, frozen, canal, polluted)
+
+
+## Feu de camp des premiers sapients : à côté du rocher (lieu de rassemblement).
+static func campfire_near(lm: Dictionary) -> Vector2:
+	var r: Vector2 = lm.rock_radii
+	return Vector2(lm.rock_pos) + Vector2(r.x + 45.0, r.y * 0.3)
+
+
+## Point de berge où boire, du côté de `from`, à `margin` du bord de l'eau.
+static func drinking_spot(from: Vector2, river: PackedVector2Array, river_width: float, margin: float) -> Vector2:
+	var q := nearest_on_polyline(from, river)
+	var n := (from - q).normalized() if from.distance_to(q) > 0.01 else Vector2.LEFT
+	return q + n * (river_width * 0.5 + margin)
 
 
 # --- Temps qui passe (cosmétique : horloge propre à la vue, indépendante de la simulation) ---
@@ -225,12 +316,6 @@ static func pick_weather(r: float, water: float, effective_c: float, land_use: S
 		if x < 0.0:
 			return k
 	return "clear"
-
-
-## Feu de camp des premiers sapients (usage "camp", sans structures) : position stable.
-static func campfire_pos(cell: Vector2i) -> Vector2:
-	var h := hash([cell, "campfire"])
-	return PARCEL_SIZE * Vector2(0.35 + float(h % 100) / 500.0, 0.4 + float((h >> 8) % 100) / 500.0)
 
 
 # --- Assets ---

@@ -18,6 +18,9 @@ var _blend := 1.0
 var _targets := {vegetation = 0.5, water = 0.3, temperature_c = 20.0, tech = 0.0}
 var _values := {vegetation = 0.5, water = 0.3, temperature_c = 20.0, tech = 0.0}
 var _has_state := false
+var _land_use := "wild"
+var _river := Vector4(1, 0, 0, 0)
+var _river_target := Vector4(1, 0, 0, 0)
 var _mat: ShaderMaterial
 
 
@@ -45,6 +48,7 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 		_state_a = tr[0]
 		_state_b = tr[1]
 		_blend = tr[2]
+	_land_use = p.land_use
 	_targets = {vegetation = p.vegetation, water = p.water, temperature_c = p.temperature_c, tech = p.tech}
 	if snap:
 		_values = _targets.duplicate()
@@ -53,11 +57,21 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 	_push()
 
 
-## Saisons (Atmosphere) : neige au sol et feuillage d'automne.
+## Repères permanents (ParcelLogic.landmarks) : rivière en S et rocher.
+func set_landmarks(lm: Dictionary) -> void:
+	_mat.set_shader_parameter("river_pts", lm.river)
+	_mat.set_shader_parameter("river_width", lm.river_width)
+	_mat.set_shader_parameter("rock_pos", lm.rock_pos)
+	_mat.set_shader_parameter("rock_radii", lm.rock_radii)
+	_mat.set_shader_parameter("rock_angle", lm.rock_angle)
+
+
+## Saisons (Atmosphere) : neige au sol, feuillage d'automne, rivière gelée.
 func set_season(snow_cover: float, autumn: float) -> void:
 	if _mat:
 		_mat.set_shader_parameter("snow_cover", snow_cover)
 		_mat.set_shader_parameter("autumn", autumn)
+	_river_target = ParcelLogic.river_state(_land_use, _targets.water, snow_cover)
 
 
 func _process(delta: float) -> void:
@@ -65,6 +79,7 @@ func _process(delta: float) -> void:
 	var k := 1.0 - exp(-delta / SMOOTHING)
 	for key in _values:
 		_values[key] = lerpf(_values[key], _targets[key], k)
+	_river = _river.lerp(_river_target, 1.0 - exp(-delta / TRANSITION_TIME))
 	_push()
 
 
@@ -82,5 +97,6 @@ func _push() -> void:
 	_mat.set_shader_parameter("veg_a", _state_a.z)
 	_mat.set_shader_parameter("veg_b", _state_b.z)
 	_mat.set_shader_parameter("blend", _blend)
+	_mat.set_shader_parameter("river_state", _river)
 	for key in _values:
 		_mat.set_shader_parameter(key, _values[key])

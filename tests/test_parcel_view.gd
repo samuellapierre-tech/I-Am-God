@@ -123,7 +123,7 @@ func test_slug() -> String:
 
 
 func test_ground_state() -> String:
-	var G := ParcelLogic.Ground
+	var G: Dictionary = ParcelLogic.Ground
 	var cases := [
 		["wild", "Désert", G.SAND], ["wild", "Forêt tropicale", G.LUSH], ["ocean", "Savane", G.WATER],
 		["crater", "Toundra", G.CRATER], ["megacity", "Steppe", G.URBAN], ["farmland", "Steppe", G.DRY],
@@ -160,7 +160,7 @@ func test_transition() -> String:
 
 
 func test_creature_appearance() -> String:
-	var S := ParcelLogic.Shape
+	var S: Dictionary = ParcelLogic.Shape
 	var cases := [
 		["dinosaure", "carnivore", 0.95, S.BIPED], ["dinosaure", "herbivore", 1.0, S.LONG_NECK],
 		["dinosaure", "herbivore", 0.8, S.QUADRUPED], ["oiseau", "omnivore", 0.1, S.BIRD],
@@ -318,4 +318,63 @@ func test_weather_choice() -> String:
 			ash += 1
 	if ash < 40:
 		return "un cratère doit surtout avoir des cendres (%d %%)" % ash
+	return ""
+
+
+func test_landmarks_continuity() -> String:
+	var a := ParcelLogic.landmarks(42, Vector2i(70, 40))
+	var b := ParcelLogic.landmarks(42, Vector2i(70, 40))
+	if a != b:
+		return "les repères doivent être identiques à graine et cellule égales"
+	var river: PackedVector2Array = a.river
+	var size := ParcelLogic.PARCEL_SIZE
+	if river[0].x > size.x * 0.4 or river[0].y > 0.0:
+		return "la rivière doit entrer en haut à gauche : %s" % str(river[0])
+	if river[-1].x < size.x * 0.6 or river[-1].y < size.y:
+		return "la rivière doit sortir en bas à droite : %s" % str(river[-1])
+	var rock: Vector2 = a.rock_pos
+	if rock.x > size.x / 3.0 + 20.0:
+		return "le rocher doit être au tiers gauche : %s" % str(rock)
+	if ParcelLogic.distance_to_polyline(rock, river) < float(a.river_width) * 0.5 + Vector2(a.rock_radii).x:
+		return "le rocher ne doit pas toucher la rivière"
+	# Forme en S : la rivière s'écarte des deux côtés de la diagonale.
+	var dir := (river[-1] - river[0]).normalized()
+	var perp := dir.orthogonal()
+	var left := false
+	var right := false
+	for q in river:
+		var off := (q - river[0]).dot(perp)
+		left = left or off > 60.0
+		right = right or off < -60.0
+	if not (left and right):
+		return "la rivière doit faire un S"
+	return ""
+
+
+func test_avoid_landmarks() -> String:
+	var lm := ParcelLogic.landmarks(7, Vector2i(3, 4))
+	var river: PackedVector2Array = lm.river
+	var on_river := river[10]
+	var moved := ParcelLogic.avoid_landmarks(on_river, 30.0, lm)
+	if ParcelLogic.distance_to_polyline(moved, river) < float(lm.river_width) * 0.5 + 30.0:
+		return "une maison posée sur la rivière doit être écartée"
+	if moved != ParcelLogic.avoid_landmarks(on_river, 30.0, lm):
+		return "l'écartement doit être stable"
+	var on_rock := ParcelLogic.avoid_landmarks(lm.rock_pos, 20.0, lm)
+	if on_rock.distance_to(lm.rock_pos) < Vector2(lm.rock_radii).x:
+		return "une maison posée sur le rocher doit être écartée"
+	var free := Vector2(1800, 60)
+	if ParcelLogic.distance_to_polyline(free, river) > 200.0 and ParcelLogic.avoid_landmarks(free, 20.0, lm) != free:
+		return "une maison loin des repères ne bouge pas"
+	var spot := ParcelLogic.drinking_spot(Vector2(200, 900), river, lm.river_width, 10.0)
+	var d := ParcelLogic.distance_to_polyline(spot, river)
+	if absf(d - (float(lm.river_width) * 0.5 + 10.0)) > 1.0:
+		return "le point où boire doit être au bord de l'eau (%f)" % d
+	var rs := ParcelLogic.river_state("city", 0.5, 0.0)
+	if rs.z != 1.0 or rs.w <= 0.0:
+		return "en ville, la rivière devient un canal (pollué)"
+	if ParcelLogic.river_state("wild", 0.02, 0.0).x > 0.0:
+		return "rivière à sec quand l'eau manque"
+	if ParcelLogic.river_state("ice", 0.5, 0.0).y != 1.0:
+		return "rivière gelée sous la banquise"
 	return ""

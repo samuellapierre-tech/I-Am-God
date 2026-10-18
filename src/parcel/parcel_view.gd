@@ -26,6 +26,8 @@ const FX_RADIUS_PER_CELL := 8.0
 
 var assets := ParcelAssets.new()
 var _cell := Vector2i(-999, -999)
+## Repères permanents de la parcelle (rivière en S, rocher) : fixés pour toute la partie.
+var _landmarks := {}
 
 @onready var terrain: Terrain = $Terrain
 @onready var trail: TrailLayer = $Trail
@@ -61,6 +63,11 @@ func _on_parcel_updated() -> void:
 		creatures.clear()
 		structures.clear()
 		camera.reset_view()
+		var seed_value: int = GameState.sim.seed if GameState.sim != null else 0
+		_landmarks = ParcelLogic.landmarks(seed_value, p.cell)
+		terrain.set_landmarks(_landmarks)
+		structures.landmarks = _landmarks
+		creatures.set_landmarks(_landmarks)
 	terrain.apply_parcel(p, changed)
 	structures.apply_parcel(p)
 	creatures.spots = structures.spots()
@@ -68,8 +75,8 @@ func _on_parcel_updated() -> void:
 	trail.set_ground(ParcelLogic.ground_kind(p.land_use, p.biome))
 	atmosphere.apply_parcel(p)
 	lights.land_use = p.land_use
-	lights.campfire = ParcelLogic.campfire_pos(p.cell)
-	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, PackedVector2Array()))
+	lights.campfire = ParcelLogic.campfire_near(_landmarks)
+	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, _landmarks.river))
 
 
 func _process(_delta: float) -> void:
@@ -82,6 +89,10 @@ func _process(_delta: float) -> void:
 	lights.intensity = clampf(night + (1.0 - atmosphere.sky.v) * 0.3, 0.0, 1.0)
 	lights.sources = structures.light_sources()
 	lights.roads = structures.road_centers()
+	var p = GameState.parcel
+	if p != null:
+		var rs := ParcelLogic.river_state(p.land_use, p.water, atmosphere.snow_cover)
+		creatures.set_river_open(rs.x > 0.5 and rs.y < 0.5)
 
 	var powers := _powers()
 	var power := String(powers.get("power")) if powers != null and "power" in powers else ""

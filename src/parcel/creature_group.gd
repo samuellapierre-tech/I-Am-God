@@ -18,10 +18,12 @@ const EAT := 4
 const VISIT := 5  ## espèce intelligente : marche vers une structure
 const POUNCE := 6 ## bond final du prédateur
 const DOWN := 7   ## proie à terre (se relève, ou s'efface si l'effectif baisse)
+const DRINK := 8  ## marche vers la berge pour boire
 
 ## Types d'émissions (enregistrements de EMIT_STRIDE flottants : type, x, y, angle, taille).
 const EMIT_FOOTPRINT := 0
 const EMIT_DUST := 1
+const EMIT_SPLASH := 2
 const EMIT_CATCH := 9
 const EMIT_STRIDE := 5
 
@@ -62,6 +64,11 @@ var capacity := 0
 var buffer := PackedFloat32Array()
 ## Remplie par step(), vidée par le thread principal.
 var emits := PackedFloat32Array()
+## Rivière (repère permanent) : les petits la contournent, les gros la traversent à gué ;
+## les troupeaux viennent y boire. Vide = pas de rivière.
+var river := PackedVector2Array()
+var river_width := 44.0
+var river_wet := true ## eau libre (ni à sec, ni gelée)
 
 var _rng := RandomNumberGenerator.new()
 
@@ -217,11 +224,13 @@ func step(delta: float, ctx: Dictionary) -> void:
 				st = _decide(i, prey, prey_len, max_prey_len, spots, night)
 
 		match st:
-			WANDER, VISIT:
+			WANDER, VISIT, DRINK:
 				var to := goal[i] - p
 				if to.length() < 6.0:
-					# Arrivé : broute, se repose ou (espèce intelligente) travaille sur place.
-					timer[i] = _rng.randf_range(3.0, 7.0) if st == VISIT else _rng.randf_range(2.0, 6.0)
+					# Arrivé : broute, boit, se repose ou (espèce intelligente) travaille sur place.
+					timer[i] = _rng.randf_range(2.0, 6.0) if st == WANDER else _rng.randf_range(4.0, 8.0)
+					if st == DRINK and not river.is_empty():
+						heading[i] = (ParcelLogic.nearest_on_polyline(p, river) - p).angle()
 					st = GRAZE
 				else:
 					desired = to.normalized() * (walk * 1.3 if role == "sapient" else walk)
@@ -288,6 +297,9 @@ func _footsteps(i: int, p: Vector2, moved: float, speed: float, walk: float, st:
 	var fwd := Vector2.from_angle(heading[i])
 	var side := Vector2(-fwd.y, fwd.x) * (1.0 if foot[i] == 0 else -1.0)
 	foot[i] = 1 - foot[i]
+	if river_wet and not river.is_empty() and ParcelLogic.distance_to_polyline(p, river) < river_width * 0.5:
+		_emit(EMIT_SPLASH, p + side * length * 0.15, 0.0, length * 0.5) # traversée à gué
+		return
 	if size >= 0.25:
 		_emit(EMIT_FOOTPRINT, p + side * length * 0.12, heading[i], length * 0.22)
 	var running := st == RUN or st == POUNCE
@@ -346,6 +358,10 @@ func _decide(i: int, prey: PackedVector2Array, prey_len: PackedFloat32Array, max
 			if r < 0.55:
 				timer[i] = _rng.randf_range(3.0, 8.0)
 				return GRAZE
+			if r < 0.7 and _can_drink():
+				goal[i] = _clamp(ParcelLogic.drinking_spot(p, river, river_width, length * 0.45))
+				timer[i] = 20.0
+				return DRINK
 	goal[i] = _clamp(herd_center + _random_in_circle(_herd_radius()))
 	timer[i] = _rng.randf_range(6.0, 12.0)
 	return WANDER
@@ -360,6 +376,9 @@ func _update_herd(delta: float, spots: PackedVector2Array) -> void:
 		herd_goal = c / spots.size()
 	elif herd_timer <= 0.0:
 		herd_goal = _random_point(0.15)
+		# Le troupeau descend régulièrement boire à la rivière.
+		if is_prey() and _can_drink() and _rng.randf() < 0.35:
+			herd_goal = _clamp(ParcelLogic.drinking_spot(herd_center, river, river_width, _herd_radius() * 0.6))
 		herd_timer = _rng.randf_range(20.0, 45.0)
 	herd_center = herd_center.move_toward(herd_goal, 10.0 * delta)
 
@@ -452,6 +471,15 @@ func _nearest_prey(points: PackedVector2Array, lens: PackedFloat32Array, from: V
 	return best
 
 
+func _can_drink() -> bool:
+	return river_wet and not river.is_empty() and role != "sapient"
+
+
+## Les petits animaux ne traversent pas la rivière (eau libre) : on les garde sur la berge.
+func _wades() -> bool:
+	return size >= 0.6 or shape == ParcelLogic.Shape.BIRD
+
+
 func _random_point(inset: float) -> Vector2:
 	return bounds.position + bounds.size * Vector2(_rng.randf_range(inset, 1.0 - inset), _rng.randf_range(inset, 1.0 - inset))
 
@@ -462,4 +490,11 @@ func _random_in_circle(r: float) -> Vector2:
 
 func _clamp(p: Vector2) -> Vector2:
 	var m := length * 0.5 + 8.0
-	return Vector2(clampf(p.x, bounds.position.x + m, bounds.end.x - m), clampf(p.y, bounds.position.y + m, bounds.end.y - m))
+	p = Vector2(clampf(p.x, bounds.position.x + m, bounds.end.x - m), clampf(p.y, bounds.position.y + m, bounds.end.y - m))
+	if river_wet and not river.is_empty() and not _wades():
+		var q := ParcelLogic.nearest_on_polyline(p, river)
+		var keep := river_width * 0.5 + length * 0.3
+		var d := q.distance_to(p)
+		if d < keep:
+			p = q + ((p - q) / d if d > 0.01 else Vector2.LEFT) * keep
+	return p
