@@ -109,7 +109,12 @@ func ambient(ctx: Dictionary) -> Dictionary:
 ## Un fait réel de l'époque, vrai à cette date et si possible lié à ce qu'on voit ; {} s'il n'y en a pas.
 func fact(ctx: Dictionary) -> Dictionary:
 	var era := Procedural.era_key(ctx.get("era", ""))
-	var f := FactBase.pick(era, ctx.get("year", null), situation(ctx), _recent_facts, rng)
+	# On ne répète aucun des derniers faits ; s'il y en a peu de vrais à cette date, la mémoire se
+	# réduit d'autant, sans jamais redire le tout dernier.
+	var available := FactBase.candidates(era, ctx.get("year", null)).size()
+	var keep := maxi(1, mini(FACT_MEMORY, available - 1))
+	var recent := _recent_facts.slice(maxi(0, _recent_facts.size() - keep))
+	var f := FactBase.pick(era, ctx.get("year", null), situation(ctx), recent, rng)
 	if f.is_empty():
 		return {}
 	_recent_facts.append(str(f["id"]))
