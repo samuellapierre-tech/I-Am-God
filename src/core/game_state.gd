@@ -28,6 +28,17 @@ var paused := false
 ## Années simulées par seconde réelle.
 var years_per_second := 1_000_000.0
 
+## Ouverture lente : avant toute espèce intelligente, le temps est ralenti pour qu'on ait le loisir
+## de regarder vivre les dinosaures sur la parcelle. Facteur appliqué à la vitesse x1..x5 du HUD :
+## OPENING_PACE_START au lancement, qui monte vers OPENING_PACE en OPENING_RAMP secondes de jeu.
+## Une fois une espèce consciente apparue : 1.0 (une ère ≈ une minute à x1).
+const OPENING_PACE_START := 0.02
+const OPENING_PACE := 0.1
+const OPENING_RAMP := 180.0
+
+## Secondes réelles de jeu écoulées hors pause (pour la rampe d'ouverture).
+var play_time := 0.0
+
 var _last_era := ""
 var _parcel_timer := 0.0
 var _pending_events: Array = []
@@ -39,6 +50,7 @@ func _ready() -> void:
 
 func new_world(seed: int) -> void:
 	sim = WorldSim.new(seed)
+	play_time = 0.0
 	_last_era = sim.current_era()
 	select_parcel(_liveliest_cell())
 	world_updated.emit()
@@ -48,6 +60,7 @@ func new_world(seed: int) -> void:
 func _process(delta: float) -> void:
 	if paused or sim == null:
 		return
+	play_time += delta
 	for event in sim.step(years_per_second * delta):
 		_pending_events.append(event)
 		event_occurred.emit(event)
@@ -72,6 +85,17 @@ func apply_divine_action(action: Dictionary) -> Array:
 	world_updated.emit()
 	_refresh_parcel()
 	return consequences
+
+
+## Multiplicateur de vitesse de l'ouverture (voir OPENING_PACE). Le HUD l'applique à sa vitesse.
+func pace_factor() -> float:
+	if sim == null or not sim.get_sapient_species().is_empty():
+		return 1.0
+	return opening_pace(play_time)
+
+
+static func opening_pace(seconds: float) -> float:
+	return lerpf(OPENING_PACE_START, OPENING_PACE, clampf(seconds / OPENING_RAMP, 0.0, 1.0))
 
 
 ## Le joueur suit désormais `cell` (coordonnées de la grille WorldSim).

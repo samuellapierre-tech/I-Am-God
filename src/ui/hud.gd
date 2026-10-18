@@ -70,7 +70,8 @@ func _process(delta: float) -> void:
 		return
 	_year_label.text = MapMath.format_year(sim.year)
 	if speed_level > 0:
-		GameState.years_per_second = MapMath.base_years_per_second(sim.ideal_step_years()) * SPEEDS[speed_level - 1]
+		GameState.years_per_second = MapMath.base_years_per_second(sim.ideal_step_years()) \
+				* SPEEDS[speed_level - 1] * GameState.pace_factor()
 	_rate_label.text = "%s ans/s" % MapMath.group_thousands(int(GameState.years_per_second)) \
 			if speed_level > 0 else "Temps suspendu"
 	_species_timer += delta
