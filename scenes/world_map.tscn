@@ -1,0 +1,17 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://src/map/world_map.gd" id="1_map"]
+[ext_resource type="Script" path="res://src/map/world_camera.gd" id="2_cam"]
+
+[node name="WorldMap" type="Node2D"]
+script = ExtResource("1_map")
+
+[node name="Camera" type="Camera2D" parent="."]
+script = ExtResource("2_cam")
+
+[node name="ImpactParticles" type="GPUParticles2D" parent="."]
+emitting = false
+amount = 220
+lifetime = 1.4
+one_shot = true
+explosiveness = 0.95
