@@ -1,6 +1,24 @@
 extends RefCounted
-## STUB — remplacé par la branche feature/simulation-core.
-## Le contrat public (champs + méthodes ci-dessous) doit être conservé.
+## Simulation du monde : planète, espèces, ères, chaîne causale, timelines.
+## Le contrat public (champs + méthodes du squelette) est fixé par docs/ARCHITECTURE.md :
+## la carte (feature/world-map) et le narrateur (feature/ai-narrator) codent contre lui.
+##
+## Vue d'ensemble :
+## - world_gen.gd : génération déterministe (altitude, température, humidité, biomes).
+## - ecosystem.gd : dynamique régionale multicoeur (populations, compétition, colonisation).
+## - species.gd   : roster initial, traits, mutation, nommage.
+## - eras.gd      : ères, compression du temps, croissance technologique.
+## - causality.gd : journal borné + conséquences différées (effet papillon).
+##
+## Aucune espèce n'est « destinée » à la sapience : n'importe quelle lignée qui franchit le seuil
+## d'intelligence fonde une civilisation. Sans météore, les dinosaures peuvent y parvenir.
+## Le météore de Chicxulub n'est PAS automatique : c'est au joueur (Dieu) de le lancer… ou non.
+
+const Eras := preload("res://src/sim/eras.gd")
+const Species := preload("res://src/sim/species.gd")
+const WorldGen := preload("res://src/sim/world_gen.gd")
+const Causality := preload("res://src/sim/causality.gd")
+const Ecosystem := preload("res://src/sim/ecosystem.gd")
 
 const WIDTH := 256
 const HEIGHT := 128
@@ -10,6 +28,27 @@ const ERAS := [
 	"Moyen Âge", "Renaissance", "Industriel", "Moderne", "Cyberpunk", "Post-singularité",
 ]
 
+const BIOME_NAMES := WorldGen.BIOME_NAMES
+
+## Dérive d'intelligence (par million d'années) d'une lignée prospère et généraliste.
+const INTELLIGENCE_DRIFT := 0.02
+## Taux de spéciation de base (par an).
+const SPECIATION_RATE := 1.0 / 2500000.0
+## Diversité visée : la spéciation ralentit à l'approche de ce nombre d'espèces vivantes.
+const DIVERSITY_TARGET := 64
+## Nombre maximal de pas internes pour une projection du futur.
+const MAX_PROJECTION_SUBSTEPS := 600
+## Au-delà, les espèces éteintes les plus anciennes sont retirées du dictionnaire `species`.
+const MAX_SPECIES_RECORDS := 2048
+
+## Types d'événements considérés comme marquants (résumés de projection).
+const KEY_EVENT_WEIGHT := {
+	"sapience": 10, "era_change": 9, "impact": 8, "extinction": 5, "collapse": 7, "war": 4,
+	"plague": 4, "golden_age": 4, "ice_age": 6, "deluge": 5, "invasion": 3, "radiation": 3,
+	"discovery": 2, "lazarus": 6, "uplift": 6, "volcanism": 3, "decline": 3,
+}
+
+@warning_ignore("shadowed_global_identifier")
 var seed: int
 var year: float = -66_000_000.0
 ## Grilles WIDTH*HEIGHT, indexées par y * WIDTH + x.
@@ -19,43 +58,1214 @@ var population := PackedFloat32Array()  # 0 .. 1 densité de l'espèce dominante
 var tech := PackedFloat32Array()        # 0 .. 1 niveau technologique local
 var dominant_species := PackedInt32Array() # -1 = aucune
 ## id -> {name, alive, sapient, population, traits}
+## (+ clade, parent, born_year, extinct_year, tech_level, regions)
 var species := {}
 
+# --- Ajouts publics (compatibles avec le contrat) ---
+var moisture := PackedFloat32Array()    # 0 (aride) .. 1 (humide)
+var biome := PackedByteArray()          # indice dans BIOME_NAMES
+## Journal causal (history, get_event, chain).
+var causal_log: RefCounted
+## Nombre maximal de pas internes par appel à step() (borne le coût d'une image).
+var max_substeps := 4
+## Durée du dernier appel à step(), en microsecondes.
+var last_step_usec := 0
+## Nombre de pas internes du dernier appel à step().
+var last_substeps := 0
 
-func _init(p_seed: int) -> void:
+# --- État privé ---
+var _eco: RefCounted
+var _rng := RandomNumberGenerator.new()
+var _base_temp := PackedFloat32Array()
+## id -> données d'exécution (indice de table, protections, causes, modificateurs…).
+var _rt := {}
+var _alive: Array[int] = []
+var _next_species_id := 0
+var _era_idx := 0
+var _left_mesozoic := false
+var _step_count := 0
+var _seed_hash := 0
+var _climate_anom := 0.0
+var _climate_tau := 1.0
+var _climate_cause := -1
+var _climate_cause_until := -INF
+var _goff_written := 1e9
+var _biome_goff := 0.0
+var _regional_active := false
+var _mig_mult := 1.0
+var _mig_until := -INF
+var _last_dino_extinction := -1
+var _era_cause := -1
+
+
+func _init(p_seed: int, p_generate := true) -> void:
 	seed = p_seed
 	var n := WIDTH * HEIGHT
-	elevation.resize(n)
-	temperature.resize(n)
-	population.resize(n)
-	tech.resize(n)
+	for a in [elevation, temperature, population, tech, moisture, _base_temp]:
+		a.resize(n)
+	biome.resize(n)
 	dominant_species.resize(n)
 	dominant_species.fill(-1)
-	var noise := FastNoiseLite.new()
-	noise.seed = seed
-	for y in HEIGHT:
-		for x in WIDTH:
-			var i := y * WIDTH + x
-			elevation[i] = noise.get_noise_2d(x, y)
-			temperature[i] = 1.0 - absf(float(y) / HEIGHT - 0.5) * 2.0
+	_seed_hash = hash(p_seed) & 0x7fffffff
+	_rng.seed = hash("I AM GOD:%d" % p_seed)
+	causal_log = Causality.new()
+	_eco = Ecosystem.new()
+	if not p_generate:
+		return
+	WorldGen.generate(seed, WIDTH, HEIGHT, elevation, _base_temp, moisture, biome)
+	_eco.bind_grids(self)
+	_eco.build_static()
+	_seed_roster()
+	_refresh_view()
 
 
-func step(years: float) -> Array:
-	year += years
-	return []
+# =============================================================================================
+# Contrat public
+# =============================================================================================
+
+## Avance le temps de `years` années (valeur arbitrairement grande) en sous-pas adaptatifs :
+## dt idéal selon l'ère, au plus `max_substeps` sous-pas (le dt grossit alors, le modèle restant
+## stable pour tout dt). Renvoie les événements survenus.
+func step(years: float) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	last_substeps = 0
+	if not (years > 0.0) or is_inf(years):
+		return out
+	var t0 := Time.get_ticks_usec()
+	var remaining := years
+	while remaining > 0.0:
+		var ideal := ideal_step_years()
+		var left := max_substeps - last_substeps
+		var dt := minf(remaining, ideal)
+		if left <= 1:
+			dt = remaining
+		elif remaining > ideal * left:
+			dt = remaining / left
+		_substep(dt, out)
+		remaining -= dt
+		last_substeps += 1
+	last_step_usec = Time.get_ticks_usec() - t0
+	return out
 
 
-func apply_divine_action(_action: Dictionary) -> Array:
-	return []
+## action : {type: String, region: Vector2i, species_id: int, radius: int}
+## Renvoie [événement racine de l'action divine, conséquences immédiates...]. Les conséquences
+## différées sont planifiées et apparaîtront plus tard dans step(), avec cause_id remontant ici.
+func apply_divine_action(action: Dictionary) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var type := String(action.get("type", ""))
+	@warning_ignore("integer_division")
+	var cell: Vector2i = action.get("region", Vector2i(WIDTH / 2, HEIGHT / 2))
+	cell = Vector2i(posmod(cell.x, WIDTH), clampi(cell.y, 0, HEIGHT - 1))
+	var radius := maxi(1, int(action.get("radius", 8)))
+	var a := {
+		type = type, cell = cell, r = _eco.region_of_cell(cell), radius = radius,
+		rrad = maxi(1, ceili(radius / float(Ecosystem.RS))),
+		target = _target_species(action, cell),
+	}
+	var root: Dictionary = causal_log.make_root(year, "divine_" + type, cell, a.target,
+		"Dieu : %s" % _action_label(type, a.target))
+	out.append(root)
+	match type:
+		"meteor": _act_meteor(a, root, out)
+		"extinct": _act_extinct(a, root, out)
+		"save": _act_save(a, root, out)
+		"bless": _act_bless(a, root, out)
+		"plague": _act_plague(a, root, out)
+		"uplift": _act_uplift(a, root, out)
+		"flood": _act_flood(a, root, out)
+		"ice_age": _act_ice_age(a, root, out)
+		"spawn_species": _act_spawn(a, root, out)
+		_: root.summary = "Dieu fait un geste que le monde ne comprend pas (%s)" % type
+	_refresh_view(out)
+	_update_era(out)
+	return out
 
 
 func current_era() -> String:
-	return ERAS[0]
+	return ERAS[_era_idx]
 
 
+## Copie profonde et indépendante (timeline alternative). Même graine, même état, même aléa.
 func fork() -> RefCounted:
-	return get_script().new(seed)
+	var f: RefCounted = get_script().new(seed, false)
+	f.year = year
+	f.elevation = elevation.duplicate()
+	f.temperature = temperature.duplicate()
+	f.population = population.duplicate()
+	f.tech = tech.duplicate()
+	f.dominant_species = dominant_species.duplicate()
+	f.moisture = moisture.duplicate()
+	f.biome = biome.duplicate()
+	f._base_temp = _base_temp.duplicate()
+	f.species = species.duplicate(true)
+	f._rt = _rt.duplicate(true)
+	f._alive = _alive.duplicate()
+	f.causal_log = causal_log.copy()
+	f._eco = _eco.copy()
+	f._eco.bind_grids(f)
+	f._rng.seed = _rng.seed
+	f._rng.state = _rng.state
+	for prop in ["max_substeps", "_next_species_id", "_era_idx", "_left_mesozoic", "_step_count",
+			"_seed_hash", "_climate_anom", "_climate_tau", "_climate_cause", "_climate_cause_until",
+			"_goff_written", "_biome_goff", "_regional_active", "_mig_mult", "_mig_until",
+			"_last_dino_extinction", "_era_cause"]:
+		f.set(prop, get(prop))
+	return f
 
 
-func project_future(_years: float) -> Dictionary:
-	return {}
+## Simule une copie `years` années en avance et résume ce futur possible, sans toucher à ce monde.
+## {from_year, to_year, era, era_index, era_reached, dominant_species: {id, name, clade},
+##  sapient_species: [{id, name, clade, tech_level}], extinct_species: [{id, name, clade}],
+##  new_species: int, events_count: int, key_events: Array[Dictionary]}
+func project_future(years: float) -> Dictionary:
+	var f: RefCounted = fork()
+	var target := year + maxf(years, 0.0)
+	var events: Array[Dictionary] = []
+	var budget := MAX_PROJECTION_SUBSTEPS
+	var era_reached := _era_idx
+	while f.year < target and budget > 0:
+		var rem: float = target - f.year
+		var chunk: float = minf(rem, f.ideal_step_years() * f.max_substeps)
+		# Budget borné : le pas grossit si la projection est très longue.
+		chunk = maxf(chunk, rem * f.max_substeps / float(budget))
+		if rem - chunk < 1e-6 * absf(target):
+			chunk = rem
+		events.append_array(f.step(chunk))
+		budget -= f.last_substeps
+		era_reached = maxi(era_reached, f.era_index())
+	if f.year < target:
+		events.append_array(f.step(target - f.year))
+		era_reached = maxi(era_reached, f.era_index())
+	return f.summarize_since(self, events, era_reached)
+
+
+# =============================================================================================
+# Ajouts publics
+# =============================================================================================
+
+func era_index() -> int:
+	return _era_idx
+
+
+## Pas de temps idéal (années) pour l'ère courante : utile pour régler la vitesse de jeu.
+func ideal_step_years() -> float:
+	return Eras.ideal_dt(_era_idx)
+
+
+func get_event(event_id: int) -> Dictionary:
+	return causal_log.get_event(event_id)
+
+
+## Chaîne causale : [événement, sa cause, la cause de sa cause, ...] jusqu'à la racine
+## (action divine ou fait naturel). Exemple : extinction <- impact <- divine_meteor.
+func get_causal_chain(event_id: int) -> Array[Dictionary]:
+	return causal_log.chain(event_id)
+
+
+## Derniers événements du journal (ordre chronologique).
+func get_history(count := 64) -> Array[Dictionary]:
+	var h: Array[Dictionary] = causal_log.history
+	return h.slice(maxi(0, h.size() - count))
+
+
+## Espèce dominant le plus de régions (id public, -1 si aucune).
+func get_dominant_species() -> int:
+	var counts := {}
+	var best := -1
+	var best_n := 0
+	for r in Ecosystem.NR:
+		var idx: int = _eco.r_dom[r]
+		if idx < 0:
+			continue
+		var n: int = counts.get(idx, 0) + 1
+		counts[idx] = n
+		if n > best_n or (n == best_n and idx < best):
+			best_n = n
+			best = idx
+	return _eco.t_id[best] if best >= 0 else -1
+
+
+func get_sapient_species() -> Array[int]:
+	var out: Array[int] = []
+	for id in _alive:
+		if species[id].sapient:
+			out.append(id)
+	return out
+
+
+func get_alive_species() -> Array[int]:
+	return _alive.duplicate()
+
+
+## Résumé de cette timeline depuis `origin` (utilisé par project_future).
+func summarize_since(origin: RefCounted, events: Array[Dictionary], era_reached: int) -> Dictionary:
+	var dom := get_dominant_species()
+	var extinct := []
+	for id in origin.get_alive_species():
+		if species.has(id) and not species[id].alive:
+			extinct.append({id = id, name = species[id].name, clade = species[id].traits.clade})
+	var sapients := []
+	for id in get_sapient_species():
+		sapients.append({id = id, name = species[id].name, clade = species[id].traits.clade,
+			tech_level = species[id].tech_level})
+	var new_count := 0
+	for ev in events:
+		if ev.type == "speciation" or ev.type == "spawn":
+			new_count += 1
+	var keyed := []
+	for ev in events:
+		var w: int = KEY_EVENT_WEIGHT.get(ev.type, 0)
+		if w > 0:
+			keyed.append([w, ev])
+	keyed.sort_custom(func(x, y): return x[0] > y[0] or (x[0] == y[0] and x[1].year < y[1].year))
+	var key_events: Array[Dictionary] = []
+	for i in mini(12, keyed.size()):
+		key_events.append(keyed[i][1])
+	key_events.sort_custom(func(x, y): return x.year < y.year)
+	return {
+		from_year = origin.year, to_year = year, era = current_era(), era_index = _era_idx,
+		era_reached = ERAS[era_reached],
+		dominant_species = {id = dom, name = species[dom].name if dom >= 0 else "",
+			clade = species[dom].traits.clade if dom >= 0 else ""},
+		sapient_species = sapients, extinct_species = extinct, new_species = new_count,
+		events_count = events.size(), key_events = key_events,
+	}
+
+
+## Mesure (moyenne en ms) d'un pas à la vitesse par défaut, sur une copie : n'altère pas ce monde.
+func benchmark(steps := 60, years_per_step := 1_000_000.0 / 60.0, threaded := true) -> float:
+	var f: RefCounted = fork()
+	f._eco.threaded = threaded
+	f.step(years_per_step)
+	var t0 := Time.get_ticks_usec()
+	for i in steps:
+		f.step(years_per_step)
+	return (Time.get_ticks_usec() - t0) / 1000.0 / float(steps)
+
+
+# =============================================================================================
+# Création du monde
+# =============================================================================================
+
+func _seed_roster() -> void:
+	var ids: Array[int] = []
+	for def in Species.ROSTER:
+		ids.append(_create_species(def.name, Species.traits_from_def(def), -1, -1))
+	# Répartition initiale : chaque région garde les K espèces les mieux adaptées (tirage pondéré).
+	var goff := _global_offset()
+	for r in Ecosystem.NR:
+		if _eco.r_land[r] <= 0.0:
+			continue
+		var scored := []
+		for id in ids:
+			var idx: int = _rt[id].idx
+			var suit: float = _eco.suitability(idx, r, goff)
+			if suit > 0.15:
+				scored.append([suit * _rng.randf_range(0.4, 1.0), idx, suit])
+		scored.sort_custom(func(x, y): return x[0] > y[0])
+		var cap: float = _eco.r_land[r] * _eco.r_fert[r]
+		for k in mini(Ecosystem.K, scored.size()):
+			_eco.cur_sp[r * Ecosystem.K + k] = scored[k][1]
+			_eco.cur_pop[r * Ecosystem.K + k] = cap * scored[k][2] * 0.4
+
+
+## Crée une espèce. Renvoie son id public (-1 si la table des espèces vivantes est pleine).
+func _create_species(p_name: String, traits: Dictionary, parent_id: int, origin_event: int) -> int:
+	var idx: int = _eco.alloc_index()
+	if idx < 0:
+		return -1
+	var id := _next_species_id
+	_next_species_id += 1
+	species[id] = {
+		name = p_name, alive = true, sapient = false, population = 0.0, traits = traits,
+		clade = traits.clade, parent = parent_id, born_year = year, extinct_year = NAN,
+		tech_level = 0.0, regions = 0,
+	}
+	var prt: Dictionary = _rt.get(parent_id, {})
+	_rt[id] = {
+		idx = idx, protect_until = -INF, radiation_until = prt.get("radiation_until", -INF),
+		radiation_cause = prt.get("radiation_cause", -1), harm_cause = -1, harm_until = -INF,
+		lineage_cause = prt.get("lineage_cause", -1), origin_event = origin_event,
+		tech_cause = -1, last_event = -1, last_event_year = -INF, mods = [], milestone = 0,
+		sample = -1, last_region = -1, ov_tech = 0.0, scientific_name = p_name,
+	}
+	_eco.t_alive[idx] = 1
+	_eco.t_id[idx] = id
+	_eco.t_protect[idx] = 0
+	_alive.append(id)
+	_refresh_species(id)
+	_prune_records()
+	return id
+
+
+func _prune_records() -> void:
+	if species.size() <= MAX_SPECIES_RECORDS:
+		return
+	for id in species.keys():
+		@warning_ignore("integer_division")
+		if species.size() <= MAX_SPECIES_RECORDS * 3 / 4:
+			break
+		if not species[id].alive:
+			species.erase(id)
+			_rt.erase(id)
+
+
+## Recalcule les tables compactes d'une espèce (traits, technologie) et sa ligne de chevauchement.
+func _refresh_species(id: int) -> void:
+	var sp: Dictionary = species[id]
+	var t: Dictionary = sp.traits
+	var rt: Dictionary = _rt[id]
+	var idx: int = rt.idx
+	var sap: bool = sp.sapient
+	var level: float = sp.tech_level
+	_eco.t_diet[idx] = Species.diet_index(t)
+	_eco.t_topt[idx] = t.temp_opt
+	_eco.t_tol[idx] = t.temp_tol + ((0.06 + 0.03 * level) if sap else 0.0)
+	var c := Species.competitiveness(t, level, sap)
+	_eco.t_comp[idx] = c
+	_eco.t_icomp[idx] = 1.0 / c
+	_eco.t_growth[idx] = Species.growth_rate(t, sap)
+	_eco.t_disp[idx] = Species.dispersal_rate(t, level, sap)
+	_eco.t_vis[idx] = (0.3 + float(t["size"])) * ((6.0 + level) if sap else 1.0)
+	_eco.t_tech[idx] = (0.05 + level / Eras.MAX_TECH * 0.95) if sap else 0.0
+	_eco.t_capmul[idx] = (1.0 + 0.12 * level) if sap else 1.0
+	rt.ov_tech = level
+	var m := Ecosystem.MAXS
+	for other in _alive:
+		var j: int = _rt[other].idx
+		var o_sp: Dictionary = species[other]
+		var ov := Species.overlap(t, o_sp.traits)
+		# t_ov[a * MAXS + b] = pression exercée SUR a PAR b. Un peuple sapient presse toutes les
+		# espèces (chasse, défrichage) sans subir en retour la pression des animaux.
+		var ov_ij := ov
+		var ov_ji := ov
+		if sap:
+			ov_ji = maxf(ov_ji, 0.1 + 0.02 * level)
+		if o_sp.sapient:
+			ov_ij = maxf(ov_ij, 0.1 + 0.02 * float(o_sp.tech_level))
+		_eco.t_ov[idx * m + j] = ov_ij
+		_eco.t_ov[j * m + idx] = ov_ji
+
+
+# =============================================================================================
+# Pas de simulation
+# =============================================================================================
+
+func _global_offset() -> float:
+	# Refroidissement du Cénozoïque (+0.06 au Crétacé -> 0 à -3 Ma) + réchauffement industriel.
+	var baseline := clampf((-3.0e6 - year) / 63.0e6, 0.0, 1.0) * 0.06
+	var lead := _leading_tech()
+	var warming := clampf((lead - 4.0) * 0.03, 0.0, 0.09)
+	return baseline + warming + _climate_anom
+
+
+func _substep(dt: float, out: Array[Dictionary]) -> void:
+	_step_count += 1
+	year += dt
+	if year > _mig_until:
+		_mig_mult = 1.0
+	_eco.prepare(dt, _mig_mult)
+	_run_ecosystem()
+	_update_species_stats(out)
+	_evolve(dt, out)
+	_advance_civilisations(dt, out)
+	_natural_events(dt, out)
+	_process_scheduled(out)
+	_decay(dt)
+	_update_era(out)
+
+
+func _run_ecosystem() -> void:
+	var goff := _global_offset()
+	# Réécriture de la grille de température seulement si le climat a bougé (coûteux : 32k cellules) ;
+	# les anomalies régionales qui s'estompent sont rafraîchies un sous-pas sur quatre.
+	var temp_dirty := absf(goff - _goff_written) > 0.004 or (_regional_active and _step_count % 4 == 0)
+	var biome_dirty := temp_dirty and absf(goff - _biome_goff) > 0.04
+	_eco.run(_step_count, _seed_hash, goff, temp_dirty, biome_dirty)
+	if temp_dirty:
+		_goff_written = goff
+	if biome_dirty:
+		_biome_goff = goff
+	_eco.flush_free()
+
+
+## Repasse le noyau avec dt = 0 : purge les niches mortes, met à jour les grilles et les stats
+## immédiatement après une action divine (pas d'évolution du temps).
+func _refresh_view(out: Variant = null) -> void:
+	_eco.prepare(0.0, 1.0)
+	_goff_written = 1e9
+	_run_ecosystem()
+	var sink: Array[Dictionary] = []
+	_update_species_stats(out if out != null else sink)
+
+
+func _update_species_stats(out: Array[Dictionary]) -> void:
+	for id in _alive.duplicate():
+		var sp: Dictionary = species[id]
+		var rt: Dictionary = _rt[id]
+		var idx: int = rt.idx
+		_eco.reduce_stats(idx, _step_count + id)
+		sp.population = _eco.stat_pop
+		sp.regions = _eco.stat_cnt
+		rt.sample = _eco.stat_sample
+		if _eco.stat_sample >= 0:
+			rt.last_region = _eco.stat_sample
+		var protected: bool = rt.protect_until >= year
+		_eco.t_protect[idx] = 1 if protected else 0
+		if _eco.stat_cnt == 0 or _eco.stat_pop < Ecosystem.EXTINCT_EPS * 2.0:
+			if protected and rt.last_region >= 0:
+				# Une espèce protégée par Dieu survit en population relique.
+				_eco.place_species(idx, rt.last_region, 0, 0.05)
+				continue
+			_extinguish(id, _harm_cause(id), out)
+
+
+func _harm_cause(id: int) -> int:
+	var rt: Dictionary = _rt[id]
+	if rt.harm_until >= year and rt.harm_cause > 0:
+		return rt.harm_cause
+	if _climate_cause_until >= year and _climate_cause > 0:
+		return _climate_cause
+	# Une espèce toute jeune qui s'éteint : c'est sa naissance (spéciation, création) qui a échoué.
+	if year - float(species[id].born_year) < Eras.time_unit(_era_idx) * 2.0 and rt.origin_event > 0:
+		return rt.origin_event
+	# Exclusion compétitive : la cause est l'apparition de l'espèce qui domine son dernier refuge.
+	if rt.last_region >= 0:
+		var dom_idx: int = _eco.r_dom[rt.last_region]
+		if dom_idx >= 0:
+			var cid: int = _eco.t_id[dom_idx]
+			if cid != id and _rt.has(cid):
+				var crt: Dictionary = _rt[cid]
+				if species[cid].sapient and crt.tech_cause > 0:
+					return crt.tech_cause
+				return crt.origin_event
+	return -1
+
+
+func _extinguish(id: int, cause: int, out: Array[Dictionary], how := "") -> Dictionary:
+	var sp: Dictionary = species[id]
+	var rt: Dictionary = _rt[id]
+	sp.alive = false
+	sp.extinct_year = year
+	sp.population = 0.0
+	sp.regions = 0
+	_eco.release_index(rt.idx)
+	_alive.erase(id)
+	var text := "Extinction : les %s disparaissent" % sp.name
+	if how != "":
+		text += " (%s)" % how
+	if sp.sapient:
+		text = "Effondrement total : la civilisation des %s s'éteint" % sp.name
+	var ev := _event("extinction", _cell_of(rt.last_region), id, text, cause, out)
+	if sp.traits.clade == "dinosaure":
+		_last_dino_extinction = ev.id
+	return ev
+
+
+func _evolve(dt: float, out: Array[Dictionary]) -> void:
+	var n_alive := _alive.size()
+	var diversity := clampf(1.0 - float(n_alive) / DIVERSITY_TARGET, 0.0, 1.0)
+	for id in _alive.duplicate():
+		if not species.has(id) or not species[id].alive:
+			continue
+		var sp: Dictionary = species[id]
+		var t: Dictionary = sp.traits
+		var rt: Dictionary = _rt[id]
+		if sp.sapient:
+			continue
+		var success := minf(1.0, float(sp.regions) / 60.0)
+		# Dérive d'intelligence : généralistes de taille moyenne et prospères.
+		var bias: float = (1.0 if t.diet == "omnivore" else 0.45) * (0.4 + t.adaptability) \
+			* clampf(1.0 - absf(float(t["size"]) - 0.35) * 1.6, 0.1, 1.0)
+		var i0: float = t.intelligence
+		var di: float = dt / 1.0e6 * INTELLIGENCE_DRIFT * bias * success * (1.0 - i0) * (1.0 if i0 > 0.2 else 0.3)
+		t.intelligence = minf(1.0, i0 + di)
+		if t.intelligence >= Species.SAPIENCE_THRESHOLD and sp.regions >= 6:
+			_become_sapient(id, out)
+			continue
+		# Spéciation.
+		var rad := 4.0 if rt.radiation_until >= year else 1.0
+		var p: float = dt * SPECIATION_RATE * (0.4 + t.adaptability) * minf(1.0, sp.regions / 12.0) * rad * diversity
+		if _rng.randf() < minf(p, 0.9):
+			_speciate(id, out)
+
+
+func _speciate(parent_id: int, out: Array[Dictionary]) -> int:
+	var psp: Dictionary = species[parent_id]
+	var prt: Dictionary = _rt[parent_id]
+	var founder: int = prt.sample
+	if founder < 0 or _eco.capacity_left() <= 0:
+		return -1
+	var radiating: bool = prt.radiation_until >= year
+	var ftemp: float = _eco.region_temperature(founder, _global_offset())
+	var traits := Species.mutate(psp.traits, _rng, ftemp, 1.0 if radiating else 0.0)
+	var new_genus := Species.divergence(psp.traits, traits) > 0.3 or _rng.randf() < 0.15
+	var child_name := Species.make_name(prt.scientific_name, _rng, new_genus)
+	var cause: int = prt.radiation_cause if radiating and prt.radiation_cause > 0 else prt.origin_event
+	if prt.lineage_cause > 0 and not radiating:
+		cause = prt.lineage_cause
+	var child := _create_species(child_name, traits, parent_id, -1)
+	if child < 0:
+		return -1
+	var ev := _event("speciation", _cell_of(founder), child,
+		"Spéciation : %s se sépare des %s" % [child_name, psp.name], cause, out)
+	_rt[child].origin_event = ev.id
+	var cidx: int = _rt[child].idx
+	if _eco.place_species(cidx, founder, 2, 0.1, prt.idx) == 0:
+		_eco.place_species(cidx, founder, 0, 0.1)
+	return child
+
+
+func _become_sapient(id: int, out: Array[Dictionary]) -> void:
+	var sp: Dictionary = species[id]
+	var rt: Dictionary = _rt[id]
+	var old_name: String = sp.name
+	var title := Species.sapient_title(sp.traits)
+	for other in species:
+		if species[other].sapient and species[other].name == title:
+			title += " " + Species.make_name(old_name, _rng, false).split(" ")[1].capitalize()
+			break
+	sp.sapient = true
+	sp.tech_level = 0.0
+	sp.name = title
+	var cause: int = rt.lineage_cause if rt.lineage_cause > 0 else rt.origin_event
+	var ev := _event("sapience", _cell_of(rt.last_region), id,
+		"Éveil : les %s (%s) accèdent à la conscience — naissance des %s" % [old_name, sp.traits.clade, title],
+		cause, out)
+	rt.tech_cause = ev.id
+	rt.milestone = 0
+	_refresh_species(id)
+
+
+func _leading_species() -> int:
+	var best := -1
+	var best_l := -1.0
+	for id in _alive:
+		var sp: Dictionary = species[id]
+		if sp.sapient and sp.tech_level > best_l:
+			best_l = sp.tech_level
+			best = id
+	return best
+
+
+func _leading_tech() -> float:
+	var lead := _leading_species()
+	return species[lead].tech_level if lead >= 0 else 0.0
+
+
+func _advance_civilisations(dt: float, out: Array[Dictionary]) -> void:
+	for id in _alive.duplicate():
+		if not species.has(id) or not species[id].alive or not species[id].sapient:
+			continue
+		var sp: Dictionary = species[id]
+		var rt: Dictionary = _rt[id]
+		var t: Dictionary = sp.traits
+		var mods := 1.0
+		var kept := []
+		for m in rt.mods:
+			if m.until >= year:
+				mods *= m.factor
+				kept.append(m)
+		rt.mods = kept
+		mods = clampf(mods, 0.3, 2.5)
+		var popf := clampf(sqrt(float(sp.regions) / 120.0), 0.15, 1.6)
+		var speed := popf * mods * (0.8 + 0.5 * float(t.intelligence))
+		var level: float = sp.tech_level
+		# Au plus un tiers de niveau par sous-pas : même un pas géant traverse les ères une à une,
+		# avec leurs jalons et leurs événements, au lieu de sauter directement au futur.
+		level = minf(Eras.integrate_tech(level, dt, speed), level + 0.34)
+		sp.tech_level = level
+		_check_milestones(id, out)
+		if absf(level - rt.ov_tech) >= 0.25:
+			_refresh_species(id)
+		_civ_random_events(id, dt, out)
+
+
+func _check_milestones(id: int, out: Array[Dictionary]) -> void:
+	var sp: Dictionary = species[id]
+	var rt: Dictionary = _rt[id]
+	var guard := 0
+	while guard < 32:
+		guard += 1
+		var m: int = rt.milestone
+		@warning_ignore("integer_division")
+		var lvl := m / 3
+		if lvl >= Eras.MILESTONES.size():
+			return
+		var value := float(lvl) + float(m % 3 + 1) * 0.25
+		if sp.tech_level < value:
+			return
+		var ev := _event("discovery", _cell_of(rt.last_region), id,
+			"Les %s %s" % [sp.name, Eras.MILESTONES[lvl][m % 3]], rt.tech_cause, out)
+		rt.tech_cause = ev.id
+		rt.milestone = m + 1
+
+
+## Guerres, épidémies, âges d'or, découvertes : taux exprimés en occurrences par niveau technologique.
+func _civ_random_events(id: int, dt: float, out: Array[Dictionary]) -> void:
+	var sp: Dictionary = species[id]
+	var rt: Dictionary = _rt[id]
+	var t: Dictionary = sp.traits
+	var level: float = sp.tech_level
+	var span := Eras.level_years(level)
+	var unit := Eras.time_unit(_era_idx)
+	# Cause d'un événement spontané : le dernier événement subi récemment par ce peuple.
+	var recent: int = rt.last_event if year - float(rt.last_event_year) < unit * 3.0 else -1
+	var region := _cell_of(rt.sample)
+	if _chance(dt, 2.5 * (0.4 + float(t.aggression)) / span):
+		var foe := -1
+		for other in get_sapient_species():
+			if other != id:
+				foe = other
+				break
+		var text := "Guerre : les %s se déchirent en conflits fratricides" % sp.name
+		if foe >= 0:
+			text = "Guerre : les %s affrontent les %s" % [sp.name, species[foe].name]
+		var ev := _event("war", region, id, text, recent, out)
+		var hit: Dictionary = _eco.kill_area(rt.sample, 3, 0.4)
+		_mark_harm(hit, ev.id, unit * 2.0)
+		if foe >= 0:
+			_eco.kill_area(_rt[foe].sample, 3, 0.5, _rt[foe].idx)
+			_note(foe, ev.id)
+		if _rng.randf() < 0.45:
+			sp.tech_level = minf(Eras.MAX_TECH, level + 0.05)
+			rt.tech_cause = ev.id
+		else:
+			sp.tech_level = maxf(0.0, level - 0.04)
+		_note(id, ev.id)
+	if level >= 0.75 and _chance(dt, 1.2 * clampf(sp.population / 200.0, 0.2, 1.5) / span):
+		var ev := _event("plague", region, id, "Épidémie : une peste ravage les %s" % sp.name, recent, out)
+		_eco.scale_species(rt.idx, 0.7)
+		sp.tech_level = maxf(0.0, sp.tech_level - 0.03)
+		_note(id, ev.id)
+		causal_log.schedule(year + unit * 2.0, "plague_wave", ev.id, region, id, 0.4)
+	if _chance(dt, 1.0 * (1.2 - float(t.aggression)) / span):
+		var ev := _event("golden_age", region, id, "Âge d'or : les %s connaissent une ère de prospérité" % sp.name, recent, out)
+		rt.mods.append({factor = 1.8, until = year + 0.15 * span, cause = ev.id})
+		rt.tech_cause = ev.id
+		_note(id, ev.id)
+		causal_log.schedule(year + 0.15 * span, "decline", ev.id, region, id, 0.35)
+	if _chance(dt, 1.0 / span):
+		var ev := _event("discovery", region, id, "Percée : un génie des %s fait faire un bond au savoir" % sp.name, rt.tech_cause, out)
+		sp.tech_level = minf(Eras.MAX_TECH, sp.tech_level + 0.08)
+		rt.tech_cause = ev.id
+		_note(id, ev.id)
+
+
+func _natural_events(dt: float, out: Array[Dictionary]) -> void:
+	# Supervolcans : rares, refroidissement local et global.
+	if _chance(dt, 1.0 / 4.0e6):
+		var r := _random_land_region()
+		if r >= 0:
+			var ev := _event("volcanism", _eco.region_center_cell(r), -1,
+				"Supervolcan : une éruption colossale obscurcit le ciel", -1, out)
+			_mark_harm(_eco.kill_area(r, 3, 0.6), ev.id, Eras.time_unit(_era_idx))
+			_eco.add_anomaly(r, 5, -0.12)
+			_regional_active = true
+			_add_climate_shock(-0.04, Eras.time_unit(_era_idx), ev.id)
+
+
+func _process_scheduled(out: Array[Dictionary]) -> void:
+	for e in causal_log.pop_due(year):
+		if _rng.randf() > float(e.chance):
+			continue
+		var sid: int = e.species_id
+		var alive_target: bool = species.has(sid) and species[sid].alive
+		var rt: Dictionary = _rt.get(sid, {})
+		var unit := Eras.time_unit(_era_idx)
+		match e.kind:
+			"impact_winter_end":
+				_event("climate", e.region, -1, "Le ciel s'éclaircit : l'hiver d'impact prend fin", e.cause_id, out)
+			"radiation":
+				_radiation(e.cause_id, e.region, out)
+			"ice_age_end":
+				_event("ice_age_end", e.region, -1, "Fin de la glaciation : les glaces reculent", e.cause_id, out)
+			"land_bridge":
+				var ev := _event("land_bridge", e.region, -1,
+					"Ponts de glace : les mers basses ouvrent des routes de migration", e.cause_id, out)
+				_mig_mult = 3.0
+				_mig_until = year + unit * 4.0
+				_note_all(ev.id)
+			"plague_wave":
+				if alive_target:
+					var ev := _event("plague", e.region, sid, "Nouvelle vague d'épidémie chez les %s" % species[sid].name, e.cause_id, out)
+					_eco.scale_species(rt.idx, 0.75)
+					_mark_harm({rt.idx: true}, ev.id, unit * 2.0)
+					_note(sid, ev.id)
+					if species[sid].sapient:
+						species[sid].tech_level = maxf(0.0, species[sid].tech_level - 0.04)
+					causal_log.schedule(year + unit * 2.0, "plague_wave", ev.id, e.region, sid, 0.45)
+					causal_log.schedule(year + unit * 3.0, "immunity", ev.id, e.region, sid, 0.6)
+			"immunity":
+				if alive_target:
+					var t: Dictionary = species[sid].traits
+					t.adaptability = minf(1.0, t.adaptability + 0.05)
+					var ev := _event("immunity", e.region, sid, "Les %s survivants développent une immunité" % species[sid].name, e.cause_id, out)
+					_note(sid, ev.id)
+					_refresh_species(sid)
+			"decline":
+				if alive_target and species[sid].sapient:
+					var ev := _event("decline", e.region, sid, "Décadence : la prospérité des %s s'effrite" % species[sid].name, e.cause_id, out)
+					species[sid].tech_level = maxf(0.0, species[sid].tech_level - 0.06)
+					_note(sid, ev.id)
+			"golden_age":
+				if alive_target and species[sid].sapient:
+					var span := Eras.level_years(species[sid].tech_level)
+					var ev := _event("golden_age", e.region, sid, "Âge d'or : sous le regard de Dieu, les %s prospèrent" % species[sid].name, e.cause_id, out)
+					rt.mods.append({factor = 2.0, until = year + 0.2 * span, cause = ev.id})
+					rt.tech_cause = ev.id
+					_note(sid, ev.id)
+					causal_log.schedule(year + 0.2 * span, "decline", ev.id, e.region, sid, 0.4)
+			"resurgence":
+				if alive_target:
+					var ev := _event("radiation", e.region, sid, "Résurgence : les %s, épargnés, reconquièrent leur monde" % species[sid].name, e.cause_id, out)
+					rt.radiation_until = year + unit * 6.0
+					rt.radiation_cause = ev.id
+					_eco.place_species(rt.idx, maxi(rt.sample, 0), 2, 0.2)
+					_note(sid, ev.id)
+			"awakening":
+				if alive_target and not species[sid].sapient:
+					var t: Dictionary = species[sid].traits
+					t.intelligence = minf(1.0, t.intelligence + 0.08)
+					var ev := _event("uplift", e.region, sid, "L'étincelle divine grandit chez les %s" % species[sid].name, e.cause_id, out)
+					rt.lineage_cause = ev.id
+					_note(sid, ev.id)
+					if t.intelligence >= Species.SAPIENCE_THRESHOLD:
+						_become_sapient(sid, out)
+			"fertile_silt":
+				var ev := _event("fertile_silt", e.region, -1, "Le limon du déluge fertilise les plaines", e.cause_id, out)
+				_eco.add_bless(_eco.region_of_cell(e.region), int(e.data.get("rrad", 2)), 0.35)
+				_regional_active = true
+				for id in _species_near(_eco.region_of_cell(e.region), int(e.data.get("rrad", 2))):
+					if species[id].sapient:
+						causal_log.schedule(year + unit * 0.5, "golden_age", ev.id, e.region, id, 0.5)
+			"flood_myth":
+				if alive_target and species[sid].sapient:
+					var ev := _event("discovery", e.region, sid, "Les %s gravent le mythe du Déluge : naissance d'une religion" % species[sid].name, e.cause_id, out)
+					species[sid].tech_level = minf(Eras.MAX_TECH, species[sid].tech_level + 0.05)
+					rt.tech_cause = ev.id
+					_note(sid, ev.id)
+			"invasion":
+				if alive_target and species[sid].regions < int(e.data.get("threshold", 10)):
+					var ev := _event("endemic", e.region, sid, "Les %s restent cantonnés à leur berceau (%d régions)" % [species[sid].name, species[sid].regions], e.cause_id, out)
+					_note(sid, ev.id)
+				elif alive_target:
+					var ev := _event("invasion", e.region, sid, "Invasion : les %s ont conquis %d régions" % [species[sid].name, species[sid].regions], e.cause_id, out)
+					_note(sid, ev.id)
+					for id in _species_near(maxi(rt.sample, 0), 4):
+						if id != sid:
+							_rt[id].harm_cause = ev.id
+							_rt[id].harm_until = year + unit * 4.0
+			"niche_freed":
+				_radiation(e.cause_id, e.region, out, int(e.data.get("near", -1)))
+
+
+## Radiation adaptative : les survivants les plus répandus se diversifient.
+func _radiation(cause_id: int, cell: Vector2i, out: Array[Dictionary], favour := -1) -> void:
+	var ranked := []
+	for id in _alive:
+		if not species[id].sapient:
+			var bonus := 1000 if id == favour else 0
+			ranked.append([species[id].regions + bonus, id])
+	ranked.sort_custom(func(x, y): return x[0] > y[0] or (x[0] == y[0] and x[1] < y[1]))
+	if ranked.is_empty():
+		return
+	var names := []
+	for i in mini(3, ranked.size()):
+		names.append(species[ranked[i][1]].name)
+	var ev := _event("radiation", cell, ranked[0][1],
+		"Radiation adaptative : %s se diversifient dans les niches laissées vides" % ", ".join(names), cause_id, out)
+	var unit := Eras.time_unit(_era_idx)
+	for i in mini(3, ranked.size()):
+		var rt: Dictionary = _rt[ranked[i][1]]
+		rt.radiation_until = year + unit * 8.0
+		rt.radiation_cause = ev.id
+		if i == 0:
+			_speciate(ranked[i][1], out)
+
+
+func _decay(dt: float) -> void:
+	if _climate_anom != 0.0:
+		_climate_anom *= exp(-dt / maxf(_climate_tau, 1e-3))
+		if absf(_climate_anom) < 1e-3:
+			_climate_anom = 0.0
+	if _regional_active:
+		_regional_active = _eco.decay_modifiers(exp(-dt / (Eras.time_unit(_era_idx) * 2.0)))
+		if not _regional_active:
+			_goff_written = 1e9
+
+
+func _update_era(out: Array[Dictionary]) -> void:
+	var lead := _leading_species()
+	var idx := 0
+	var cause := -1
+	if lead >= 0:
+		idx = Eras.era_for_tech(species[lead].tech_level)
+		cause = _rt[lead].tech_cause
+	else:
+		# Avant toute sapience : Mésozoïque tant que les dinosaures règnent (poids écologique).
+		var dino := 0.0
+		var total := 0.0
+		for id in _alive:
+			var sp: Dictionary = species[id]
+			var w: float = sp.regions * (0.3 + float(sp.traits["size"]))
+			total += w
+			if sp.traits.clade == "dinosaure":
+				dino += w
+		if _left_mesozoic or total <= 0.0 or dino / total < 0.3:
+			_left_mesozoic = true
+			idx = Eras.CENOZOIC
+		cause = _last_dino_extinction
+	if idx == _era_idx:
+		return
+	var rising := idx > _era_idx
+	_era_idx = idx
+	var text := "Le monde entre dans l'ère : %s" % ERAS[idx]
+	if lead >= 0:
+		text += " (portée par les %s)" % species[lead].name
+		if not rising:
+			text = "Recul : la civilisation retombe à l'ère %s" % ERAS[idx]
+	var ev := _event("era_change", _cell_of(_rt[lead].last_region) if lead >= 0 else Vector2i(-1, -1),
+		lead, text, cause, out)
+	_era_cause = ev.id
+
+
+# =============================================================================================
+# Actions divines
+# =============================================================================================
+
+func _act_meteor(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var sev := clampf(a.radius / 12.0, 0.3, 1.6)
+	var unit := Eras.time_unit(_era_idx)
+	var impact := _event("impact", a.cell, -1,
+		"Impact : un astéroïde creuse un cratère de %d km et embrase le ciel" % (a.radius * 75), root.id, out)
+	_carve_crater(a.cell, a.radius)
+	_mark_harm(_eco.kill_area(a.r, a.rrad, 1.0), impact.id, unit * 3.0)
+	_mark_harm(_eco.kill_area(a.r, a.rrad * 3, 0.5), impact.id, unit * 3.0)
+	# Hiver d'impact planétaire : mortalité selon la taille, la lignée et l'adaptabilité.
+	for id in _alive.duplicate():
+		var sp: Dictionary = species[id]
+		var rt: Dictionary = _rt[id]
+		var v := Species.impact_vulnerability(sp.traits, sev)
+		if rt.protect_until >= year:
+			v *= 0.1
+		rt.harm_cause = impact.id
+		rt.harm_until = year + unit * 3.0
+		if v >= 0.97:
+			_extinguish(id, impact.id, out, "hiver d'impact")
+		else:
+			_eco.scale_species(rt.idx, 1.0 - v)
+			rt.radiation_until = year + unit * 10.0
+			rt.radiation_cause = impact.id
+			if sp.sapient:
+				sp.tech_level = maxf(0.0, sp.tech_level - 0.6 * sev)
+				var ev := _event("collapse", a.cell, id, "Âge sombre : l'impact plonge les %s dans le chaos" % sp.name, impact.id, out)
+				_note(id, ev.id)
+	_add_climate_shock(-0.3 * sev, unit * 1.5, impact.id)
+	_climate_cause_until = year + unit * 4.0
+	causal_log.schedule(year + unit * 3.0, "impact_winter_end", impact.id, a.cell, -1)
+	causal_log.schedule(year + unit * 2.0, "radiation", impact.id, a.cell, -1)
+
+
+func _act_extinct(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var id: int = a.target
+	if id < 0:
+		root.summary = "Dieu cherche une espèce à anéantir, mais la région est vide"
+		return
+	var near := _most_overlapping(id)
+	var ev := _extinguish(id, root.id, out, "volonté divine")
+	_eco.scale_species(_rt[id].idx, 0.0)
+	causal_log.schedule(year + Eras.time_unit(_era_idx) * 0.5, "niche_freed", ev.id, a.cell, -1, 1.0, {near = near})
+
+
+func _act_save(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var id: int = a.target
+	if id < 0:
+		# Taxon Lazare : ressusciter la dernière espèce éteinte dans cette région.
+		id = _last_extinct_near(a.r)
+		if id < 0:
+			root.summary = "Dieu tend la main, mais il n'y a rien à sauver ici"
+			return
+	var unit := Eras.time_unit(_era_idx)
+	if not species[id].alive:
+		if _revive(id, a.r, a.rrad) < 0:
+			root.summary = "Dieu tente une résurrection, mais le monde est trop plein"
+			return
+		var lz := _event("lazarus", a.cell, id, "Taxon Lazare : les %s reviennent d'entre les morts" % species[id].name, root.id, out)
+		_rt[id].origin_event = lz.id
+		_rt[id].lineage_cause = lz.id
+	var rt: Dictionary = _rt[id]
+	rt.protect_until = year + unit * 4.0
+	_eco.t_protect[rt.idx] = 1
+	var ev := _event("protection", a.cell, id, "Les %s sont placés sous protection divine" % species[id].name, root.id, out)
+	_note(id, ev.id)
+	if rt.lineage_cause <= 0:
+		rt.lineage_cause = ev.id
+	causal_log.schedule(year + unit * 2.0, "resurgence", ev.id, a.cell, id, 0.8)
+
+
+func _act_bless(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var unit := Eras.time_unit(_era_idx)
+	var ev := _event("blessing", a.cell, a.target, "Bénédiction : la terre devient luxuriante", root.id, out)
+	_eco.add_bless(a.r, a.rrad, 0.5)
+	_regional_active = true
+	for id in _species_near(a.r, a.rrad):
+		_note(id, ev.id)
+		if species[id].sapient:
+			causal_log.schedule(year + unit * 0.1, "golden_age", ev.id, a.cell, id, 1.0)
+		else:
+			_rt[id].radiation_until = year + unit * 3.0
+			_rt[id].radiation_cause = ev.id
+
+
+func _act_plague(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var id: int = a.target
+	if id < 0:
+		root.summary = "Dieu répand la peste, mais nul ne l'attrape"
+		return
+	var unit := Eras.time_unit(_era_idx)
+	var rt: Dictionary = _rt[id]
+	var ev := _event("plague", a.cell, id, "Épidémie divine : un fléau s'abat sur les %s" % species[id].name, root.id, out)
+	_eco.kill_area(a.r, a.rrad * 2, 0.6, rt.idx)
+	_eco.scale_species(rt.idx, 0.8 if rt.protect_until < year else 0.97)
+	_mark_harm({rt.idx: true}, ev.id, unit * 3.0)
+	_note(id, ev.id)
+	if species[id].sapient:
+		species[id].tech_level = maxf(0.0, species[id].tech_level - 0.1)
+	causal_log.schedule(year + unit, "plague_wave", ev.id, a.cell, id, 1.0)
+
+
+func _act_uplift(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var id: int = a.target
+	if id < 0:
+		root.summary = "Dieu offre l'étincelle, mais personne n'est là pour la recevoir"
+		return
+	var sp: Dictionary = species[id]
+	var rt: Dictionary = _rt[id]
+	var unit := Eras.time_unit(_era_idx)
+	if sp.sapient:
+		var rev := _event("discovery", a.cell, id, "Révélation : Dieu souffle aux %s un savoir interdit" % sp.name, root.id, out)
+		sp.tech_level = minf(Eras.MAX_TECH, sp.tech_level + 0.5)
+		rt.tech_cause = rev.id
+		_note(id, rev.id)
+		return
+	var t: Dictionary = sp.traits
+	t.intelligence = minf(1.0, t.intelligence + 0.2)
+	t.adaptability = minf(1.0, t.adaptability + 0.05)
+	var ev := _event("uplift", a.cell, id, "Élévation : Dieu éveille l'esprit des %s" % sp.name, root.id, out)
+	rt.lineage_cause = ev.id
+	_note(id, ev.id)
+	_refresh_species(id)
+	if t.intelligence >= Species.SAPIENCE_THRESHOLD:
+		_become_sapient(id, out)
+	else:
+		causal_log.schedule(year + unit, "awakening", ev.id, a.cell, id, 1.0)
+
+
+func _act_flood(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var unit := Eras.time_unit(_era_idx)
+	var ev := _event("deluge", a.cell, -1, "Déluge : les eaux engloutissent les basses terres", root.id, out)
+	var near := _species_near(a.r, a.rrad)
+	_mark_harm(_eco.kill_area(a.r, a.rrad, 0.8, -1, true, -INF, 0.3), ev.id, unit * 2.0)
+	for id in near:
+		_note(id, ev.id)
+		if species[id].sapient:
+			causal_log.schedule(year + unit * 0.5, "flood_myth", ev.id, a.cell, id, 0.7)
+	causal_log.schedule(year + unit * 0.3, "fertile_silt", ev.id, a.cell, -1, 1.0, {rrad = a.rrad})
+
+
+func _act_ice_age(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var unit := Eras.time_unit(_era_idx)
+	var ev := _event("ice_age", a.cell, -1, "Glaciation : les calottes polaires avancent sur le monde", root.id, out)
+	_add_climate_shock(-0.22, unit * 3.0, ev.id)
+	_climate_cause_until = year + unit * 5.0
+	_note_all(ev.id)
+	causal_log.schedule(year + unit * 1.0, "land_bridge", ev.id, a.cell, -1, 0.8)
+	causal_log.schedule(year + unit * 5.0, "ice_age_end", ev.id, a.cell, -1)
+	causal_log.schedule(year + unit * 1.5, "radiation", ev.id, a.cell, -1, 0.7)
+
+
+func _act_spawn(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var parent: int = int(a.get("target", -1))
+	var temp: float = _eco.region_temperature(a.r, _global_offset())
+	var traits: Dictionary
+	var p_name := "Chimère"
+	if parent >= 0 and species.has(parent):
+		traits = Species.mutate(species[parent].traits, _rng, temp, 1.0)
+		p_name = _rt[parent].scientific_name if _rt.has(parent) else species[parent].name
+	else:
+		parent = -1
+		traits = Species.random_traits(_rng, temp)
+	var id := _create_species(Species.make_name(p_name, _rng, parent < 0), traits, parent, -1)
+	if id < 0:
+		root.summary = "Dieu veut créer la vie, mais le monde est saturé d'espèces"
+		return
+	var unit := Eras.time_unit(_era_idx)
+	var ev := _event("spawn", a.cell, id, "Création : Dieu façonne les %s" % species[id].name, root.id, out)
+	_rt[id].origin_event = ev.id
+	_rt[id].lineage_cause = ev.id
+	_rt[id].protect_until = year + unit * 0.5
+	_eco.t_protect[_rt[id].idx] = 1
+	_eco.place_species(_rt[id].idx, a.r, a.rrad, 0.3)
+	causal_log.schedule(year + unit * 2.0, "invasion", ev.id, a.cell, id, 1.0, {threshold = 10})
+
+
+# =============================================================================================
+# Utilitaires
+# =============================================================================================
+
+func _event(type: String, cell: Vector2i, species_id: int, summary: String, cause_id: int, out: Array[Dictionary]) -> Dictionary:
+	var ev: Dictionary = causal_log.make_event(year, type, cell, species_id, summary, cause_id)
+	out.append(ev)
+	return ev
+
+
+func _note(id: int, event_id: int) -> void:
+	if _rt.has(id):
+		_rt[id].last_event = event_id
+		_rt[id].last_event_year = year
+
+
+func _note_all(event_id: int) -> void:
+	for id in _alive:
+		_note(id, event_id)
+
+
+func _mark_harm(hit: Dictionary, event_id: int, duration: float) -> void:
+	for idx in hit:
+		var id: int = _eco.t_id[idx]
+		if _rt.has(id):
+			_rt[id].harm_cause = event_id
+			_rt[id].harm_until = year + duration
+
+
+func _add_climate_shock(amount: float, tau: float, cause_id: int) -> void:
+	# Le choc le plus récent impose sa constante de temps (l'ancien est déjà en partie résorbé).
+	_climate_anom += amount
+	_climate_tau = tau
+	_climate_cause = cause_id
+	_climate_cause_until = maxf(_climate_cause_until, year + tau * 2.0)
+
+
+func _chance(dt: float, rate_per_year: float) -> bool:
+	return _rng.randf() < 1.0 - exp(-maxf(rate_per_year, 0.0) * dt)
+
+
+func _cell_of(r: int) -> Vector2i:
+	return _eco.region_center_cell(r) if r >= 0 else Vector2i(-1, -1)
+
+
+func _random_land_region() -> int:
+	for i in 32:
+		var r := _rng.randi_range(0, Ecosystem.NR - 1)
+		if _eco.r_land[r] > 0.3:
+			return r
+	return -1
+
+
+func _species_near(r: int, rad: int) -> Array[int]:
+	var seen := {}
+	for rr in _eco.regions_in_radius(r, rad):
+		for k in Ecosystem.K:
+			var idx: int = _eco.cur_sp[rr * Ecosystem.K + k]
+			if idx >= 0 and _eco.t_alive[idx] == 1:
+				seen[_eco.t_id[idx]] = true
+	var out: Array[int] = []
+	for id in seen:
+		out.append(id)
+	out.sort()
+	return out
+
+
+func _target_species(action: Dictionary, cell: Vector2i) -> int:
+	var id := int(action.get("species_id", -1))
+	if id >= 0 and species.has(id):
+		if species[id].alive or action.get("type", "") in ["save", "spawn_species"]:
+			return id
+	var d := dominant_species[cell.y * WIDTH + cell.x]
+	if d >= 0 and species.has(d) and species[d].alive:
+		return d
+	# Région vide : l'espèce la plus présente dans les environs.
+	var near := _species_near(_eco.region_of_cell(cell), 2)
+	return near[0] if not near.is_empty() and action.get("type", "") != "save" else -1
+
+
+func _most_overlapping(id: int) -> int:
+	var best := -1
+	var best_ov := -1.0
+	for other in _alive:
+		if other == id:
+			continue
+		var ov := Species.overlap(species[id].traits, species[other].traits)
+		if ov > best_ov:
+			best_ov = ov
+			best = other
+	return best
+
+
+func _last_extinct_near(r: int) -> int:
+	var best := -1
+	var best_year := -INF
+	for id in species:
+		var sp: Dictionary = species[id]
+		if sp.alive or not _rt.has(id):
+			continue
+		var lr: int = _rt[id].last_region
+		if lr < 0:
+			continue
+		var dx := absi((lr % Ecosystem.RW) - (r % Ecosystem.RW))
+		dx = mini(dx, Ecosystem.RW - dx)
+		@warning_ignore("integer_division")
+		var dy := absi(lr / Ecosystem.RW - r / Ecosystem.RW)
+		if dx <= 6 and dy <= 6 and sp.extinct_year > best_year:
+			best_year = sp.extinct_year
+			best = id
+	return best
+
+
+func _revive(id: int, r: int, rrad: int) -> int:
+	var idx: int = _eco.alloc_index()
+	if idx < 0:
+		return -1
+	var sp: Dictionary = species[id]
+	sp.alive = true
+	sp.extinct_year = NAN
+	_rt[id].idx = idx
+	_eco.t_alive[idx] = 1
+	_eco.t_id[idx] = id
+	_alive.append(id)
+	_refresh_species(id)
+	_eco.place_species(idx, r, rrad, 0.2)
+	return idx
+
+
+func _carve_crater(cell: Vector2i, radius: int) -> void:
+	var rc := mini(radius, 24)
+	for dy in range(-rc, rc + 1):
+		var y := cell.y + dy
+		if y < 0 or y >= HEIGHT:
+			continue
+		for dx in range(-rc, rc + 1):
+			var d2 := float(dx * dx + dy * dy) / float(rc * rc)
+			if d2 > 1.0:
+				continue
+			var i := y * WIDTH + posmod(cell.x + dx, WIDTH)
+			var e := elevation[i] - 0.25 * (1.0 - d2) + (0.15 if d2 > 0.7 else 0.0) * (1.0 - d2)
+			# Le cratère ne transforme pas les terres en mer (masque terre/mer statique).
+			elevation[i] = maxf(e, 0.01) if elevation[i] >= 0.0 else minf(e, -0.01)
+
+
+func _action_label(type: String, target: int) -> String:
+	var who: String = species[target].name if target >= 0 and species.has(target) else ""
+	match type:
+		"meteor": return "un météore fend le ciel"
+		"extinct": return "anéantissement des %s" % who if who != "" else "anéantissement"
+		"save": return "protection des %s" % who if who != "" else "protection"
+		"bless": return "bénédiction de la terre"
+		"plague": return "fléau sur les %s" % who if who != "" else "fléau"
+		"uplift": return "élévation des %s" % who if who != "" else "élévation"
+		"flood": return "déluge"
+		"ice_age": return "âge de glace"
+		"spawn_species": return "création d'une espèce"
+	return type
