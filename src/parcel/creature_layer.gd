@@ -109,7 +109,7 @@ func _process(delta: float) -> void:
 		total += g.pos.size()
 	if total >= THREAD_MIN_AGENTS and _list.size() > 1:
 		var task := WorkerThreadPool.add_group_task(_step_group, _list.size(), -1, true, "parcel creatures")
-		WorkerThreadPool.wait_group_task_completion(task)
+		WorkerThreadPool.wait_for_group_task_completion(task)
 	else:
 		for i in _list.size():
 			_step_group(i)
