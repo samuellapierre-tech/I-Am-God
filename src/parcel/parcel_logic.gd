@@ -160,6 +160,79 @@ static func swarm_centers(cell: Vector2i, count: int, water_pts: PackedVector2Ar
 	return out
 
 
+# --- Temps qui passe (cosmétique : horloge propre à la vue, indépendante de la simulation) ---
+
+## Durées réelles (s) d'une journée et d'une année de la parcelle.
+const DAY_LENGTH := 150.0
+const YEAR_LENGTH := 600.0
+const WEATHERS := ["clear", "rain", "storm", "fog", "snow", "ash"]
+
+
+## Lumière du jour, 0 (nuit) .. 1 (plein jour). day_t : 0 minuit, 0,25 aube, 0,5 midi, 0,75 crépuscule.
+static func daylight(day_t: float) -> float:
+	var sun := sin((day_t - 0.25) * TAU)
+	return smoothstep(-0.15, 0.25, sun)
+
+
+## Teinte de la lumière ambiante : bleu nuit, orangé à l'aube et au crépuscule, blanc à midi ;
+## grisée par temps couvert (overcast 0..1).
+static func sky_color(day_t: float, overcast: float) -> Color:
+	var sun := sin((day_t - 0.25) * TAU)
+	var light := daylight(day_t)
+	var c := Color(0.28, 0.34, 0.58).lerp(Color.WHITE, light)
+	var golden := (1.0 - smoothstep(0.0, 0.35, absf(sun))) * light
+	c = c.lerp(Color(1.0, 0.78, 0.6), golden * 0.55)
+	var grey := c.get_luminance()
+	c = c.lerp(Color(grey, grey, grey * 1.05), overcast * 0.5)
+	return c.darkened(overcast * 0.22)
+
+
+## Écart saisonnier de température (°C) : fort en zone tempérée, faible sous les tropiques.
+## year_t : 0 plein hiver, 0,5 plein été.
+static func season_offset_c(year_t: float, base_c: float) -> float:
+	var amp := lerpf(9.0, 2.0, smoothstep(18.0, 28.0, base_c))
+	return -amp * cos(year_t * TAU)
+
+
+## Couverture neigeuse 0..1 selon la température ressentie et l'humidité (pas de neige au désert).
+static func snow_cover(effective_c: float, water: float) -> float:
+	return smoothstep(2.0, -6.0, effective_c) * clampf(0.2 + water * 1.6, 0.0, 1.0)
+
+
+## Feuillage d'automne 0..1 (zones tempérées, après l'été).
+static func autumn(year_t: float, base_c: float) -> float:
+	var temperate := smoothstep(-2.0, 4.0, base_c) * (1.0 - smoothstep(20.0, 26.0, base_c))
+	return smoothstep(0.58, 0.7, year_t) * (1.0 - smoothstep(0.86, 0.96, year_t)) * temperate
+
+
+## Météo suivante, tirée selon le climat local. r : aléa 0..1 (déterministe côté appelant).
+static func pick_weather(r: float, water: float, effective_c: float, land_use: String) -> String:
+	var w := {clear = 3.0, rain = 0.0, storm = 0.0, fog = water * 1.2, snow = 0.0, ash = 0.0}
+	if land_use == "crater":
+		w.ash = 6.0
+	if effective_c < 0.0:
+		w.snow = water * 4.0
+	else:
+		w.rain = water * 3.0
+		if water > 0.55 and effective_c > 14.0:
+			w.storm = 1.2
+	var total := 0.0
+	for k in WEATHERS:
+		total += w[k]
+	var x := clampf(r, 0.0, 0.9999) * total
+	for k in WEATHERS:
+		x -= w[k]
+		if x < 0.0:
+			return k
+	return "clear"
+
+
+## Feu de camp des premiers sapients (usage "camp", sans structures) : position stable.
+static func campfire_pos(cell: Vector2i) -> Vector2:
+	var h := hash([cell, "campfire"])
+	return PARCEL_SIZE * Vector2(0.35 + float(h % 100) / 500.0, 0.4 + float((h >> 8) % 100) / 500.0)
+
+
 # --- Assets ---
 
 ## Nom de fichier normalisé : minuscules, sans accents, espaces et tirets -> « _ ».

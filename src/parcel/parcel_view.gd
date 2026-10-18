@@ -17,6 +17,8 @@ const PowerFx := preload("res://src/parcel/power_fx.gd")
 const ParcelCamera := preload("res://src/parcel/parcel_camera.gd")
 const TrailLayer := preload("res://src/parcel/trail_layer.gd")
 const AmbientLayer := preload("res://src/parcel/ambient_layer.gd")
+const Atmosphere := preload("res://src/parcel/atmosphere.gd")
+const NightLights := preload("res://src/parcel/night_lights.gd")
 
 ## Rayon visuel (unités monde) d'un pouvoir : base + par cellule de rayon.
 const FX_BASE_RADIUS := 90.0
@@ -30,7 +32,12 @@ var _cell := Vector2i(-999, -999)
 @onready var structures: StructureLayer = $Structures
 @onready var creatures: CreatureLayer = $Creatures
 @onready var ambient: AmbientLayer = $Ambient
-@onready var fx: PowerFx = $Fx
+@onready var fx: PowerFx = $Sky/Fx
+@onready var atmosphere: Atmosphere = $Sky/Atmosphere
+@onready var lights: NightLights = $Sky/NightLights
+## Lumière ambiante (jour, aube, nuit, temps couvert) : assombrit tout le calque du monde ;
+## lumières, météo et effets sont dans le calque "Sky", non assombri.
+@onready var daylight: CanvasModulate = $Daylight
 @onready var camera: ParcelCamera = $Camera
 
 
@@ -40,6 +47,7 @@ func _ready() -> void:
 	creatures.trail = trail
 	GameState.parcel_updated.connect(_on_parcel_updated)
 	GameState.divine_action_applied.connect(_on_divine_action)
+	atmosphere.lightning_struck.connect(func(_at: Vector2) -> void: camera.shake(5.0))
 	_on_parcel_updated()
 
 
@@ -58,10 +66,23 @@ func _on_parcel_updated() -> void:
 	creatures.spots = structures.spots()
 	creatures.apply_parcel(p)
 	trail.set_ground(ParcelLogic.ground_kind(p.land_use, p.biome))
+	atmosphere.apply_parcel(p)
+	lights.land_use = p.land_use
+	lights.campfire = ParcelLogic.campfire_pos(p.cell)
 	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, PackedVector2Array()))
 
 
 func _process(_delta: float) -> void:
+	# Le temps qui passe : lumière, saisons, sommeil des animaux, lumières de la nuit.
+	var night := 1.0 - atmosphere.daylight
+	daylight.color = atmosphere.sky
+	terrain.set_season(atmosphere.snow_cover, atmosphere.autumn)
+	ambient.set_night(night)
+	creatures.night = night
+	lights.intensity = clampf(night + (1.0 - atmosphere.sky.v) * 0.3, 0.0, 1.0)
+	lights.sources = structures.light_sources()
+	lights.roads = structures.road_centers()
+
 	var powers := _powers()
 	var power := String(powers.get("power")) if powers != null and "power" in powers else ""
 	fx.preview_power = power
@@ -84,6 +105,7 @@ func _on_divine_action(action: Dictionary, _consequences: Array) -> void:
 	else:
 		fx.spawn(power, rect.get_center(), _fx_radius(radius) * 2.0)
 	if power == "meteor":
+		atmosphere.meteor_impact()
 		camera.shake(28.0)
 	elif power in ["flood", "ice_age", "extinct"]:
 		camera.shake(8.0)

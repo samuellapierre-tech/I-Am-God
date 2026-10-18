@@ -18,6 +18,9 @@ uniform float vegetation : hint_range(0.0, 1.0) = 0.5;
 uniform float water : hint_range(0.0, 1.0) = 0.3;
 uniform float temperature_c = 20.0;
 uniform float tech : hint_range(0.0, 1.0) = 0.0;
+// Saisons (horloge de la vue) : neige au sol, feuillage d'automne.
+uniform float snow_cover : hint_range(0.0, 1.0) = 0.0;
+uniform float autumn : hint_range(0.0, 1.0) = 0.0;
 
 varying vec2 world_pos;
 
@@ -141,6 +144,11 @@ vec3 tree_color(int kind) {
 	return vec3(0.15, 0.33, 0.12);
 }
 
+// Feuillus : rougissent à l'automne (pas les conifères ni la forêt tropicale).
+float deciduous(int kind) {
+	return (kind == TAIGA || kind == TUNDRA || kind == SNOW || kind == LUSH) ? 0.0 : 1.0;
+}
+
 bool is_liquid(int kind) {
 	return kind == WATER;
 }
@@ -186,14 +194,17 @@ void fragment() {
 	float tree = smoothstep(thr, thr + 0.05, canopy);
 	float shadow = smoothstep(thr, thr + 0.05, fbm((sp + vec2(-7.0, -9.0)) * 0.021 + 5.0)) * (1.0 - tree);
 	vec3 leaves = mix(tree_color(kind_a), tree_color(kind_b), t);
+	float fall = autumn * mix(deciduous(kind_a), deciduous(kind_b), t);
+	vec3 fall_col = mix(vec3(0.85, 0.45, 0.1), vec3(0.7, 0.18, 0.08), vnoise(sp * 0.03 + 3.0));
+	leaves = mix(leaves, fall_col, fall * smoothstep(0.3, 0.6, vnoise(sp * 0.015 + 9.0) + autumn * 0.4));
 	leaves *= 0.8 + 0.6 * clamp((canopy - thr) * 5.0, 0.0, 1.0);
 	col = mix(col, col * 0.6, shadow * 0.7 * step(0.001, density));
 	col = mix(col, leaves, tree * step(0.001, density));
 
-	// Neige saisonnière / gel quand il fait froid ; mares gelées.
-	float snow = smoothstep(3.0, -8.0, temperature_c) * (1.0 - liquid);
+	// Neige saisonnière (sol puis cimes) ; mares gelées.
+	float snow = snow_cover * (1.0 - liquid);
 	col = mix(col, vec3(0.92, 0.95, 0.99) - 0.06 * n2, snow * smoothstep(0.25, 0.6, n1 + snow * 0.5));
-	col = mix(col, vec3(0.75, 0.86, 0.95), pond * smoothstep(0.0, -5.0, temperature_c));
+	col = mix(col, vec3(0.75, 0.86, 0.95), pond * smoothstep(0.4, 0.8, snow_cover));
 
 	// Ombres de nuages qui dérivent.
 	float cloud = fbm(sp * 0.0012 + TIME * vec2(0.012, 0.005));

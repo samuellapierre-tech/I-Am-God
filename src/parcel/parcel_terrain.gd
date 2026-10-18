@@ -53,6 +53,13 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 	_push()
 
 
+## Saisons (Atmosphere) : neige au sol et feuillage d'automne.
+func set_season(snow_cover: float, autumn: float) -> void:
+	if _mat:
+		_mat.set_shader_parameter("snow_cover", snow_cover)
+		_mat.set_shader_parameter("autumn", autumn)
+
+
 func _process(delta: float) -> void:
 	_blend = minf(1.0, _blend + delta / TRANSITION_TIME)
 	var k := 1.0 - exp(-delta / SMOOTHING)

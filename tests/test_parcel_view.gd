@@ -279,3 +279,43 @@ func test_ambient_and_states() -> String:
 		if err != "":
 			return err
 	return ""
+
+
+func test_day_and_seasons() -> String:
+	if ParcelLogic.daylight(0.5) < 0.95 or ParcelLogic.daylight(0.0) > 0.05:
+		return "midi doit être clair, minuit sombre"
+	var night := ParcelLogic.sky_color(0.0, 0.0)
+	if night.b <= night.r or night.v > 0.7:
+		return "la nuit doit être sombre et bleutée : %s" % str(night)
+	if not ParcelLogic.sky_color(0.5, 0.0).is_equal_approx(Color.WHITE):
+		return "midi sans nuages : lumière blanche"
+	if ParcelLogic.season_offset_c(0.0, 10.0) >= 0.0 or ParcelLogic.season_offset_c(0.5, 10.0) <= 0.0:
+		return "hiver plus froid, été plus chaud"
+	if absf(ParcelLogic.season_offset_c(0.0, 30.0)) > absf(ParcelLogic.season_offset_c(0.0, 10.0)):
+		return "saisons plus marquées en zone tempérée que sous les tropiques"
+	if ParcelLogic.snow_cover(-10.0, 0.6) < 0.5 or ParcelLogic.snow_cover(10.0, 0.6) > 0.0:
+		return "neige seulement par grand froid"
+	if ParcelLogic.autumn(0.75, 12.0) < 0.5 or ParcelLogic.autumn(0.25, 12.0) > 0.0 or ParcelLogic.autumn(0.75, 30.0) > 0.1:
+		return "feuilles rousses en automne, en zone tempérée seulement"
+	return ""
+
+
+func test_weather_choice() -> String:
+	var seen := {}
+	for i in 100:
+		var r := i / 100.0
+		if ParcelLogic.pick_weather(r, 0.0, 30.0, "wild") in ["rain", "storm", "snow"]:
+			return "pas de précipitations dans un désert sec"
+		seen[ParcelLogic.pick_weather(r, 0.9, 20.0, "wild")] = true
+		if ParcelLogic.pick_weather(r, 0.9, -10.0, "wild") in ["rain", "storm"]:
+			return "pas de pluie par -10 °C"
+	for w in ["clear", "rain", "storm", "fog"]:
+		if not seen.has(w):
+			return "climat chaud et humide : météo « %s » jamais tirée" % w
+	var ash := 0
+	for i in 100:
+		if ParcelLogic.pick_weather(i / 100.0, 0.3, 15.0, "crater") == "ash":
+			ash += 1
+	if ash < 40:
+		return "un cratère doit surtout avoir des cendres (%d %%)" % ash
+	return ""

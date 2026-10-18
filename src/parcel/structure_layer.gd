@@ -57,6 +57,26 @@ func spots() -> PackedVector2Array:
 	return out
 
 
+## Sources de lumière nocturne : [{pos, kind, size, alpha}] (alpha = fondu d'apparition).
+func light_sources() -> Array:
+	var out := []
+	for item in _items.values():
+		var s: Dictionary = item.data
+		var kind := String(s.get("kind", ""))
+		if kind in ["hut", "building", "tower"]:
+			out.append({pos = _center(s), kind = kind, size = float(s.get("size", 0.05)) * parcel_size.y, alpha = item.alpha})
+	return out
+
+
+## Croisements des routes (centres des structures "road").
+func road_centers() -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for item in _items.values():
+		if item.present and String(item.data.get("kind", "")) == "road":
+			out.append(_center(item.data))
+	return out
+
+
 func _process(delta: float) -> void:
 	_time += delta
 	if not _animating and not _land_use in NEON_USES:
