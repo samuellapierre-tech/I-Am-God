@@ -331,6 +331,19 @@ func get_alive_species() -> Array[int]:
 	return _alive.duplicate()
 
 
+## Niches de la région écologique (RS x RS cellules) contenant `cell`, en lecture seule :
+## [{species_id, density}] pour chaque espèce vivante qui y est établie (≤ Ecosystem.K).
+## Utilisé par ParcelSim pour peupler la parcelle au-delà de la seule espèce dominante.
+func region_niches(cell: Vector2i) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var base: int = _eco.region_of_cell(cell) * Ecosystem.K
+	for k in Ecosystem.K:
+		var idx: int = _eco.cur_sp[base + k]
+		if idx >= 0 and _eco.t_alive[idx] == 1:
+			out.append({species_id = int(_eco.t_id[idx]), density = float(_eco.cur_pop[base + k])})
+	return out
+
+
 ## Résumé de cette timeline depuis `origin` (utilisé par project_future).
 func summarize_since(origin: RefCounted, events: Array[Dictionary], era_reached: int) -> Dictionary:
 	var dom := get_dominant_species()
