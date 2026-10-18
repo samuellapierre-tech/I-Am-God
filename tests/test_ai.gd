@@ -805,7 +805,7 @@ func test_parcelle_prompt_llm() -> String:
 func test_parcelle_config() -> String:
 	_cleanup()
 	var cfg := AiConfig.new(TEST_CFG)
-	if cfg.get_value("narrator", "parcel_enabled") != true or cfg.get_value("narrator", "parcel_min_interval_sec") != 15.0:
+	if cfg.get_value("narrator", "parcel_enabled") != true or cfg.get_value("narrator", "parcel_min_interval_sec") != 5.0:
 		return "défauts de parcelle inattendus"
 	cfg.set_value("narrator", "parcel_min_importance", 3.0)
 	cfg.set_value("narrator", "parcel_heat_drift_c", -2)
