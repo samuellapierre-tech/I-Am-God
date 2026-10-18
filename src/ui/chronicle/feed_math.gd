@@ -35,6 +35,21 @@ static func is_at_bottom(value: float, max_value: float, page: float, tolerance:
 	return value + page >= max_value - tolerance
 
 
+## Vrai si une ligne commençant à `line_top` (coordonnées du contenu) dépasse en haut de la zone
+## visible qui commence à `scroll` : elle serait coupée sous l'en-tête.
+static func is_clipped(line_top: float, scroll: float, tolerance: float = 1.0) -> bool:
+	return line_top < scroll - tolerance
+
+
+## Ordonnée de l'en-tête (nom du narrateur) : en haut du panneau au survol, sinon juste au-dessus de
+## la première ligne visible (`first_line_top`, INF s'il n'y en a pas), jamais au-dessus du panneau.
+static func header_y(panel_top: float, first_line_top: float, header_height: float, hovered: bool,
+		gap: float = 4.0) -> float:
+	if hovered or not is_finite(first_line_top):
+		return panel_top
+	return maxf(panel_top, first_line_top - header_height - gap)
+
+
 ## Ligne à afficher : texte nettoyé, espaces multiples réduits ; "" si rien à dire.
 static func clean_line(text: String) -> String:
 	var t := text.strip_edges().replace("\n", " ").replace("\t", " ")

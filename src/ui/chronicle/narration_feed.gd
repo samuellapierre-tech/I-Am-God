@@ -5,18 +5,21 @@ extends CanvasLayer
 ## En tête : le nom du narrateur (DilemmaMath.speaker_name : NARRATOR_NAME de ai_config.gd, sinon
 ## le nom par défaut), visible dès qu'il a parlé.
 ##
-## Placé dans la colonne droite, entre le panneau « Espèces vivantes » du HUD (y < 540) et ses
-## infos de région (y > 860) : ne masque ni le centre de la parcelle ni les statistiques (à gauche).
+## Placé dans le bas de la colonne droite, sous le tiroir « Espèces vivantes » du HUD (y < 540) :
+## ne masque ni le centre de la parcelle ni les statistiques (à gauche).
+## Hors survol, une ligne que le défilement rogne par le haut est masquée : le texte ne passe jamais
+## sous l'en-tête.
 ## Les clics traversent le fil (MOUSE_FILTER_PASS) : seule la molette lui est réservée.
 
 const FeedMath := preload("res://src/ui/chronicle/feed_math.gd")
 const StatsMath := preload("res://src/ui/stats/stats_math.gd")
 const DilemmaMath := preload("res://src/ui/dilemma/dilemma_math.gd")
 
-const PANEL_LEFT := -312.0
+## Ancré en bas à droite (marges depuis le coin bas-droit).
+const PANEL_LEFT := -352.0
 const PANEL_RIGHT := -12.0
-const PANEL_TOP := 552.0
-const PANEL_BOTTOM := 848.0
+const PANEL_TOP := -524.0
+const PANEL_BOTTOM := -84.0
 const TEXT_SIZE := 18
 const YEAR_SIZE := 13
 ## Durée (s) pendant laquelle PageUp / PageDown laissent l'historique affiché.
@@ -24,6 +27,7 @@ const PEEK_DURATION := 4.0
 
 var _panel: PanelContainer
 var _header: HBoxContainer
+var _header_placed := false
 var _speaker_label: Label
 var _scroll: ScrollContainer
 var _lines: VBoxContainer
@@ -83,6 +87,8 @@ func _build() -> void:
 	_panel.mouse_filter = Control.MOUSE_FILTER_PASS
 	_panel.anchor_left = 1.0
 	_panel.anchor_right = 1.0
+	_panel.anchor_top = 1.0
+	_panel.anchor_bottom = 1.0
 	_panel.offset_left = PANEL_LEFT
 	_panel.offset_right = PANEL_RIGHT
 	_panel.offset_top = PANEL_TOP
@@ -99,10 +105,17 @@ func _build() -> void:
 
 	var box := VBoxContainer.new()
 	box.mouse_filter = Control.MOUSE_FILTER_PASS
+	box.add_theme_constant_override("separation", 6)
 	_panel.add_child(box)
+	# L'en-tête flotte hors du conteneur : au repos il se pose juste au-dessus des lignes visibles
+	# (collées en bas), au survol il remonte en haut du panneau. Une cale lui réserve la place.
+	var header_slot := Control.new()
+	header_slot.custom_minimum_size.y = 26
+	header_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(header_slot)
 	_header = HBoxContainer.new()
 	_header.modulate.a = 0.0
-	box.add_child(_header)
+	root.add_child(_header)
 	_speaker_label = Label.new()
 	_speaker_label.text = DilemmaMath.speaker_name(null, DilemmaMath.load_config_constants())
 	_speaker_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -157,16 +170,35 @@ func _process(delta: float) -> void:
 		var bar := _scroll.get_v_scroll_bar()
 		bar.value = bar.max_value
 	# Estompage, de la plus récente (rang 0) à la plus ancienne.
+	var first_line_top := INF
 	var now := _now()
 	var count := _lines.get_child_count()
 	for rank in count:
 		var entry := _lines.get_child(count - 1 - rank) as Control
 		var target := FeedMath.line_alpha(now - float(entry.get_meta("born", now)), rank, _hovered)
+		if not _hovered and FeedMath.is_clipped(entry.position.y, _scroll.scroll_vertical):
+			entry.modulate.a = 0.0  # rognée par le haut : jamais à moitié sous l'en-tête
+			continue
 		# Apparition en fondu rapide, estompage doux.
 		var speed := 4.0 if target > entry.modulate.a else 1.5
 		entry.modulate.a = move_toward(entry.modulate.a, target, delta * speed)
+		if entry.modulate.a > 0.02:
+			first_line_top = minf(first_line_top, entry.global_position.y)
 		if not _hovered and rank >= FeedMath.VISIBLE_LINES and entry.modulate.a <= 0.0:
 			break  # les plus anciennes sont déjà invisibles
+	_place_header(delta, first_line_top)
+
+
+func _place_header(delta: float, first_line_top: float) -> void:
+	var inner := _panel.get_global_rect().grow(-10.0)
+	_header.size = Vector2(inner.size.x, _header.get_combined_minimum_size().y)
+	_header.global_position.x = inner.position.x
+	var y := FeedMath.header_y(inner.position.y, first_line_top, _header.size.y, _hovered)
+	if not _header_placed:
+		_header_placed = true
+		_header.global_position.y = y
+	else:
+		_header.global_position.y = move_toward(_header.global_position.y, y, delta * 900.0)
 
 
 func _unhandled_key_input(event: InputEvent) -> void:

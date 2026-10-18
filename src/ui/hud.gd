@@ -1,9 +1,13 @@
 extends CanvasLayer
-## Interface divine : année et ère, vitesse du temps, barre de pouvoirs,
-## panneau des espèces (choix de la cible), chronique des événements et boîte du narrateur.
+## Interface divine, disposition sobre : la parcelle et ses créatures occupent le centre.
+## - en haut, au centre : fine barre (année, ère, vitesse du temps, tiroirs) ;
+## - en bas, au centre : barre des pouvoirs compacte (+ indication flottante quand un pouvoir est armé) ;
+## - tiroirs fermés par défaut : « Espèces vivantes » du monde (touche E, choix de la cible) à droite,
+##   « Chronique » du monde (touche C) en bas à gauche.
+## Ailleurs, et hors de ce fichier : statistiques de la parcelle à gauche (S), fil d'Ézéchiel à droite,
+## dilemmes au centre-bas. La narration n'est affichée que par le fil (src/ui/chronicle/).
 ## Construite en code pour rester lisible et sans dépendance à des ressources externes.
 ## L'état joueur (pouvoir, rayon, cible) vit dans src/ui/parcel_powers.gd : voir bind_map().
-## Le jeu ne montre que la parcelle suivie : les pouvoirs la visent.
 
 const MapMath := preload("res://src/map/map_math.gd")
 const Powers := preload("res://src/map/divine_powers.gd")
@@ -11,7 +15,10 @@ const Powers := preload("res://src/map/divine_powers.gd")
 ## Multiplicateurs de vitesse x1..x5 (appliqués à MapMath.base_years_per_second()).
 const SPEEDS := [1.0, 2.0, 3.0, 4.0, 5.0]
 const MAX_LOG_LINES := 200
-const NARRATION_DURATION := 14.0
+const SPECIES_KEY := KEY_E
+const CHRONICLE_KEY := KEY_C
+const GOLD := Color(1.0, 0.85, 0.5)
+const DIM := Color(0.62, 0.66, 0.78)
 
 ## Le HUD demande une narration au Narrateur lors des grands moments (changement d'ère, action divine).
 ## Désactivé par défaut : le Narrateur écoute déjà GameState et raconte ces moments lui-même.
@@ -26,18 +33,19 @@ var _era_label: Label
 var _rate_label: Label
 var _speed_buttons: Array[Button] = []
 var _power_buttons: Array[Button] = []
-var _radius_label: Label
-var _target_label: Label
+var _hint_panel: PanelContainer
+var _hint_label: Label
+var _species_drawer: PanelContainer
+var _species_toggle: Button
 var _species_list: ItemList
 var _species_ids: Array[int] = []
 var _species_signature := ""
 var _species_timer := 0.0
+var _target_button: Button
+var _chronicle_drawer: PanelContainer
+var _chronicle_toggle: Button
 var _log: RichTextLabel
 var _log_lines := 0
-var _narration_panel: PanelContainer
-var _narration_label: RichTextLabel
-var _narration_timer := 0.0
-var _info_label: Label
 var _swatches := {}
 var _syncing := false
 
@@ -48,7 +56,6 @@ func _ready() -> void:
 	GameState.event_occurred.connect(_on_event)
 	GameState.era_changed.connect(_on_era_changed)
 	GameState.divine_action_applied.connect(_on_divine_action)
-	Narrator.narration_ready.connect(_on_narration)
 	if GameState.sim != null:
 		_era_label.text = GameState.sim.current_era()
 	_set_speed(1)
@@ -60,7 +67,6 @@ func _ready() -> void:
 func bind_map(world_map: Node) -> void:
 	map = world_map
 	map.state_changed.connect(_sync_from_map)
-	map.region_hovered.connect(_on_region_hovered)
 	_sync_from_map()
 
 
@@ -73,14 +79,11 @@ func _process(delta: float) -> void:
 		GameState.years_per_second = MapMath.base_years_per_second(sim.ideal_step_years()) * SPEEDS[speed_level - 1]
 	_rate_label.text = "%s ans/s" % MapMath.group_thousands(int(GameState.years_per_second)) \
 			if speed_level > 0 else "Temps suspendu"
+	# La liste mondiale n'est tenue à jour que tiroir ouvert.
 	_species_timer += delta
-	if _species_timer >= 1.0:
+	if _species_drawer.visible and _species_timer >= 1.0:
 		_species_timer = 0.0
 		_refresh_species(false)
-	if _narration_timer > 0.0:
-		_narration_timer -= delta
-		_narration_panel.modulate.a = clampf(_narration_timer / 1.5, 0.0, 1.0)
-		_narration_panel.visible = _narration_timer > 0.0
 
 
 # --- Raccourcis clavier ---
@@ -103,7 +106,15 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		KEY_BRACKETRIGHT:
 			if map: map.set_radius(map.radius + 1)
 		KEY_ESCAPE:
-			if map: map.set_power("")
+			if _species_drawer.visible or _chronicle_drawer.visible:
+				_set_drawer(_species_drawer, _species_toggle, false)
+				_set_drawer(_chronicle_drawer, _chronicle_toggle, false)
+			elif map:
+				map.set_power("")
+		SPECIES_KEY:
+			_set_drawer(_species_drawer, _species_toggle, not _species_drawer.visible)
+		CHRONICLE_KEY:
+			_set_drawer(_chronicle_drawer, _chronicle_toggle, not _chronicle_drawer.visible)
 		_:
 			handled = false
 			for p in Powers.LIST:
@@ -123,143 +134,150 @@ func _build() -> void:
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.theme = _make_theme()
 	add_child(root)
+	_build_top_bar(root)
+	_build_power_bar(root)
+	_build_species_drawer(root)
+	_build_chronicle_drawer(root)
 
-	# Barre du haut : année, ère, vitesse.
+
+## Fine barre du haut, centrée, à la largeur de son contenu.
+func _build_top_bar(root: Control) -> void:
 	var top := _panel(root)
-	_place(top, Vector4(0, 0, 1, 0), Vector4(12, 12, -12, 88))
-	var top_row := HBoxContainer.new()
-	top_row.add_theme_constant_override("separation", 18)
-	top.add_child(top_row)
+	top.theme_type_variation = &"CompactPanel"
+	_place(top, Vector4(0.5, 0, 0.5, 0), Vector4(0, 8, 0, 8))
+	top.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	top.add_child(row)
 
-	var time_box := VBoxContainer.new()
-	time_box.add_theme_constant_override("separation", -4)
-	top_row.add_child(time_box)
 	_year_label = Label.new()
-	_year_label.add_theme_font_size_override("font_size", 32)
+	_year_label.add_theme_font_size_override("font_size", 26)
 	_year_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.6))
-	_year_label.custom_minimum_size.x = 320
-	time_box.add_child(_year_label)
-	var era_row := HBoxContainer.new()
-	time_box.add_child(era_row)
+	_year_label.custom_minimum_size.x = 220
+	_year_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_year_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(_year_label)
+	var era_box := VBoxContainer.new()
+	era_box.add_theme_constant_override("separation", -5)
+	era_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	era_box.custom_minimum_size.x = 150
+	row.add_child(era_box)
 	_era_label = Label.new()
-	_era_label.add_theme_font_size_override("font_size", 18)
-	era_row.add_child(_era_label)
+	_era_label.add_theme_font_size_override("font_size", 17)
+	era_box.add_child(_era_label)
 	_rate_label = Label.new()
-	_rate_label.add_theme_color_override("font_color", Color(0.6, 0.65, 0.75))
-	_rate_label.add_theme_font_size_override("font_size", 14)
-	era_row.add_child(_rate_label)
+	_rate_label.add_theme_color_override("font_color", DIM)
+	_rate_label.add_theme_font_size_override("font_size", 13)
+	era_box.add_child(_rate_label)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top_row.add_child(spacer)
-
+	row.add_child(VSeparator.new())
 	var speed_box := HBoxContainer.new()
-	top_row.add_child(speed_box)
+	speed_box.add_theme_constant_override("separation", 3)
+	row.add_child(speed_box)
 	var speed_group := ButtonGroup.new()
 	for i in SPEEDS.size() + 1:
 		var b := _toggle_button("Pause" if i == 0 else "x%d" % i, speed_group)
+		b.custom_minimum_size = Vector2(40 if i > 0 else 62, 36)
 		b.tooltip_text = "Espace : pause / reprise — +/- : vitesse"
 		b.pressed.connect(_set_speed.bind(i))
 		speed_box.add_child(b)
 		_speed_buttons.append(b)
 
-	# Boîte du narrateur, sous la barre du haut.
-	_narration_panel = _panel(root)
-	_place(_narration_panel, Vector4(0.5, 0, 0.5, 0), Vector4(-380, 100, 380, 140))
-	_narration_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_narration_panel.visible = false
-	_narration_label = RichTextLabel.new()
-	_narration_label.bbcode_enabled = true
-	_narration_label.fit_content = true
-	_narration_label.scroll_active = false
-	_narration_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_narration_label.add_theme_font_size_override("italics_font_size", 19)
-	_narration_label.add_theme_font_size_override("normal_font_size", 19)
-	_narration_panel.add_child(_narration_label)
+	row.add_child(VSeparator.new())
+	_species_toggle = _drawer_button("Espèces  E", "Espèces vivantes du monde et cible des pouvoirs (E)")
+	_species_toggle.toggled.connect(func(on: bool) -> void: _set_drawer(_species_drawer, _species_toggle, on))
+	row.add_child(_species_toggle)
+	_chronicle_toggle = _drawer_button("Chronique  C", "Chronique des événements du monde (C)")
+	_chronicle_toggle.toggled.connect(func(on: bool) -> void: _set_drawer(_chronicle_drawer, _chronicle_toggle, on))
+	row.add_child(_chronicle_toggle)
 
-	# Panneau des espèces (droite).
-	var species_panel := _panel(root)
-	_place(species_panel, Vector4(1, 0, 1, 0), Vector4(-312, 100, -12, 540))
-	var sp_box := VBoxContainer.new()
-	species_panel.add_child(sp_box)
-	sp_box.add_child(_title("Espèces vivantes"))
-	_species_list = ItemList.new()
-	_species_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_species_list.custom_minimum_size = Vector2(0, 300)
-	_species_list.focus_mode = Control.FOCUS_NONE
-	_species_list.item_selected.connect(_on_species_selected)
-	sp_box.add_child(_species_list)
-	_target_label = Label.new()
-	_target_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_target_label.add_theme_font_size_override("font_size", 13)
-	sp_box.add_child(_target_label)
-	var clear := Button.new()
-	clear.text = "Cible : espèce dominante de la parcelle"
-	clear.focus_mode = Control.FOCUS_NONE
-	clear.tooltip_text = "Sans cible, les pouvoirs visent l'espèce dominante de la parcelle."
-	clear.pressed.connect(_on_clear_target)
-	sp_box.add_child(clear)
 
-	# Chronique (bas gauche).
-	var log_panel := _panel(root)
-	_place(log_panel, Vector4(0, 1, 0, 1), Vector4(12, -420, 492, -140))
-	var log_box := VBoxContainer.new()
-	log_panel.add_child(log_box)
-	log_box.add_child(_title("Chronique"))
-	_log = RichTextLabel.new()
-	_log.bbcode_enabled = true
-	_log.scroll_following = true
-	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_log.add_theme_font_size_override("normal_font_size", 14)
-	_log.meta_clicked.connect(_on_log_meta)
-	log_box.add_child(_log)
-
-	# Barre des pouvoirs (bas).
+## Barre des pouvoirs compacte (une rangée) ; l'indication de rayon ne s'affiche que pouvoir armé.
+func _build_power_bar(root: Control) -> void:
 	var bar := _panel(root)
-	_place(bar, Vector4(0.5, 1, 0.5, 1), Vector4(-540, -128, 540, -12))
-	var bar_box := VBoxContainer.new()
-	bar.add_child(bar_box)
+	bar.theme_type_variation = &"CompactPanel"
+	_place(bar, Vector4(0.5, 1, 0.5, 1), Vector4(0, -8, 0, -8))
+	bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	var power_row := HBoxContainer.new()
-	power_row.add_theme_constant_override("separation", 6)
-	bar_box.add_child(power_row)
+	power_row.add_theme_constant_override("separation", 4)
+	bar.add_child(power_row)
 	var power_group := ButtonGroup.new()
 	power_group.allow_unpress = true
 	for p in Powers.LIST:
 		var b := _toggle_button("%s\n%s" % [OS.get_keycode_string(p.key), p.label], power_group)
-		b.custom_minimum_size = Vector2(108, 56)
-		b.tooltip_text = "%s — %s" % [p.label, p.hint]
+		b.custom_minimum_size = Vector2(92, 50)
+		b.add_theme_font_size_override("font_size", 14)
+		b.tooltip_text = "%s — %s\nTouche %s, puis clic sur la parcelle." % [p.label, p.hint, OS.get_keycode_string(p.key)]
 		b.add_theme_color_override("font_pressed_color", p.color)
 		b.add_theme_color_override("font_hover_pressed_color", p.color.lightened(0.3))
 		b.toggled.connect(_on_power_toggled.bind(p.id))
 		power_row.add_child(b)
 		_power_buttons.append(b)
-	var radius_row := HBoxContainer.new()
-	radius_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	bar_box.add_child(radius_row)
+
+	_hint_panel = _panel(root)
+	_hint_panel.theme_type_variation = &"CompactPanel"
+	_place(_hint_panel, Vector4(0.5, 1, 0.5, 1), Vector4(0, -80, 0, -80))
+	_hint_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_hint_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_hint_panel.visible = false
+	var hint_row := HBoxContainer.new()
+	hint_row.add_theme_constant_override("separation", 8)
+	_hint_panel.add_child(hint_row)
 	var minus := Button.new()
 	minus.text = " − "
 	minus.focus_mode = Control.FOCUS_NONE
+	minus.tooltip_text = "Réduire le rayon ( [ )"
 	minus.pressed.connect(_step_radius.bind(-1))
-	radius_row.add_child(minus)
-	_radius_label = Label.new()
-	_radius_label.custom_minimum_size.x = 420
-	_radius_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	radius_row.add_child(_radius_label)
+	hint_row.add_child(minus)
+	_hint_label = Label.new()
+	_hint_label.add_theme_font_size_override("font_size", 15)
+	_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	hint_row.add_child(_hint_label)
 	var plus := Button.new()
 	plus.text = " + "
 	plus.focus_mode = Control.FOCUS_NONE
+	plus.tooltip_text = "Agrandir le rayon ( ] )"
 	plus.pressed.connect(_step_radius.bind(1))
-	radius_row.add_child(plus)
+	hint_row.add_child(plus)
 
-	# Infos de la parcelle suivie (bas droite).
-	var info_panel := _panel(root)
-	_place(info_panel, Vector4(1, 1, 1, 1), Vector4(-312, -220, -12, -140))
-	info_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_info_label = Label.new()
-	_info_label.add_theme_font_size_override("font_size", 14)
-	_info_label.custom_minimum_size.x = 288
-	info_panel.add_child(_info_label)
+
+## Tiroir « Espèces vivantes » (monde entier) : choix de la cible des pouvoirs. Fermé par défaut.
+func _build_species_drawer(root: Control) -> void:
+	_species_drawer = _panel(root)
+	_place(_species_drawer, Vector4(1, 0, 1, 0), Vector4(-332, 64, -12, 540))
+	_species_drawer.visible = false
+	var box := VBoxContainer.new()
+	_species_drawer.add_child(box)
+	box.add_child(_title("Espèces vivantes — monde"))
+	_species_list = ItemList.new()
+	_species_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_species_list.focus_mode = Control.FOCUS_NONE
+	_species_list.item_selected.connect(_on_species_selected)
+	box.add_child(_species_list)
+	# Un seul élément pour la cible : il l'affiche et, cliqué, revient à l'espèce dominante.
+	_target_button = Button.new()
+	_target_button.focus_mode = Control.FOCUS_NONE
+	_target_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	_target_button.add_theme_font_size_override("font_size", 14)
+	_target_button.pressed.connect(_on_clear_target)
+	box.add_child(_target_button)
+
+
+## Tiroir « Chronique » (journal du monde), en bas à gauche, sous les statistiques. Fermé par défaut.
+func _build_chronicle_drawer(root: Control) -> void:
+	_chronicle_drawer = _panel(root)
+	_place(_chronicle_drawer, Vector4(0, 1, 0, 1), Vector4(12, -416, 512, -84))
+	_chronicle_drawer.visible = false
+	var box := VBoxContainer.new()
+	_chronicle_drawer.add_child(box)
+	box.add_child(_title("Chronique du monde"))
+	_log = RichTextLabel.new()
+	_log.bbcode_enabled = true
+	_log.scroll_following = true
+	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_log.add_theme_font_size_override("normal_font_size", 15)
+	box.add_child(_log)
 
 
 func _make_theme() -> Theme:
@@ -271,10 +289,16 @@ func _make_theme() -> Theme:
 	panel.set_corner_radius_all(8)
 	panel.set_content_margin_all(10)
 	t.set_stylebox("panel", "PanelContainer", panel)
+	var compact := panel.duplicate() as StyleBoxFlat
+	compact.set_content_margin_all(5)
+	compact.content_margin_left = 10
+	compact.content_margin_right = 10
+	t.set_type_variation(&"CompactPanel", &"PanelContainer")
+	t.set_stylebox("panel", &"CompactPanel", compact)
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color(0.12, 0.13, 0.2, 0.9)
 	normal.set_corner_radius_all(6)
-	normal.set_content_margin_all(6)
+	normal.set_content_margin_all(4)
 	var hover := normal.duplicate() as StyleBoxFlat
 	hover.bg_color = Color(0.2, 0.21, 0.32, 0.95)
 	var pressed := normal.duplicate() as StyleBoxFlat
@@ -285,8 +309,10 @@ func _make_theme() -> Theme:
 	t.set_stylebox("hover", "Button", hover)
 	t.set_stylebox("pressed", "Button", pressed)
 	t.set_stylebox("hover_pressed", "Button", pressed)
+	t.set_stylebox("disabled", "Button", normal)
 	t.set_color("font_color", "Label", Color(0.9, 0.9, 0.95))
 	t.set_color("font_color", "Button", Color(0.88, 0.88, 0.95))
+	t.set_color("font_disabled_color", "Button", DIM)
 	t.set_font_size("font_size", "Button", 15)
 	var list_bg := StyleBoxFlat.new()
 	list_bg.bg_color = Color(0, 0, 0, 0.25)
@@ -318,7 +344,7 @@ func _title(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", 17)
-	l.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+	l.add_theme_color_override("font_color", GOLD)
 	return l
 
 
@@ -329,6 +355,26 @@ func _toggle_button(text: String, group: ButtonGroup) -> Button:
 	b.button_group = group
 	b.focus_mode = Control.FOCUS_NONE
 	return b
+
+
+func _drawer_button(text: String, tooltip: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.toggle_mode = true
+	b.focus_mode = Control.FOCUS_NONE
+	b.custom_minimum_size.y = 36
+	b.add_theme_font_size_override("font_size", 14)
+	b.tooltip_text = tooltip
+	return b
+
+
+## Ouvre / ferme un tiroir et garde son bouton de la barre du haut synchronisé.
+func _set_drawer(drawer: Control, toggle: Button, open: bool) -> void:
+	drawer.visible = open
+	toggle.set_pressed_no_signal(open)
+	if open and drawer == _species_drawer:
+		_species_timer = 0.0
+		_refresh_species(true)
 
 
 func _swatch(color: Color) -> Texture2D:
@@ -368,11 +414,16 @@ func _sync_from_map() -> void:
 	for i in _power_buttons.size():
 		_power_buttons[i].set_pressed_no_signal(Powers.LIST[i].id == map.power)
 	var p := Powers.get_power(map.power)
-	if p.is_empty():
-		_radius_label.text = "Choisissez un pouvoir (1-9) puis cliquez sur la parcelle"
-	else:
-		_radius_label.text = "%s — rayon %d  ([ ] ou Maj+molette, Échap pour annuler)" % [p.label, map.radius]
-	_update_target_label()
+	_hint_panel.visible = not p.is_empty()
+	if not p.is_empty():
+		var text := "%s — rayon %d" % [p.label, map.radius]
+		if p.get("needs_species", false):
+			text += " — vise : %s" % _target_name()
+		_hint_label.text = text + "   ([ ] ou Maj+molette, Échap pour annuler)"
+		# Recentre à la largeur du nouveau texte (grow_horizontal = BOTH depuis l'ancre centrale).
+		_hint_panel.offset_left = 0.0
+		_hint_panel.offset_right = 0.0
+	_update_target_button()
 	_syncing = false
 
 
@@ -385,18 +436,25 @@ func _on_power_toggled(on: bool, power_id: String) -> void:
 		map.set_power("")
 
 
-func _update_target_label() -> void:
+func _target_name() -> String:
 	var id: int = map.target_species if map else -1
 	if id < 0:
-		_target_label.text = "Cible : espèce dominante de la parcelle"
-		_species_list.deselect_all()
-		return
+		return "espèce dominante de la parcelle"
 	var info = GameState.sim.species.get(id) if GameState.sim else null
-	var sp_name := str(info.get("name", "#%d" % id)) if info is Dictionary else "#%d" % id
-	_target_label.text = "Cible : %s" % sp_name
+	return str(info.get("name", "#%d" % id)) if info is Dictionary else "#%d" % id
+
+
+func _update_target_button() -> void:
+	var id: int = map.target_species if map else -1
+	_target_button.text = "Cible : %s" % _target_name()
+	_target_button.disabled = id < 0
+	_target_button.tooltip_text = "Cliquer pour revenir à l'espèce dominante de la parcelle." if id >= 0 \
+			else "Choisissez une espèce dans la liste pour la viser ; sinon les pouvoirs visent l'espèce dominante de la parcelle."
 	var idx := _species_ids.find(id)
 	if idx >= 0:
 		_species_list.select(idx)
+	else:
+		_species_list.deselect_all()
 
 
 # --- Espèces ---
@@ -428,7 +486,7 @@ func _refresh_species(force: bool) -> void:
 		var label := str(info.get("name", "Espèce #%d" % rows[i][0]))
 		if info.get("sapient", false):
 			label += "  (sapiente)"
-		label += "\n   pop. %s" % _format_population(float(info.get("population", 0)))
+		label += "   pop. %s" % _format_population(float(info.get("population", 0)))
 		_species_list.set_item_text(i, label)
 		_species_list.set_item_tooltip(i, _traits_text(info))
 	if rows.is_empty() and _species_list.item_count == 0:
@@ -436,7 +494,7 @@ func _refresh_species(force: bool) -> void:
 		_species_list.set_item_disabled(0, true)
 		_species_list.set_item_selectable(0, false)
 	if map:
-		_update_target_label()
+		_update_target_button()
 
 
 func _format_population(p: float) -> String:
@@ -467,38 +525,12 @@ func _on_species_selected(index: int) -> void:
 	map.set_target_species(_species_ids[index])
 
 
-# --- Parcelle suivie ---
-
-func _on_region_hovered(region: Vector2i) -> void:
-	var sim = GameState.sim
-	if sim == null or map == null:
-		return
-	var i: int = region.y * map.grid.x + region.x
-	if i < 0 or i >= sim.elevation.size():
-		return
-	var elev: float = sim.elevation[i]
-	var text := "Parcelle (%d, %d) — %s\n" % [region.x, region.y, "océan" if elev < 0.0 else "terres"]
-	text += "Température %d %%   Tech %d %%\n" % [int(sim.temperature[i] * 100.0), int(sim.tech[i] * 100.0)]
-	var sid: int = sim.dominant_species[i]
-	if sid >= 0:
-		var info = sim.species.get(sid)
-		var sp_name := str(info.get("name", "#%d" % sid)) if info is Dictionary else "#%d" % sid
-		text += "%s (densité %d %%)" % [sp_name, int(sim.population[i] * 100.0)]
-	else:
-		text += "Aucune espèce dominante"
-	_info_label.text = text
-
-
-# --- Chronique et narration ---
+# --- Chronique ---
 
 func _on_event(event: Dictionary) -> void:
 	var summary := str(event.get("summary", event.get("type", "?")))
 	var year := MapMath.format_year(float(event.get("year", GameState.sim.year if GameState.sim else 0.0)))
-	var line := "[color=#8a93a8]%s[/color]  %s" % [year, _escape(summary)]
-	var region = event.get("region")
-	if region is Vector2i:
-		line = "[url=%d,%d]%s[/url]" % [region.x, region.y, line]
-	_add_log_line(line)
+	_add_log_line("[color=#8a93a8]%s[/color]  %s" % [year, _escape(summary)])
 
 
 func _add_log_line(bbcode: String) -> void:
@@ -509,12 +541,6 @@ func _add_log_line(bbcode: String) -> void:
 	while _log_lines > MAX_LOG_LINES:
 		_log.remove_paragraph(0)
 		_log_lines -= 1
-
-
-func _on_log_meta(meta) -> void:
-	var parts := str(meta).split(",")
-	if parts.size() == 2 and map:
-		map.focus_region(Vector2i(int(parts[0]), int(parts[1])))
 
 
 func _on_era_changed(era: String) -> void:
@@ -528,9 +554,7 @@ func _on_era_changed(era: String) -> void:
 func _on_divine_action(action: Dictionary, consequences: Array) -> void:
 	var p := Powers.get_power(str(action.get("type", "")))
 	var label: String = p.get("label", str(action.get("type", "?")))
-	var region: Vector2i = action.get("region", Vector2i.ZERO)
-	_add_log_line("[url=%d,%d][color=#%s]» %s[/color] en (%d, %d)[/url]" % [region.x, region.y,
-			p.get("color", Color.WHITE).to_html(false), label, region.x, region.y])
+	_add_log_line("[color=#%s]» %s[/color] sur la parcelle" % [p.get("color", Color.WHITE).to_html(false), label])
 	if request_narration:
 		var summary := "Dieu déchaîne le pouvoir « %s »." % label
 		if not consequences.is_empty() and consequences[0] is Dictionary:
@@ -538,15 +562,6 @@ func _on_divine_action(action: Dictionary, consequences: Array) -> void:
 		Narrator.narrate({summary = summary, action = action, consequences = consequences,
 				era = GameState.sim.current_era() if GameState.sim else "",
 				year = GameState.sim.year if GameState.sim else 0.0})
-
-
-func _on_narration(text: String) -> void:
-	if text.strip_edges() == "":
-		return
-	_narration_label.text = "[center][i]%s[/i][/center]" % _escape(text)
-	_narration_panel.visible = true
-	_narration_panel.modulate.a = 1.0
-	_narration_timer = NARRATION_DURATION
 
 
 func _escape(s: String) -> String:
