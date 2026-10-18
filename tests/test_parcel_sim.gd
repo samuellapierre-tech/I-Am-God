@@ -271,10 +271,17 @@ func test_sapient_progression_on_accelerated_game() -> String:
 	var events := []
 	var max_level := ParcelSim.DEV_USES.find(parcel.land_use)
 	var saw_people := false
+	var usec := 0
+	var worst := 0
 	guard = 0
 	while sim.era_index() < 6 and guard < 8000:
 		guard += 1
-		events.append_array(parcel.update(_frame(sim)))
+		var world_events := _frame(sim)
+		var t0 := Time.get_ticks_usec()
+		events.append_array(parcel.update(world_events))
+		var spent := Time.get_ticks_usec() - t0
+		usec += spent
+		worst = maxi(worst, spent)
 		if parcel.land_use != uses[-1]:
 			uses.append(parcel.land_use)
 		max_level = maxi(max_level, ParcelSim.DEV_USES.find(parcel.land_use))
@@ -282,6 +289,10 @@ func test_sapient_progression_on_accelerated_game() -> String:
 			if f.role == "sapient":
 				saw_people = true
 	print("  progression (%s) : %s, ère %s" % [str(parcel.cell), " → ".join(uses), sim.current_era()])
+	print("  update() en ère sapiente : %.3f ms en moyenne, %.3f ms au pire (%d appels)" % [
+		usec / 1000.0 / maxi(guard, 1), worst / 1000.0, guard])
+	if usec / 1000.0 / maxi(guard, 1) > 1.0:
+		return "update() trop lent en ère sapiente"
 	if sim.era_index() < 6:
 		return "ère industrielle non atteinte (%s)" % sim.current_era()
 	if not saw_people:
