@@ -94,6 +94,15 @@ const BARREN_OUT := 0.06
 const SWAMP_OXYGEN_IN := 1.15
 const SWAMP_OXYGEN_OUT := 1.05
 const SHALLOW_SEA := -0.35
+## Rivage (prologue) : marnage (en unités d'altitude, autour de WorldSim.sea_level) et marge
+## d'hystérésis ; au-delà, mer ou terre ferme. Mètres par unité d'altitude (affichage).
+const TIDE := 0.006
+const SHORE_MARGIN := 0.003
+const METERS_PER_UNIT := 6000.0
+## Parcelle de départ du prologue : un haut-fond qui émergera (bande d'altitude), tiède, sur une
+## côte d'un continent assez vaste pour porter plus tard des dinosaures.
+const START_ELEVATION := Vector2(0.026, 0.035)
+const START_TEMPERATURE := 0.68
 ## Banquise sur la mer (température de grille, entrée / sortie).
 const SEA_ICE_IN := 0.07
 const SEA_ICE_OUT := 0.1
@@ -177,6 +186,11 @@ var scorch_level := 0.0
 ## [{kind ("species_collapse"|"heat_drift"|"civilization_threat"), species_id, severity 0..1,
 ##   summary, cause_id}]
 var alerts: Array[Dictionary] = []
+## Rivage : "sea" (sous l'eau), "intertidal" (estran, découvert à marée basse) ou "land".
+## Suit le niveau de la mer (WorldSim.sea_level) : la parcelle peut émerger ou être noyée.
+var shore := "land"
+## Profondeur d'eau (m) : positive sous la mer, négative au-dessus (altitude par rapport à la mer).
+var water_depth_m := 0.0
 
 var _fresh := true
 var _ideal := 1.0
@@ -197,6 +211,7 @@ var _flora_local := 0.0
 var _barren := false
 var _swamp := false
 var _sea_iced := false
+var _shore_changed := ""
 ## id -> densité régionale pondérée (niches de la région et de ses voisines).
 var _regional := {}
 ## id -> {fast, slow, peak, trend, hold, present, cause}
@@ -265,6 +280,7 @@ func update(world_events: Array) -> Array[Dictionary]:
 	biome = WorldSim.BIOME_NAMES[world.biome[i]]
 	tech = world.tech[i]
 	_decay(dt)
+	_update_shore(i)
 	_scan_niches()
 	var impact := _read_events(world_events, i, out)
 	_detect_impact(i, impact, out)
@@ -287,6 +303,89 @@ func _relax(cur: float, target: float, dt: float, tau: float) -> float:
 	if _fresh:
 		return target
 	return target + (cur - target) * exp(-dt / tau)
+
+
+## Rivage : mer, estran ou terre selon la profondeur sous le niveau marin (hystérésis).
+func _update_shore(i: int) -> void:
+	var tide := TIDE if world.scenario == WorldSim.SCENARIO_PROLOGUE else 0.0
+	var margin := SHORE_MARGIN if tide > 0.0 else 0.0
+	var depth: float = world.sea_level - world.elevation[i]
+	water_depth_m = depth * METERS_PER_UNIT
+	var old := shore
+	var now := old
+	if _fresh:
+		now = "sea" if depth > tide else ("land" if depth <= -tide else "intertidal")
+		if tide == 0.0:
+			now = "sea" if world.elevation[i] < 0.0 else "land"
+	elif tide == 0.0:
+		now = "sea" if world.elevation[i] < 0.0 else "land"
+	else:
+		match old:
+			"sea":
+				if depth < tide - margin:
+					now = "intertidal"
+			"land":
+				if depth > -tide + margin:
+					now = "intertidal"
+			_:
+				if depth > tide + margin:
+					now = "sea"
+				elif depth < -tide - margin:
+					now = "land"
+	shore = now
+	_shore_changed = "" if now == old or _fresh else old
+
+
+func _at_sea() -> bool:
+	return shore != "land"
+
+
+## Parcelle de départ du prologue : un haut-fond tiède et peu profond (tapis microbiens,
+## stromatolites) que le retrait de la mer fera émerger, sur la côte d'un continent assez vaste
+## pour porter plus tard forêts et dinosaures. Déterministe ; repli : la première terre venue.
+static func pick_start_cell(w: WorldSim) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var best_score := -1.0
+	var W := WorldSim.WIDTH
+	for y in range(8, WorldSim.HEIGHT - 8):
+		for x in W:
+			var i := y * W + x
+			var e: float = w.elevation[i]
+			if e < START_ELEVATION.x or e > START_ELEVATION.y:
+				continue
+			var t: float = w.temperature[i]
+			var climate := 1.0 - absf(t - START_TEMPERATURE) * 3.0
+			if climate <= 0.0:
+				continue
+			var coast := false
+			for dy in range(-2, 3):
+				for dx in range(-2, 3):
+					if w.elevation[(y + dy) * W + posmod(x + dx, W)] < 0.0:
+						coast = true
+			if not coast:
+				continue
+			var land := 0
+			var total := 0
+			for dy in range(-6, 7, 2):
+				for dx in range(-6, 7, 2):
+					var yy := clampi(y + dy, 0, WorldSim.HEIGHT - 1)
+					total += 1
+					if w.elevation[yy * W + posmod(x + dx, W)] >= 0.0:
+						land += 1
+			var share := float(land) / float(total)
+			if share < 0.6:
+				continue
+			var depth_fit := 1.0 - absf(e - 0.03) / 0.01
+			var score := maxf(depth_fit, 0.05) * climate * share * (0.5 + w.moisture[i])
+			if score > best_score:
+				best_score = score
+				best = Vector2i(x, y)
+	if best.x >= 0:
+		return best
+	for i in w.elevation.size():
+		if w.elevation[i] >= 0.0:
+			return Vector2i(i % W, i / W)
+	return Vector2i.ZERO
 
 
 ## Distance (cellules, la carte se raccordant en x) entre la parcelle et la région d'un événement.
@@ -374,7 +473,7 @@ func _scan_niches() -> void:
 func _read_events(world_events: Array, i: int, out: Array[Dictionary]) -> Dictionary:
 	var impact := {}
 	var flood := {}
-	var land: bool = world.elevation[i] >= 0.0
+	var land := not _at_sea()
 	var plague_cause := -2
 	var war_cause := -2
 	for e in world_events:
@@ -496,7 +595,7 @@ func _detect_impact(i: int, impact: Dictionary, out: Array[Dictionary]) -> void:
 		_base_use = "wild"
 		vegetation = 0.0
 		_track.clear()
-	elif not impact.is_empty() and float(impact.dist) <= BLAST_RADIUS and world.elevation[i] >= 0.0:
+	elif not impact.is_empty() and float(impact.dist) <= BLAST_RADIUS and not _at_sea():
 		var s := 1.0 - float(impact.dist) / (BLAST_RADIUS + 1.0)
 		scorch_level = maxf(scorch_level, s)
 		development = maxf(0.0, development - 1.5 * s)
@@ -517,7 +616,7 @@ func _hazard() -> float:
 
 func _update_development(i: int, dt: float) -> void:
 	var target := 0.0
-	if sapient_id >= 0 and world.elevation[i] >= 0.0:
+	if sapient_id >= 0 and not _at_sea():
 		var settle := smoothstep(0.0, 0.25, _presence)
 		var level := float(world.species[sapient_id].get("tech_level", 0.0))
 		var hazard := _hazard()
@@ -552,7 +651,7 @@ func _update_land_use(i: int, out: Array[Dictionary]) -> void:
 		_peak_level = 0
 	_base_use = base
 
-	var land: bool = world.elevation[i] >= 0.0
+	var land := not _at_sea()
 	var t: float = world.temperature[i]
 	if not land:
 		_iced = false
@@ -575,8 +674,8 @@ func _update_land_use(i: int, out: Array[Dictionary]) -> void:
 		if _sea_iced:
 			use = "ice"
 		elif _marine_cx < 0.0:
-			use = "ocean"
-		elif world.elevation[i] < SHALLOW_SEA:
+			use = "barren" if shore == "intertidal" else "ocean"
+		elif world.sea_level - world.elevation[i] > -SHALLOW_SEA:
 			use = "seabed"
 		else:
 			use = "reef" if _marine_cx >= 3.0 else "microbial_mat"
@@ -588,7 +687,19 @@ func _update_land_use(i: int, out: Array[Dictionary]) -> void:
 		use = "ice"
 	land_use = use
 	land_use_label = Text.use_label(use, biome)
-	if _fresh or use == old:
+	if shore == "intertidal":
+		land_use_label = {"microbial_mat": "Estran à stromatolites", "reef": "Estran rocheux",
+			"barren": "Estran nu", "ice": "Estran gelé"}.get(use, land_use_label)
+	if _fresh:
+		return
+	if _shore_changed != "":
+		var sev := _event("shore", _shore_text(_shore_changed, shore), -1, -1)
+		sev.land_use = use
+		sev.previous_land_use = old
+		sev.shore = shore
+		out.append(sev)
+		return
+	if use == old:
 		return
 	var ev: Dictionary
 	match use:
@@ -634,6 +745,17 @@ func _transition(old: String, to_use: String) -> Dictionary:
 	if old in ["ruins", "rewild"]:
 		return _event("land_use", "Les dernières ruines disparaissent sous la végétation.", -1, -1)
 	return _event("land_use", "La parcelle est abandonnée : la nature reprend ses droits.", _last_sapient, _harm_cause)
+
+
+func _shore_text(from: String, to: String) -> String:
+	match to:
+		"intertidal":
+			if from == "sea":
+				return "La mer se retire : la parcelle devient un estran que chaque marée découvre."
+			return "La mer remonte : la parcelle redevient un estran battu par les marées."
+		"land":
+			return "La parcelle émerge pour de bon : une terre neuve s'offre à la vie."
+	return "Les eaux recouvrent l'estran : la parcelle repasse sous la mer."
 
 
 func _explicit_flora() -> bool:
@@ -703,7 +825,7 @@ func _cover_for(d: float) -> float:
 func _update_cover(i: int, dt: float) -> void:
 	var t: float = world.temperature[i]
 	var m: float = world.moisture[i]
-	var land: bool = world.elevation[i] >= 0.0
+	var land := not _at_sea()
 	var fert: float = WorldGen.BIOME_FERTILITY[world.biome[i]]
 	var temp_ok := smoothstep(0.06, 0.3, t) * (1.0 - 0.5 * smoothstep(0.85, 1.0, t))
 	_veg_pot = clampf(0.5 * fert + 0.5 * temp_ok * smoothstep(0.1, 0.6, m), 0.0, 1.0) if land else 0.0
@@ -735,7 +857,7 @@ func _update_cover(i: int, dt: float) -> void:
 
 func _update_fauna(dt: float, out: Array[Dictionary]) -> void:
 	var targets := {}
-	var at_sea: bool = world.elevation[_index(cell)] < 0.0
+	var at_sea := _at_sea()
 	if not _regional.is_empty():
 		var veg_ratio := clampf(vegetation / maxf(_veg_pot, 0.15), 0.0, 1.0)
 		var urban := clampf((development - 1.0) / 6.0, 0.0, 0.95)

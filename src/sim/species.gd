@@ -73,6 +73,17 @@ const CLADE_SIZE := {
 	"ptérosaure": [0.35, 0.1, 0.7], "oiseau": [0.12, 0.03, 0.5], "mammifère": [0.08, 0.03, 0.9],
 	"primate": [0.1, 0.04, 0.6],
 }
+## Vigueur compétitive héritée par les dinosaures nés de l'évolution (trait `vigour`, absent du
+## roster du Crétacé qui les fait déjà dominer) : sans elle, nés après la Grande Mourance dans des
+## niches déjà reprises par les synapsides, ils resteraient cantonnés à quelques régions.
+const DINOSAUR_VIGOUR := 1.4
+## Climat typique (température préférée, tolérance minimale) des clades qui doivent peupler de
+## vastes régions (le roster du Crétacé en est la cible) : une lignée fondée dans un recoin froid
+## ne condamne pas les dinosaures à la toundra.
+const CLADE_CLIMATE := {
+	"dinosaure": [0.66, 0.24], "ptérosaure": [0.68, 0.2], "reptile": [0.68, 0.2],
+	"synapside": [0.6, 0.24], "mammifère": [0.5, 0.32], "oiseau": [0.52, 0.32], "primate": [0.66, 0.22],
+}
 ## Noms des groupes fondés par chaque transition de clade, dans l'ordre (puis noms binomiaux).
 const GROUP_NAMES := {
 	"algue": ["Protistes", "Algues vertes", "Algues rouges"],
@@ -178,6 +189,17 @@ static func apply_transition(t: Dictionary, rule: Dictionary, rng: RandomNumberG
 		t.intelligence = minf(float(t.intelligence), 0.05 + 0.02 * t.complexity)
 	if t.habitat == "land":
 		t.temp_tol = clampf(float(t.temp_tol) - 0.04, 0.12, 0.45)
+	if to == "dinosaure":
+		# Avantage des archosaures (posture dressée, sacs aériens) : la cible est le roster du
+		# Crétacé, où les dinosaures dominent les terres.
+		t.aggression = maxf(float(t.aggression), 0.6)
+		t.adaptability = minf(1.0, float(t.adaptability) + 0.1)
+		t["size"] = maxf(float(t["size"]), 0.5)
+		t.vigour = DINOSAUR_VIGOUR
+	if CLADE_CLIMATE.has(to):
+		var c: Array = CLADE_CLIMATE[to]
+		t.temp_opt = lerpf(float(t.temp_opt), float(c[0]), 0.7)
+		t.temp_tol = maxf(float(t.temp_tol), float(c[1]))
 
 
 ## Mutation à la spéciation. `radiation` > 0 : niches vides, la taille dérive vers le haut ;
@@ -267,7 +289,7 @@ static func overlap(a: Dictionary, b: Dictionary) -> float:
 
 ## Force compétitive à niche égale. Les sapients écrasent tout à mesure que leur technologie croît.
 static func competitiveness(t: Dictionary, tech_level: float, sapient: bool) -> float:
-	var c: float = (0.6 + 0.4 * t.aggression) * (0.7 + 0.6 * t.intelligence) * (0.7 + 0.6 * t.adaptability)
+	var c: float = (0.6 + 0.4 * t.aggression) * (0.7 + 0.6 * t.intelligence) * (0.7 + 0.6 * t.adaptability) 		* float(t.get("vigour", 1.0))
 	if sapient:
 		c *= 1.2 + 0.15 * tech_level
 	return c
@@ -290,6 +312,9 @@ static func growth_rate(t: Dictionary, sapient: bool) -> float:
 static func impact_vulnerability(t: Dictionary, severity: float) -> float:
 	var v: float = 0.3 + t["size"] * 1.6 - 0.35 - t.adaptability * 0.3
 	if IMPACT_VULNERABLE_CLADES.has(t.clade):
+		# Un impact majeur n'épargne aucun dinosaure non avien, petit ou grand (limite K-Pg).
+		if severity >= 0.6:
+			return 1.0
 		v += 0.9
 	v = maxf(v, 0.25)
 	if float(t.get("complexity", 6.0)) < 3.0:

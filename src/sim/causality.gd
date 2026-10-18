@@ -8,6 +8,9 @@ extends RefCounted
 const MAX_HISTORY := 4096
 const TRIM_BATCH := 512
 const MAX_CHAIN := 512
+## Actions divines épinglées gardées au plus (les plus anciennes sont libérées au-delà) : une
+## partie de dizaines d'heures garde une mémoire bornée.
+const MAX_PINNED := 1024
 
 var next_id := 1
 ## Événements en ordre chronologique (borné à MAX_HISTORY).
@@ -32,7 +35,14 @@ func make_event(year: float, type: String, region: Vector2i, species_id: int, su
 func make_root(year: float, type: String, region: Vector2i, species_id: int, summary: String) -> Dictionary:
 	var ev := make_event(year, type, region, species_id, summary, -1)
 	_pinned[ev.id] = ev
+	if _pinned.size() > MAX_PINNED:
+		var oldest: int = _pinned.keys().min()
+		_pinned.erase(oldest)
 	return ev
+
+
+func size_report() -> Dictionary:
+	return {history = history.size(), pinned = _pinned.size(), indexed = _by_id.size(), scheduled = scheduled.size()}
 
 
 func _record(ev: Dictionary) -> void:

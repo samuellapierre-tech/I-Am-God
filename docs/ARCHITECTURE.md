@@ -106,6 +106,7 @@ Le HUD se branche (`bind_map`) sur `src/ui/parcel_powers.gd`, qui garde l'API de
 | `development`, `target_development` | `float` 0..8 | Développement continu (0 sauvage … 8 arcologie) et sa cible. |
 | `sapient_id` | `int` | Peuple conscient présent (-1 : aucun). |
 | `crater_level`, `flood_level`, `scorch_level` | `float` 0..1 | Stigmates d'impact, de crue, de cendres. |
+| `shore`, `water_depth_m` | `String`, `float` | Rivage : `"sea"`, `"intertidal"` (estran découvert à marée basse ; `land_use_label` devient « Estran à stromatolites »…) ou `"land"`, d'après `WorldSim.sea_level` ; profondeur d'eau en mètres (négative = altitude). Le passage d'un état à l'autre émet `parcel_shore`. |
 | `alerts` | `Array[Dictionary]` | Crises en cours `{kind ("species_collapse"/"heat_drift"/"civilization_threat"), species_id, severity 0..1, summary, cause_id}`, de la plus grave à la moins grave. |
 
 Règles : on peut **ajouter** des champs, jamais en retirer ou en changer le sens sans mettre à jour
@@ -198,3 +199,44 @@ plante ; arthropode → insecte.
 À x1 avec la boucle du HUD (`MapMath.base_years_per_second(ideal_step_years()) × GameState.pace_factor()`),
 le prologue dure 10 à 15 minutes (`Eras.IDEAL_DT`) ; à l'entrée au Mésozoïque, le pas idéal est calé
 pour qu'on atteigne -66 Ma en ~20 minutes (`WorldSim.MESOZOIC_STEPS`). Voir `tests/test_sim_prologue.gd`.
+
+### Parcelle de départ
+
+`ParcelSim.pick_start_cell(world)` (appelé par `GameState._liveliest_cell` tant qu'aucune plante n'a
+gagné les terres) choisit un haut-fond tiède sur la côte d'un vaste continent : tapis microbiens sous
+une eau peu profonde, estran quand la mer recule, terre ferme vers -500 Ma, puis plantes et, plus
+tard, dinosaures. `WorldSim.sea_level` (unités d'altitude) suit l'émergence lente des continents et
+le climat (bas pendant les glaciations et la boule de neige, haut quand il fait chaud), avec un temps
+de réponse de 5 Ma ; il vaut 0 dans le scénario du Crétacé.
+
+## Mode Éternité et futur sans fin (contrat d'octobre 2026)
+
+`WorldSim.endless` (défaut `true`) / `set_endless(on: bool)` : en mode Éternité, la simulation ne
+s'arrête jamais ; en mode Épreuve (`false`, piloté par la stratégie), pas d'exode, pas
+d'effondrement spontané des civilisations accomplies, pas de renaissance d'un monde stérile.
+
+- Ère `Eras.AFTERMATH` (17, « Âge des héritiers ») : plus aucun peuple conscient après au moins une
+  civilisation. Un nouvel éveil ramène à `FIRST_SAPIENT_ERA` (événement `era_change` « Nouveau
+  cycle »). `WorldSim.cycles` compte les cycles, `rebirths` les renaissances de la vie.
+- Événements : `exodus` (une civilisation post-singularité quitte la Terre : `species[id].departed =
+  true`, ses villes deviennent des ruines), `collapse` (effondrement tardif, à partir de l'ère
+  moderne), `rebirth` (la vie complexe a disparu, ou la vie renaît d'un monde stérile), `ice_age`
+  (glaciations naturelles après le prologue).
+- Horizon : le Soleil vieillit après l'an 0 (+0,3 sur l'échelle de température par milliard
+  d'années) ; vers +1 Ga, la vie complexe suffoque, microbes et algues survivent.
+- Mémoire bornée : `memory_report() -> {history, pinned, indexed, scheduled, species_records, alive,
+  runtime_records}` ; journal ≤ 4096 (+512) événements, ≤ 1024 actions divines épinglées, ≤ 2048
+  fiches d'espèces, ≤ 128 espèces vivantes, historique de parcelle ≤ 512.
+
+### Sauvegarde (à venir)
+
+Tout l'état est fait de types simples (tableaux compacts, dictionnaires, nombres) ; aucune
+référence circulaire. `WorldSim.fork()` énumère exactement ce qu'il faut sauver :
+`seed`, `scenario`, `year`, les grilles (`elevation`, `temperature`, `population`, `tech`,
+`dominant_species`, `moisture`, `biome`, `_base_temp`), `species`, `_rt`, `_alive`, l'état de
+l'aléa (`_rng.seed`, `_rng.state`), `causal_log` (`next_id`, `history`, `_pinned`, `scheduled`),
+les tableaux de l'écosystème (`Ecosystem.copy()` les liste ; `band_cells` se recalcule avec
+`build_static()`), et les scalaires listés dans `fork()` (oxygène, climat, niveau marin, cycles…).
+`ParcelSim` ne référence que son monde : sauver `cell` et ses champs (publics et privés, tous
+simples) ; le recréer par `ParcelSim.new(world, cell)` puis réappliquer ces champs.
+
