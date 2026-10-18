@@ -284,7 +284,7 @@ func _make_threat(card: Dictionary, world: RefCounted, parcel: RefCounted) -> Di
 	var t := {
 		id = _next_id, kind = kind, title = def.title, text = def.text,
 		target = {region = _cell(parcel), species_id = sid}, target_name = _species_name(world, sid),
-		strikes_year = -1.0, strike_at = 1.0, severity = severity, countered = false, counters = Rules.counters(kind),
+		strikes_year = 0.0, strike_at = 1.0, revealed = false, severity = severity, countered = false, counters = Rules.counters(kind),
 		state = "pending", action = def.strike, cataclysm = bool(card.cataclysm),
 		returning = card.kind != "" and not card.cataclysm, act = act,
 	}
@@ -406,6 +406,7 @@ func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
 		t.target.region = _cell(parcel)
 	var n := cards.size()
 	for i in n:
+		cards[i].revealed = true
 		cards[i].strike_at = Rules.STRIKE_FROM + (Rules.STRIKE_TO - Rules.STRIKE_FROM) * (i + _rng.randf()) / float(n)
 		round.threats.append(cards[i])
 	_update_years(world)

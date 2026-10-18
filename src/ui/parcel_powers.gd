@@ -83,6 +83,10 @@ func dominant_species_at(region: Vector2i) -> int:
 func apply_power_at(region: Vector2i) -> void:
 	if power == "" or GameState.sim == null:
 		return
+	# Couche stratégique : chaque pouvoir coûte une action de la manche ; refusé si le budget est épuisé
+	# (la stratégie émet action_refused, que son interface affiche).
+	if GameState.strategy != null and not GameState.strategy.spend_action(power):
+		return
 	var p := Powers.get_power(power)
 	var species_id := target_species
 	if p.get("needs_species", false) and species_id < 0:

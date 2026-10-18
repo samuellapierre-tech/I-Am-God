@@ -12,9 +12,16 @@ signal parcel_updated
 signal parcel_changed(cell: Vector2i)
 ## "globe" (planète 3D) ou "parcel" (le terrain suivi, plein écran).
 signal view_mode_changed(mode: String)
+## Couche stratégique (src/strategy/, docs/STRATEGIE.md) : signaux relayés depuis `strategy`.
+signal round_started(round: Dictionary)
+signal threat_revealed(threat: Dictionary)
+signal threat_resolved(threat: Dictionary, countered: bool)
+signal tracks_changed(tracks: Dictionary)
+signal game_over(victory: bool, reason: String)
 
 const WorldSim := preload("res://src/sim/world_sim.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
+const Strategy := preload("res://src/strategy/strategy.gd")
 
 ## Recalcul de la parcelle au plus 4 fois par seconde réelle.
 const PARCEL_INTERVAL := 0.25
@@ -23,6 +30,11 @@ const DEFAULT_PARCEL := Vector2i(70, 40)
 
 var sim: WorldSim
 var parcel: ParcelSim
+## Manches, menaces et pistes (contrat docs/ARCHITECTURE.md « Stratégie »). Recréée par new_world.
+var strategy: Strategy
+## Aspect divin et difficulté choisis au lancement (gardés d'une partie à l'autre).
+var strategy_aspect := Strategy.Rules.DEFAULT_ASPECT
+var strategy_difficulty := Strategy.Rules.DEFAULT_DIFFICULTY
 var view_mode := "parcel"
 var paused := false
 ## Années simulées par seconde réelle.
@@ -53,6 +65,7 @@ func new_world(seed: int) -> void:
 	play_time = 0.0
 	_last_era = sim.current_era()
 	select_parcel(_liveliest_cell())
+	_make_strategy()
 	world_updated.emit()
 	era_changed.emit(_last_era)
 
@@ -61,9 +74,15 @@ func _process(delta: float) -> void:
 	if paused or sim == null:
 		return
 	play_time += delta
-	for event in sim.step(years_per_second * delta):
+	var stepped := sim.step(years_per_second * delta)
+	for event in stepped:
 		_pending_events.append(event)
 		event_occurred.emit(event)
+	if strategy != null:
+		# Les menaces non contrées frappent via la simulation : leurs conséquences sont des événements.
+		for event in strategy.update(sim, parcel, stepped):
+			_pending_events.append(event)
+			event_occurred.emit(event)
 	var era := sim.current_era()
 	if era != _last_era:
 		_last_era = era
@@ -85,6 +104,24 @@ func apply_divine_action(action: Dictionary) -> Array:
 	world_updated.emit()
 	_refresh_parcel()
 	return consequences
+
+
+## Change l'aspect divin et la difficulté (écran de lancement) : la stratégie repart de zéro sur le
+## même monde. À appeler avant que la partie n'avance.
+func configure_strategy(aspect: String, difficulty: String) -> void:
+	strategy_aspect = aspect
+	strategy_difficulty = difficulty
+	_make_strategy()
+
+
+func _make_strategy() -> void:
+	strategy = Strategy.new(sim.seed, strategy_aspect, strategy_difficulty)
+	strategy.round_started.connect(round_started.emit)
+	strategy.threat_revealed.connect(threat_revealed.emit)
+	strategy.threat_resolved.connect(threat_resolved.emit)
+	strategy.tracks_changed.connect(tracks_changed.emit)
+	strategy.game_over.connect(game_over.emit)
+	strategy.start(sim, parcel)
 
 
 ## Multiplicateur de vitesse de l'ouverture (voir OPENING_PACE). Le HUD l'applique à sa vitesse.
