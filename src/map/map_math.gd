@@ -95,22 +95,16 @@ static func era_index(era: String) -> int:
 	return 0
 
 
-## Années simulées par seconde à vitesse x1 : rapide au temps des dinosaures, lent à l'ère moderne,
-## pour que chaque ère dure environ une minute de jeu.
-static func base_years_per_second(year: float) -> float:
-	if year < -1_000_000.0:
-		return 1_000_000.0
-	if year < -10_000.0:
-		return 20_000.0
-	if year < 0.0:
-		return 200.0
-	if year < 1500.0:
-		return 30.0
-	if year < 1900.0:
-		return 8.0
-	if year < 2100.0:
-		return 2.0
-	return 5.0
+## Pas idéaux de simulation par seconde à vitesse x1.
+## Doit rester égal à WorldSim.PACING_STEPS_PER_SECOND (=> une ère dure environ une minute).
+const SIM_STEPS_PER_SECOND := 20.0
+
+
+## Années simulées par seconde à vitesse x1, à partir du pas idéal de la simulation
+## (sim.ideal_step_years()) : c'est la simulation qui rythme le temps selon l'ère et la technologie,
+## pas l'année du calendrier. ~1 Ma/s au temps des dinosaures, quelques années/s à l'ère moderne.
+static func base_years_per_second(ideal_step_years: float) -> float:
+	return maxf(ideal_step_years, 0.0) * SIM_STEPS_PER_SECOND
 
 
 ## Couleur d'une espèce : teinte dérivée de l'id par le nombre d'or.
