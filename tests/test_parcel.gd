@@ -11,7 +11,7 @@ const CELL := Vector2i(70, 40)
 const FAUNA_KEYS := ["species_id", "name", "count", "density", "trend", "role", "size", "clade"]
 const HISTORY_KEYS := ["year", "temperature_c", "global_temperature_c", "population_total", "population"]
 const ALERT_KEYS := ["kind", "species_id", "severity", "summary"]
-const ROLES := ["herbivore", "carnivore", "omnivore", "sapient"]
+const ROLES := ["herbivore", "carnivore", "omnivore", "sapient", "producer"]
 const STRUCTURE_KINDS := ["field", "hut", "road", "building", "tower", "ruin"]
 
 
@@ -83,7 +83,7 @@ static func check_events(events: Array) -> String:
 
 
 func test_contract_fields() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var parcel := ParcelSim.new(sim, CELL)
 	var err := _check_state(parcel)
 	if err != "":
@@ -98,7 +98,7 @@ func test_contract_fields() -> String:
 func test_several_species_live_on_the_parcel() -> String:
 	# Au Crétacé, une parcelle de terre fertile voit passer plusieurs espèces, pas seulement la dominante.
 	for seed_value in [7, 11, 42]:
-		var sim := WorldSim.new(seed_value)
+		var sim := WorldSim.new(seed_value, true, WorldSim.SCENARIO_CRETACEOUS)
 		var parcel := ParcelSim.new(sim, _land_cell(sim, CELL))
 		_advance(sim, parcel, 10)
 		if parcel.land_use != "ocean" and parcel.fauna.size() >= 2:
@@ -107,7 +107,7 @@ func test_several_species_live_on_the_parcel() -> String:
 
 
 func test_history_grows_and_is_bounded() -> String:
-	var sim := WorldSim.new(11)
+	var sim := WorldSim.new(11, true, WorldSim.SCENARIO_CRETACEOUS)
 	var parcel := ParcelSim.new(sim, CELL)
 	_advance(sim, parcel, 30)
 	if parcel.history.size() <= 1:
@@ -130,8 +130,8 @@ func test_history_grows_and_is_bounded() -> String:
 
 
 func test_deterministic() -> String:
-	var a := WorldSim.new(42)
-	var b := WorldSim.new(42)
+	var a := WorldSim.new(42, true, WorldSim.SCENARIO_CRETACEOUS)
+	var b := WorldSim.new(42, true, WorldSim.SCENARIO_CRETACEOUS)
 	var pa := ParcelSim.new(a, CELL)
 	var pb := ParcelSim.new(b, CELL)
 	var ea := _advance(a, pa, 25)
@@ -146,7 +146,7 @@ func test_deterministic() -> String:
 
 func test_independent_of_call_rate() -> String:
 	# Deux parcelles sur le même monde : l'une recalculée à chaque pas, l'autre tous les 4 pas.
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var cell := _land_cell(sim, CELL)
 	var every := ParcelSim.new(sim, cell)
 	var sparse := ParcelSim.new(sim, cell)
@@ -172,13 +172,15 @@ func test_independent_of_call_rate() -> String:
 		var other: int = counts.get(f.species_id, 0)
 		if absi(other - f.count) > maxi(3, int(f.count * 0.25)):
 			return "effectif de %s : %d / %d" % [f.name, f.count, other]
-	if absi(every.history.size() - sparse.history.size()) > 2:
+	# Quand le rythme change (passage au Cénozoïque), l'intervalle d'échantillonnage change aussi :
+	# quelques échantillons d'écart selon la cadence, pas davantage.
+	if absi(every.history.size() - sparse.history.size()) > maxi(2, int(every.history.size() * 0.03)):
 		return "historique : %d / %d échantillons" % [every.history.size(), sparse.history.size()]
 	return ""
 
 
 func test_update_cost_under_a_millisecond() -> String:
-	var sim := WorldSim.new(42)
+	var sim := WorldSim.new(42, true, WorldSim.SCENARIO_CRETACEOUS)
 	var parcel := ParcelSim.new(sim, _land_cell(sim, CELL))
 	_advance(sim, parcel, 10)
 	var total := 0

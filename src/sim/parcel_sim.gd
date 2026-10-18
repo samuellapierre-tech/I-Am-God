@@ -15,6 +15,8 @@ extends RefCounted
 ##   déduite de l'espèce sapiente présente (densité locale, niveau technologique, épreuves subies).
 ##   L'usage du sol en découle par paliers avec hystérésis ; le bâti décroît lentement après un
 ##   déclin (ruines, puis retour à la nature).
+## - Prologue : la mer nue, puis tapis microbiens et récifs ; des terres nues jusqu'à l'arrivée des
+##   plantes (densité locale des producteurs terrestres), forêts marécageuses quand l'oxygène abonde.
 ## - Catastrophes : cratère (l'altitude de la cellule a été creusée par un impact), déluge, cendres
 ##   volcaniques, glaces (température locale), épidémies et guerres du peuple local.
 ## Toutes les constantes de temps sont exprimées en « pas idéaux » de WorldSim (une ère sapiente
@@ -31,7 +33,11 @@ const LAND_USES := [
 	"ocean", "ice", "wild", "crater", "flooded",
 	"camp", "pasture", "farmland", "village", "town", "city", "megacity", "arcology",
 	"ruins", "rewild",
+	# Prologue (ajouts) : mer et terres avant la vie complexe.
+	"seabed", "microbial_mat", "reef", "barren", "swamp_forest",
 ]
+## Usages naturels (ni bâti ni catastrophe) entre lesquels la vie fait passer la parcelle.
+const NATURAL_USES := ["ocean", "seabed", "microbial_mat", "reef", "barren", "wild", "swamp_forest"]
 const MAX_FAUNA := 6
 const MAX_VISIBLE := 40
 ## ≈ 1,7 ère sapiente à un échantillon tous les HISTORY_STEPS pas idéaux.
@@ -80,6 +86,17 @@ const PRESENT_IN := 0.03
 const PRESENT_OUT := 0.01
 ## Pic de densité locale sous lequel l'effondrement d'une espèce ne déclenche pas d'alerte.
 const COLLAPSE_MIN_PEAK := 0.04
+## Prologue : densité de vie marine qui peuple les fonds, densité locale de plantes sous laquelle
+## la terre est nue (entrée / sortie), oxygène des forêts marécageuses (entrée / sortie).
+const MARINE_LIFE_MIN := 0.02
+const BARREN_IN := 0.03
+const BARREN_OUT := 0.06
+const SWAMP_OXYGEN_IN := 1.15
+const SWAMP_OXYGEN_OUT := 1.05
+const SHALLOW_SEA := -0.35
+## Banquise sur la mer (température de grille, entrée / sortie).
+const SEA_ICE_IN := 0.07
+const SEA_ICE_OUT := 0.1
 ## Densité régionale d'un peuple qui vaut une parcelle pleinement occupée.
 const FULL_PRESENCE := 0.35
 
@@ -128,7 +145,10 @@ var water := 0.0
 var tech := 0.0
 ## [{species_id, name, count (individus visibles 0..MAX_VISIBLE), density (0..1),
 ##   trend (-1, 0, 1), role ("herbivore"|"carnivore"|"omnivore"|"sapient"), size (0..1), clade,
-##   diet (ajout), change (ajout : écart relatif moyenne rapide / lente, -1..+∞)}]
+##   diet (ajout), change (ajout : écart relatif moyenne rapide / lente, -1..+∞),
+##   habitat (ajout : "marine"|"amphibious"|"land")}]
+## role vaut aussi "producer" (ajout) pour les microbes et algues marins ; les plantes terrestres
+## ne sont pas listées : elles font la végétation.
 ## Espèce sapiente en tête, puis par effectif décroissant.
 var fauna: Array[Dictionary] = []
 ## [{kind: "field"|"hut"|"road"|"building"|"tower"|"ruin", pos: Vector2 (0..1), size: float}]
@@ -171,6 +191,12 @@ var _elev := NAN
 var _veg_pot := 0.0
 var _presence := 0.0
 var _last_sapient := -1
+## Prologue : complexité maximale de la vie marine locale, densité locale des plantes, vie marine.
+var _marine_cx := -1.0
+var _flora_local := 0.0
+var _barren := false
+var _swamp := false
+var _sea_iced := false
 ## id -> densité régionale pondérée (niches de la région et de ses voisines).
 var _regional := {}
 ## id -> {fast, slow, peak, trend, hold, present, cause}
@@ -331,6 +357,16 @@ func _scan_niches() -> void:
 	_presence = clampf(best / FULL_PRESENCE, 0.0, 1.0)
 	if sapient_id >= 0:
 		_last_sapient = sapient_id
+	_marine_cx = -1.0
+	_flora_local = 0.0
+	for id in _regional:
+		var t: Dictionary = world.species.get(id, {}).get("traits", {})
+		var d: float = _regional[id]
+		var hab := String(t.get("habitat", "land"))
+		if hab != "land" and d >= MARINE_LIFE_MIN:
+			_marine_cx = maxf(_marine_cx, float(t.get("complexity", 6.0)))
+		if hab == "land" and String(t.get("diet", "")) == "autotrophe":
+			_flora_local = maxf(_flora_local, d)
 
 
 ## Applique les événements mondiaux qui concernent la parcelle. Renvoie l'impact de météore le
@@ -520,13 +556,30 @@ func _update_land_use(i: int, out: Array[Dictionary]) -> void:
 	var t: float = world.temperature[i]
 	if not land:
 		_iced = false
+		_sea_iced = t < (SEA_ICE_OUT if _sea_iced else SEA_ICE_IN)
 	elif _iced:
 		_iced = t < ICE_OUT
 	else:
 		_iced = t < ICE_IN and _level < ICE_IMMUNE_LEVEL
+	if base == "wild" and _explicit_flora():
+		# Avant les plantes, la terre est nue ; les forêts-charbon exigent oxygène et humidité.
+		_barren = _flora_local < (BARREN_OUT if _barren else BARREN_IN)
+		var oxy_ok: bool = world.oxygen >= (SWAMP_OXYGEN_OUT if _swamp else SWAMP_OXYGEN_IN)
+		_swamp = not _barren and oxy_ok and world.moisture[i] >= 0.45 and t >= 0.4
+		if _barren:
+			base = "barren"
+		elif _swamp:
+			base = "swamp_forest"
 	var use := base
 	if not land:
-		use = "ocean"
+		if _sea_iced:
+			use = "ice"
+		elif _marine_cx < 0.0:
+			use = "ocean"
+		elif world.elevation[i] < SHALLOW_SEA:
+			use = "seabed"
+		else:
+			use = "reef" if _marine_cx >= 3.0 else "microbial_mat"
 	elif crater_level > CATASTROPHE_OUT:
 		use = "crater"
 	elif flood_level > CATASTROPHE_OUT:
@@ -562,6 +615,8 @@ func _update_land_use(i: int, out: Array[Dictionary]) -> void:
 
 ## Événement d'un changement d'usage « ordinaire » (développement, déclin, ruines, nature).
 func _transition(old: String, to_use: String) -> Dictionary:
+	if to_use in NATURAL_USES and (old in NATURAL_USES or old == "ice"):
+		return _event("land_use", _nature_text(old, to_use), -1, -1)
 	var oi := DEV_USES.find(old)
 	var ni := DEV_USES.find(to_use)
 	if ni >= 1 and (oi < 0 or ni > oi):
@@ -579,6 +634,33 @@ func _transition(old: String, to_use: String) -> Dictionary:
 	if old in ["ruins", "rewild"]:
 		return _event("land_use", "Les dernières ruines disparaissent sous la végétation.", -1, -1)
 	return _event("land_use", "La parcelle est abandonnée : la nature reprend ses droits.", _last_sapient, _harm_cause)
+
+
+func _explicit_flora() -> bool:
+	return world.scenario == WorldSim.SCENARIO_PROLOGUE
+
+
+## La vie (et non un peuple) change la parcelle : mers peuplées, terres conquises.
+func _nature_text(old: String, to_use: String) -> String:
+	match to_use:
+		"microbial_mat":
+			return "Des tapis microbiens tapissent les hauts-fonds : la vie colonise la parcelle."
+		"reef":
+			return "Un récif grouillant d'animaux se forme dans les eaux claires."
+		"seabed":
+			return "La vie gagne les fonds marins de la parcelle."
+		"ocean":
+			return "Les eaux de la parcelle se vident de toute vie."
+		"barren":
+			return "La végétation disparaît : il ne reste que la roche nue."
+		"swamp_forest":
+			return "Une forêt marécageuse s'étend : fougères géantes et insectes énormes."
+		"wild":
+			if old == "barren":
+				return "Les plantes conquièrent la parcelle : la terre nue verdit."
+			if old == "swamp_forest":
+				return "La forêt marécageuse s'assèche et laisse place à %s." % Text.use_label("wild", biome).to_lower()
+	return "La parcelle change : %s." % Text.use_label(to_use, biome).to_lower()
 
 
 func _rise_text(old: String, to_use: String) -> String:
@@ -625,6 +707,8 @@ func _update_cover(i: int, dt: float) -> void:
 	var fert: float = WorldGen.BIOME_FERTILITY[world.biome[i]]
 	var temp_ok := smoothstep(0.06, 0.3, t) * (1.0 - 0.5 * smoothstep(0.85, 1.0, t))
 	_veg_pot = clampf(0.5 * fert + 0.5 * temp_ok * smoothstep(0.1, 0.6, m), 0.0, 1.0) if land else 0.0
+	if _explicit_flora():
+		_veg_pot *= smoothstep(0.0, 0.25, _flora_local)
 	# Les champs remplacent la forêt, la ville la réduit ; les ruines se couvrent peu à peu.
 	var cover := _cover_for(development) * (1.0 - 0.06 * maxf(0.0, _built - development))
 	var veg := _veg_pot * cover * (1.0 - crater_level) * (1.0 - 0.85 * scorch_level) * (1.0 - 0.7 * flood_level)
@@ -651,7 +735,8 @@ func _update_cover(i: int, dt: float) -> void:
 
 func _update_fauna(dt: float, out: Array[Dictionary]) -> void:
 	var targets := {}
-	if land_use != "ocean":
+	var at_sea: bool = world.elevation[_index(cell)] < 0.0
+	if not _regional.is_empty():
 		var veg_ratio := clampf(vegetation / maxf(_veg_pot, 0.15), 0.0, 1.0)
 		var urban := clampf((development - 1.0) / 6.0, 0.0, 0.95)
 		var hazard := (1.0 - crater_level) * (1.0 - 0.7 * flood_level) * (1.0 - 0.6 * scorch_level) \
@@ -660,8 +745,18 @@ func _update_fauna(dt: float, out: Array[Dictionary]) -> void:
 			var sp: Dictionary = world.species.get(id, {})
 			if not bool(sp.get("alive", false)):
 				continue
+			var tr0: Dictionary = sp.get("traits", {})
+			var hab := String(tr0.get("habitat", "land"))
+			# En mer, la vie marine et amphibie ; à terre, la vie terrestre et amphibie, sans les
+			# plantes (elles font la végétation).
+			if (at_sea and hab == "land") or (not at_sea and hab == "marine"):
+				continue
+			if hab == "land" and String(tr0.get("diet", "")) == "autotrophe":
+				continue
 			var f: float
-			if bool(sp.get("sapient", false)):
+			if hab == "marine":
+				f = 1.0
+			elif bool(sp.get("sapient", false)):
 				f = 0.4 + 0.6 * clampf(development / 6.0, 0.0, 1.0)
 			else:
 				var traits: Dictionary = sp.get("traits", {})
@@ -712,11 +807,13 @@ func _update_fauna(dt: float, out: Array[Dictionary]) -> void:
 		var sapient := bool(sp.get("sapient", false))
 		# Peu de titanosaures tiennent dans l'écran, beaucoup de musaraignes.
 		var cap := MAX_VISIBLE * (1.0 - 0.75 * size)
+		var diet := String(traits.get("diet", "omnivore"))
 		rows.append({
 			species_id = id, name = String(sp.get("name", "?")),
 			count = clampi(int(round(float(tr.fast) * cap)), 1, MAX_VISIBLE),
 			density = clampf(float(tr.fast), 0.0, 1.0), trend = int(tr.trend),
-			role = "sapient" if sapient else String(traits.get("diet", "omnivore")),
+			role = "sapient" if sapient else ("producer" if diet == "autotrophe" else diet),
+			habitat = String(traits.get("habitat", "land")),
 			size = size, clade = String(traits.get("clade", "")), diet = String(traits.get("diet", "omnivore")),
 			change = (float(tr.fast) - float(tr.slow)) / maxf(float(tr.slow), 0.03),
 		})
@@ -840,7 +937,7 @@ func _alert(kind: String, species_id: int, severity: float, summary: String, cau
 
 func _update_structures() -> void:
 	structures.clear()
-	if land_use in ["ocean", "crater", "ice"]:
+	if land_use in ["ocean", "crater", "ice", "seabed", "microbial_mat", "reef", "barren"]:
 		return
 	var d := development
 	var fields := int(round(clampf((d - 1.6) * 2.5, 0.0, 9.0) * (1.0 - smoothstep(5.0, 7.5, d))))

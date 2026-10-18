@@ -5,6 +5,7 @@ extends RefCounted
 
 const WorldSim := preload("res://src/sim/world_sim.gd")
 const MapMath := preload("res://src/map/map_math.gd")
+const Eras := preload("res://src/sim/eras.gd")
 
 const FPS := 60.0
 const SPEED := 5.0
@@ -16,7 +17,7 @@ const SEEDS := [17, 2024, 987654]
 
 ## Renvoie {sapience_frame, sapience_year, clade, antiquity_frame, antiquity_year} (-1 si jamais).
 func _play(seed_value: int, meteor: bool) -> Dictionary:
-	var sim := WorldSim.new(seed_value)
+	var sim := WorldSim.new(seed_value, true, WorldSim.SCENARIO_CRETACEOUS)
 	var res := {sapience_frame = -1, sapience_year = 0.0, clade = "", antiquity_frame = -1, antiquity_year = 0.0}
 	for frame in MAX_FRAMES:
 		if meteor and frame == METEOR_FRAME:
@@ -28,7 +29,7 @@ func _play(seed_value: int, meteor: bool) -> Dictionary:
 				res.sapience_frame = frame
 				res.sapience_year = ev.year
 				res.clade = sim.species[ev.species_id].traits.clade
-		if sim.era_index() >= 3:
+		if sim.era_index() >= Eras.FIRST_SAPIENT_ERA + 1:
 			res.antiquity_frame = frame
 			res.antiquity_year = sim.year
 			break
@@ -53,12 +54,12 @@ func test_civilisation_emerges_in_real_play() -> String:
 
 func test_sapient_eras_last_about_a_minute() -> String:
 	# À x1, une ère sapiente doit durer de l'ordre d'une minute (20 pas idéaux/s, 1200 pas/ère).
-	var sim := WorldSim.new(17)
+	var sim := WorldSim.new(17, true, WorldSim.SCENARIO_CRETACEOUS)
 	var guard := 0
-	while sim.era_index() < 2 and guard < 5000:
+	while sim.era_index() < Eras.FIRST_SAPIENT_ERA and guard < 5000:
 		guard += 1
 		sim.step(sim.ideal_step_years() * sim.max_substeps)
-	if sim.era_index() < 2:
+	if sim.era_index() < Eras.FIRST_SAPIENT_ERA:
 		return "pas de sapience"
 	var era := sim.era_index()
 	var seconds := 0.0
