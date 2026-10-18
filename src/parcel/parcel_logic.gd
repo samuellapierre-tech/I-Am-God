@@ -173,12 +173,11 @@ static func landmarks(seed_value: int, cell: Vector2i) -> Dictionary:
 	var start := Vector2(rng.randf_range(0.12, 0.24), -0.06) * PARCEL_SIZE
 	var end := Vector2(rng.randf_range(0.76, 0.9), 1.06) * PARCEL_SIZE
 	var amp := rng.randf_range(0.13, 0.18) * PARCEL_SIZE.y
-	var phase := rng.randf_range(-0.08, 0.08)
 	var perp := (end - start).orthogonal().normalized()
 	var river := PackedVector2Array()
 	for k in RIVER_POINTS:
 		var t := float(k) / (RIVER_POINTS - 1)
-		river.append(start.lerp(end, t) + perp * amp * sin((t + phase) * TAU))
+		river.append(start.lerp(end, t) + perp * amp * sin(t * TAU))
 	var width := rng.randf_range(38.0, 50.0)
 	var radii := Vector2(rng.randf_range(90.0, 115.0), rng.randf_range(62.0, 78.0))
 	var rock := Vector2(rng.randf_range(0.2, 0.3), rng.randf_range(0.55, 0.72)) * PARCEL_SIZE
