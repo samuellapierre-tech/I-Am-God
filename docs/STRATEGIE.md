@@ -98,3 +98,45 @@ Au lancement, le joueur choisit **un aspect**, qui change son style de jeu :
   jeu ; Ézéchiel les met en scène, il ne les invente pas.
 - **Pas de retour arrière.** Chaque acte compte pour toujours.
 - Toutes les valeurs ci-dessus sont des **points de départ** à équilibrer en jeu.
+
+## 8. Samaël, l'adversaire (maître de jeu IA)
+
+Choix validés par le créateur : **un adversaire distinct**, nommé **Samaël** (l'accusateur, celui qui
+éprouve Dieu) ; **règles fixes, IA pour parler**.
+
+- **Il joue la pioche.** À chaque manche, Samaël reçoit une **main de cartes de menace légales**
+  (tirées de la pioche de l'acte, filtrées par l'époque, §9) et choisit celles qu'il révèle et quand
+  elles frappent. Il ne crée jamais de carte, ne voit rien que le joueur ne puisse voir, et ses choix
+  sont **déterministes à graine égale** (testables, rejouables).
+- **Il vise ton plan.** Ses choix sont notés par un algorithme : dégâts prévus sur la vitalité de la
+  parcelle et sur les Grands Œuvres en cours, risque d'effondrement en chaîne, menaces que le joueur
+  ne peut pas contrer avec le budget qui lui reste.
+- **Il apprend tes habitudes.** Il retient les contres que tu utilises le plus et joue ensuite les
+  menaces qu'ils ne couvrent pas (« Tu réponds toujours à la sécheresse par le déluge… »).
+- **La difficulté, c'est son intelligence :**
+
+| Niveau | Comment Samaël choisit |
+|---|---|
+| Éveil | Au hasard dans sa main |
+| Divin | La carte qui fait le plus mal tout de suite, et il apprend tes habitudes |
+| Apocalypse | Il consulte l'Oracle comme toi (`fork()` + `project_future()` à basse résolution) pour viser ce qui fera le plus mal dans plusieurs manches |
+
+- **Il parle.** L'IA locale ne lui sert qu'à s'exprimer : provocations au début de la manche,
+  satisfaction quand une menace frappe, dépit quand tu la contres, bluff. Avec un repli procédural
+  complet. Ézéchiel et lui se répondent parfois : le prophète témoin, l'accusateur qui doute de Dieu.
+
+## 9. Zéro anachronisme
+
+Rien ne peut apparaître avant son époque : **cartes de menace, options de dilemme, faits racontés,
+paroles d'Ézéchiel et de Samaël**.
+
+- Chaque élément porte `min_era` (constante de `src/sim/eras.gd`) et, si besoin, `min_tech`
+  (niveau technologique de la civilisation de tête) ; éventuellement `max_era`.
+  - Exemples : « IA hostile » et toute décision confiée à une IA → âge de l'information (≈ 2025)
+    minimum ; « guerre nucléaire », « pollution industrielle » → âge industriel ; « famine »,
+    « guerre » → Antiquité ; « surpâturage » → dès qu'il y a de grands herbivores.
+- Les prompts LLM reçoivent l'époque et la liste de ce qui est **interdit** de mentionner ; le texte
+  généré est vérifié (liste de mots par époque) et remplacé par le repli procédural s'il dérape.
+- Dans un monde divergent (civilisation non humaine), la règle suit **le niveau technologique réel**
+  de la simulation, pas la date du calendrier.
+- Tests : pour chaque ère, aucune carte, option ou fait au-dessus de son époque n'est disponible.
