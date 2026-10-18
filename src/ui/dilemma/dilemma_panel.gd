@@ -8,6 +8,10 @@ extends CanvasLayer
 ## Raccourcis : 1 à 4 (rangée du haut ou pavé numérique), clic, ou manette (croix + A).
 ## Si le temps s'écoule : option `default_index` du dilemme, sinon -1 (« Dieu se tait »).
 ## Les dilemmes reçus pendant l'affichage attendent leur tour.
+## Un seul écran modal à la fois (groupe DilemmaMath.MODAL_GROUP) : tant qu'un autre écran modal est
+## ouvert (lancement ou fin de la stratégie), les dilemmes attendent dans la file, délai figé ; un
+## dilemme déjà affiché se cache et reprend ensuite. Le panneau rejoint lui-même ce groupe.
+## Un dilemme tranché par le Narrateur (dilemma_closed, p. ex. délai écoulé) est fermé ou retiré.
 
 ## Émis après la réponse envoyée au Narrateur (index -1 si le temps s'est écoulé sans défaut).
 signal dilemma_resolved(dilemma_id: Variant, index: int)
@@ -55,6 +59,8 @@ func _ready() -> void:
 	var narrator := get_node_or_null("/root/Narrator")
 	if narrator and narrator.has_signal("dilemma_ready"):
 		narrator.connect("dilemma_ready", show_dilemma)
+		if narrator.has_signal("dilemma_closed"):
+			narrator.connect("dilemma_closed", _on_narrator_closed)
 	elif narrator:
 		print_verbose("DilemmaPanel : Narrator.dilemma_ready absent (branche narrateur non fusionnée), panneau inactif.")
 
@@ -66,11 +72,27 @@ func show_dilemma(raw: Variant) -> bool:
 	if err != "":
 		push_warning("DilemmaPanel : dilemme ignoré (%s)." % err)
 		return false
-	if _current.is_empty():
+	if _current.is_empty() and not _other_modal_open():
 		_open(d)
 	else:
 		_queue.append(d)
 	return true
+
+
+## Vrai si un autre écran modal (que ce panneau) est ouvert.
+func _other_modal_open() -> bool:
+	return is_inside_tree() and DilemmaMath.modal_open(get_tree().get_nodes_in_group(DilemmaMath.MODAL_GROUP), _panel)
+
+
+func _on_narrator_closed(id: Variant, _option_index: int, _timed_out: bool) -> void:
+	_queue.assign(DilemmaMath.drop_from_queue(_queue, id))
+	if not _current.is_empty() and str(_current.id) == str(id) and _chosen == -2:
+		# Déjà tranché côté Narrateur : on ferme sans renvoyer de réponse.
+		_chosen = -1
+		_text.visible_characters = -1
+		for b in _buttons:
+			b.disabled = true
+		_time_label.text = "Temps écoulé"
 
 
 func is_open() -> bool:
@@ -101,6 +123,7 @@ func _build() -> void:
 	_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN  # grandit vers le haut
 	_panel.visible = false
+	_panel.add_to_group(DilemmaMath.MODAL_GROUP)
 	root.add_child(_panel)
 
 	var box := VBoxContainer.new()
@@ -111,6 +134,9 @@ func _build() -> void:
 	_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_title.add_theme_font_size_override("font_size", 28)
 	_title.add_theme_color_override("font_color", GOLD)
+	# Largeur explicite des textes à retour à la ligne : sans elle, la première mesure se fait à
+	# largeur nulle et le panneau grandit de plusieurs écrans vers le haut (texte hors champ).
+	_title.custom_minimum_size.x = PANEL_WIDTH - 40.0
 	box.add_child(_title)
 	box.add_child(HSeparator.new())
 	_text = RichTextLabel.new()
@@ -166,6 +192,7 @@ func _make_option(index: int, option: Dictionary) -> Control:
 		var hint := Label.new()
 		hint.text = option.hint
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.custom_minimum_size.x = 140
 		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		hint.add_theme_font_size_override("font_size", 14)
 		hint.add_theme_color_override("font_color", Color(0.68, 0.7, 0.8))
@@ -239,7 +266,8 @@ func _open(d: Dictionary) -> void:
 	_time_bar.ratio = 1.0
 	_time_label.text = DilemmaMath.format_remaining(_remaining)
 	_panel.visible = true
-	_panel.reset_size()
+	_panel.offset_bottom = -BOTTOM_MARGIN
+	_fit_height()
 	_panel.modulate.a = 0.0
 	if _tween:
 		_tween.kill()
@@ -256,13 +284,20 @@ func _close() -> void:
 	_panel.visible = false
 	for b in _buttons:
 		b.release_focus()
-	if not _queue.is_empty():
-		_open(_queue.pop_front())
+	# Le suivant de la file s'ouvre dans _process, si aucun autre écran modal n'est ouvert.
 
 
 func _process(delta: float) -> void:
+	var blocked := _other_modal_open()
 	if _current.is_empty():
+		if not _queue.is_empty() and not blocked:
+			_open(_queue.pop_front())
 		return
+	# Un autre écran modal passe devant : le dilemme se cache, son délai est figé.
+	_panel.visible = not blocked
+	if blocked:
+		return
+	_fit_height()
 	if _dilation.active and GameState:
 		GameState.years_per_second = _dilation.step(GameState.years_per_second)
 	_elapsed += delta
@@ -285,8 +320,16 @@ func _process(delta: float) -> void:
 		_choose(int(_current.default_index), true)
 
 
+## Le panneau grandit vers le haut depuis son bas fixe : on recale sa hauteur sur son contenu
+## (il ne rapetisse jamais seul, et une mesure transitoire trop haute le laisserait géant).
+func _fit_height() -> void:
+	var h := _panel.get_combined_minimum_size().y
+	if not is_equal_approx(_panel.offset_bottom - _panel.offset_top, h):
+		_panel.offset_top = _panel.offset_bottom - h
+
+
 func _input(event: InputEvent) -> void:
-	if _current.is_empty() or _chosen != -2:
+	if _current.is_empty() or _chosen != -2 or not _panel.visible:
 		return
 	# Manette : le focus n'est donné aux boutons qu'à la première action à la manette, pour qu'un
 	# Espace (pause du HUD) ne valide jamais une option par accident.

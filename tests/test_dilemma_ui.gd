@@ -262,3 +262,39 @@ func test_speaker_name() -> String:
 		_expect(DilemmaMath.signature("Ézéchiel"), "— Ézéchiel", "signature"),
 		"" if DilemmaMath.load_config_constants() is Dictionary else "constantes de ai_config illisibles",
 	])
+
+
+func test_single_modal_rule() -> String:
+	var launch := Control.new()
+	var end := Control.new()
+	var me := Control.new()
+	var plain := Node.new()
+	launch.visible = false
+	end.visible = false
+	var err := _first_error([
+		_expect(DilemmaMath.modal_open([launch, end]), false, "aucun écran modal ouvert"),
+		_expect(DilemmaMath.modal_open([]), false, "groupe vide"),
+	])
+	launch.visible = true
+	if err == "":
+		err = _first_error([
+			_expect(DilemmaMath.modal_open([launch, end, me], me), true, "écran de lancement ouvert"),
+			_expect(DilemmaMath.modal_open([me], me), false, "le panneau ne se bloque pas lui-même"),
+			_expect(DilemmaMath.modal_open([plain]), false, "nœud non affichable ignoré"),
+			_expect(String(DilemmaMath.MODAL_GROUP), "modal", "nom du groupe partagé"),
+		])
+	for n in [launch, end, me, plain]:
+		n.free()
+	return err
+
+
+func test_drop_closed_dilemma_from_queue() -> String:
+	var queue := [{id = 3, text = "a"}, {id = 4, text = "b"}, {id = "5", text = "c"}]
+	var kept := DilemmaMath.drop_from_queue(queue, 4)
+	var kept_str := DilemmaMath.drop_from_queue(queue, 5)
+	return _first_error([
+		_expect(kept.size(), 2, "dilemme retiré"),
+		_expect(kept[1].id, "5", "ordre conservé"),
+		_expect(kept_str.size(), 2, "identifiants comparés en texte"),
+		_expect(DilemmaMath.drop_from_queue(queue, 99).size(), 3, "identifiant inconnu"),
+	])
