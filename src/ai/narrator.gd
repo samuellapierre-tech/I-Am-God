@@ -14,6 +14,11 @@ extends Node
 ##   affiche ; resolve_dilemma(id, option) applique le choix. Le narrateur ne met jamais le jeu en pause.
 ## - Stratégie (strategy_narrator.gd) : manches, menaces, pistes et épilogue relayés par GameState
 ##   (round_started, threat_revealed, threat_resolved, tracks_changed, game_over), s'ils existent.
+## - Adversaire (adversary.gd) : il prend la parole sur les signaux samael_move / samael_learned (et
+##   en début de manche, quand une menace frappe ou est contrée) ; au plus un échange avec le narrateur
+##   par manche.
+## - Chaque ligne a un orateur : speech_ready(speaker, text), et meta.speaker dans chronicle_line.
+## - Zéro anachronisme (epoch.gd) : prompts avec l'époque et la liste des interdits, sortie du LLM filtrée.
 ## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance sur la parcelle.
 ##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
@@ -29,6 +34,9 @@ signal parcel_narration_ready(text: String, moment: Dictionary)
 ## Chaque ligne du fil écrit (événement du monde, de la parcelle, ambiance, dilemme…), dans l'ordre.
 ## meta : {source: "world"|"parcel"|"ambient"|"dilemma"|"manual", kind, speaker, era, year, world_mode…}.
 signal chronicle_line(text: String, meta: Dictionary)
+## Qui parle : AiConfig.NARRATOR_NAME ou AiConfig.ADVERSARY_NAME. Émis pour CHAQUE ligne du fil, en plus de
+## narration_ready (compatibilité, sans orateur) et de chronicle_line (meta.speaker contient le même nom).
+signal speech_ready(speaker: String, text: String)
 ## Le narrateur pousse Dieu à choisir. dilemma : {id, title, text, options: [{label, hint, action}],
 ## timeout_s, speaker, trigger, species_id} (voir game_master.gd). Jamais deux à la fois.
 signal dilemma_ready(dilemma: Dictionary)
@@ -46,6 +54,8 @@ const Divergence := preload("res://src/ai/divergence.gd")
 const GameMaster := preload("res://src/ai/game_master.gd")
 const StrategyNarrator := preload("res://src/ai/strategy_narrator.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
+const Adversary := preload("res://src/ai/adversary.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -70,6 +80,10 @@ const PARCEL_QUEUE_SIZE := 8
 const RECENT_EVENT_SEC := 60.0
 ## Délai minimal (s) entre deux lignes de règles de la stratégie (manche, menaces, pistes).
 const STORY_GAP := 2.0
+## Lignes de règles (et répliques) en attente au plus.
+const STORY_QUEUE_SIZE := 10
+## Répliques de l'adversaire par manche, en plus de sa provocation d'ouverture.
+const ADVERSARY_LINES_PER_ROUND := 4
 ## Types d'événements qui peuvent déclencher un dilemme (voir GameMaster.trigger_from_event).
 const DILEMMA_EVENT_TYPES := ["sapience", "war", "discovery", "volcanism", "parcel_land_use", "parcel_heat", "parcel_cold"]
 
@@ -81,6 +95,8 @@ var chronicle: Chronicle
 ## Le monde suit-il l'histoire réelle ? (définitivement « divergent » une fois l'un des critères atteint)
 var lens: Divergence
 var game_master: GameMaster
+## La voix de l'adversaire (il ne décide rien : src/strategy/ joue pour lui).
+var adversary: Adversary
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
 ## Chronique automatique de la parcelle (désactivable séparément).
@@ -112,6 +128,11 @@ var _story_pending: Array[Dictionary] = []
 var _announced_threats := {}
 var _tracks := {}
 var _game_over := false
+## Manche en cours, répliques de l'adversaire dans cette manche, et dernière manche avec un échange.
+var _round_index := 0
+var _adversary_lines := 0
+var _exchange_round := -1
+var _habits_said := {}
 ## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
 var _recent_events: Array[Dictionary] = []
 
@@ -124,6 +145,7 @@ func _ready() -> void:
 	chronicle = Chronicle.new()
 	lens = Divergence.new()
 	game_master = GameMaster.new()
+	adversary = Adversary.new()
 	_ambient_rng.randomize()
 	client = LlmClient.new()
 	client.name = "LlmClient"
@@ -197,7 +219,7 @@ func generate_prayer(species: Dictionary, situation: Dictionary) -> void:
 	_ask(
 		Prompts.PERSONA_PRIERE, Prompts.build_prayer_prompt(species, sit),
 		func() -> String: return procedural.prayer(species, sit),
-		func(text: String) -> void: prayer_received.emit(sid, text), 3)
+		func(text: String) -> void: prayer_received.emit(sid, text), 3, true, _current_epoch())
 
 
 ## Choix moraux associés à une prière : [{label: String, action: Dictionary}] ({} = ne rien faire).
@@ -269,6 +291,9 @@ func _connect_game_state() -> void:
 		"threat_resolved": _on_threat_resolved,
 		"tracks_changed": _on_tracks_changed,
 		"game_over": _on_game_over,
+		# Adversaire (src/strategy/) : ses coups et ce qu'il apprend de toi.
+		"samael_move": _on_samael_move,
+		"samael_learned": _on_samael_learned,
 	}
 	for sig in links:
 		if _game_state.has_signal(sig) and not _game_state.is_connected(sig, links[sig]):
@@ -470,6 +495,7 @@ func _request_parcel_narration(moment: Dictionary, automatic: bool) -> void:
 		_parcel_cooldown = float(config.get_value("narrator", "parcel_min_interval_sec"))
 	var era := _current_era()
 	var year: Variant = _current_year()
+	var epoch := _current_epoch()
 	var on_text := func(text: String) -> void:
 		if automatic:
 			_auto_in_flight = false
@@ -477,7 +503,7 @@ func _request_parcel_narration(moment: Dictionary, automatic: bool) -> void:
 		parcel_narration_ready.emit(text, moment)
 	_ask(
 		Prompts.parcel_system(), Prompts.build_parcel_prompt(moment, {"era": era, "year": year}),
-		func() -> String: return parcel_narrator.narrate(moment, era, year), on_text, 2, not automatic)
+		func() -> String: return parcel_narrator.narrate(moment, era, year, epoch), on_text, 2, not automatic, epoch)
 
 
 # ---------------------------------------------------------------------------
@@ -561,7 +587,7 @@ func _narrate_ambient() -> void:
 	var fallback := func() -> String: return str(line["text"])
 	var kind := str(line.get("kind", ""))
 	var prompt := Prompts.build_invention_prompt(line, ctx) if kind in ["invention", "divergence"] else Prompts.build_ambient_prompt(line, ctx)
-	_ask(Prompts.ambient_system(), prompt, fallback, on_text, 2, false)
+	_ask(Prompts.ambient_system(), prompt, fallback, on_text, 2, false, Epoch.current(ctx))
 	if kind == "invention":
 		_maybe_enrich(line, ctx)
 
@@ -583,7 +609,8 @@ func _maybe_enrich(line: Dictionary, ctx: Dictionary) -> void:
 ## Toute ligne du fil passe par ici : compatibilité (narration_ready) + fil (chronicle_line).
 func _emit_line(text: String, meta: Dictionary) -> void:
 	var m := meta.duplicate()
-	m["speaker"] = AiConfig.NARRATOR_NAME
+	var speaker := str(meta.get("speaker", AiConfig.NARRATOR_NAME))
+	m["speaker"] = speaker
 	if not m.has("era"):
 		m["era"] = _current_era()
 	if not m.has("year"):
@@ -591,6 +618,7 @@ func _emit_line(text: String, meta: Dictionary) -> void:
 	_since_line = 0.0
 	_next_ambient = _draw_ambient_delay()
 	narration_ready.emit(text)
+	speech_ready.emit(speaker, text)
 	chronicle_line.emit(text, m)
 
 
@@ -640,8 +668,8 @@ func _open_dilemma(trigger: Dictionary) -> void:
 		return
 	# Le LLM ne rédige que titre, texte, libellés et indices ; options et actions restent celles des règles.
 	var on_reply := func(ok: bool, raw: String) -> void:
-		_show_dilemma(Prompts.merge_dilemma_text(d, raw) if ok else d)
-	client.request(Prompts.dilemma_system(), Prompts.build_dilemma_prompt(d, ctx), on_reply,
+		_show_dilemma(Prompts.merge_dilemma_text(d, raw, int(d.get("epoch", -1))) if ok else d)
+	client.request(Prompts.dilemma_system(), Prompts.build_dilemma_prompt(d, ctx) + "\n" + Prompts.epoch_rules(int(d.get("epoch", -1))), on_reply,
 		{"json": true, "max_tokens": 400, "temperature": 0.8, "priority": true})
 
 
@@ -672,7 +700,8 @@ func _resolve_dilemma(id: int, option_index: int, timed_out: bool) -> void:
 	var action: Dictionary = r["action"]
 	if not action.is_empty() and _game_state != null and _game_state.has_method("apply_divine_action"):
 		if strategy != null and strategy.has_method("spend_action"):
-			strategy.spend_action("dilemma")
+			# Le pouvoir choisi est une action comme une autre : il peut contrer une menace en attente.
+			strategy.spend_action(str(action.get("type", "dilemma")))
 		_game_state.apply_divine_action(action)
 	dilemma_closed.emit(id, option_index, timed_out)
 
@@ -690,11 +719,27 @@ func _strategy() -> Object:
 func _push_story(text: String, kind: String, extra: Dictionary = {}) -> void:
 	if text == "":
 		return
+	# Deux cartes identiques qui frappent ensemble : une seule ligne.
+	for s in _story_pending:
+		if str(s["text"]) == text:
+			return
 	var meta := {"source": "strategy", "kind": kind}
 	meta.merge(extra, true)
 	_story_pending.append({"text": text, "meta": meta})
-	while _story_pending.size() > 8:
-		_story_pending.pop_front()
+	_trim_story()
+
+
+## File des règles trop longue : on oublie d'abord les lignes secondaires, jamais l'annonce de manche.
+func _trim_story() -> void:
+	while _story_pending.size() > STORY_QUEUE_SIZE:
+		var dropped := false
+		for i in _story_pending.size():
+			if str(_story_pending[i]["meta"].get("kind", "")) != "round":
+				_story_pending.remove_at(i)
+				dropped = true
+				break
+		if not dropped:
+			_story_pending.pop_front()
 
 
 func _on_round_started(rd: Dictionary) -> void:
@@ -706,6 +751,21 @@ func _on_round_started(rd: Dictionary) -> void:
 		if t is Dictionary and t.has("id"):
 			_announced_threats[t["id"]] = true
 	_push_story(StrategyNarrator.round_line(rd, actions), "round", {"round": int(rd.get("index", 0))})
+	_round_index = int(rd.get("index", _round_index + 1))
+	_adversary_lines = 0
+	_habits_said = {}
+	# L'adversaire provoque en début de manche ; parfois, le narrateur lui répond (un échange par manche).
+	var epoch := _current_epoch()
+	if _exchange_round != _round_index and adversary.wants_exchange(_round_index):
+		_exchange_round = _round_index
+		if _round_index % 2 == 1:
+			# L'adversaire répond directement à l'annonce du narrateur.
+			_push_adversary(adversary.exchange_line(true, epoch), epoch, true)
+		else:
+			_push_adversary(adversary.round_taunt(rd, actions, epoch), epoch, true)
+			_push_adversary(adversary.exchange_line(false, epoch), epoch, true)
+	else:
+		_push_adversary(adversary.round_taunt(rd, actions, epoch), epoch, true)
 
 
 func _on_threat_revealed(threat: Dictionary) -> void:
@@ -721,6 +781,48 @@ func _on_threat_resolved(threat: Dictionary, countered: bool) -> void:
 	var sid := int(target.get("species_id", -1)) if target is Dictionary else -1
 	_push_story(StrategyNarrator.resolved_line(threat, countered, _species_name_for(sid)), "threat_countered" if countered else "threat_struck",
 		{"threat_id": threat.get("id", -1)})
+	var epoch := _current_epoch()
+	if countered:
+		_push_adversary(adversary.spite_line(threat, epoch), epoch)
+	elif _game_state == null or not _game_state.has_signal("samael_move"):
+		# Sans coups de la stratégie pour le dire, l'adversaire savoure quand même.
+		_push_adversary(adversary.strike_line(threat, epoch), epoch)
+
+
+## Un coup de l'adversaire (samael_move) : {kind: "reveal"|"strike"|"taunt_hook", threat, reason_code}.
+func _on_samael_move(move: Dictionary) -> void:
+	var epoch := _current_epoch()
+	var kind := str(move.get("kind", ""))
+	# Les révélations ordinaires sont déjà dans l'annonce de manche : il ne parle que si le coup a une raison à dire.
+	if kind == "reveal" and str(move.get("reason_code", "")) in ["", "random", "max_damage"]:
+		return
+	_push_adversary(adversary.move_line(move, epoch), epoch)
+
+
+## L'adversaire a remarqué une habitude du joueur (samael_learned) : {power|counter|kind, count?}.
+func _on_samael_learned(habit: Dictionary) -> void:
+	var power := str(habit.get("power", habit.get("counter", habit.get("kind", ""))))
+	if _habits_said.has(power):
+		return
+	_habits_said[power] = true
+	var epoch := _current_epoch()
+	_push_adversary(adversary.habit_line(habit, epoch), epoch)
+
+
+## Une réplique de l'adversaire (ou du narrateur dans un échange) dans la file des règles.
+## Au plus ADVERSARY_LINES_PER_ROUND répliques par manche, hors annonce : pas de spam.
+func _push_adversary(line: Dictionary, epoch: int, always := false) -> void:
+	if line.is_empty() or (not always and _adversary_lines >= ADVERSARY_LINES_PER_ROUND):
+		return
+	if not always:
+		_adversary_lines += 1
+	var l := line.duplicate()
+	l["epoch"] = epoch
+	var speaker := str(line.get("speaker", AiConfig.ADVERSARY_NAME))
+	_story_pending.append({"text": str(line["text"]), "adversary": l,
+		"meta": {"source": "adversary" if speaker == AiConfig.ADVERSARY_NAME else "exchange", "kind": str(line.get("kind", "")),
+			"speaker": speaker, "reason": str(line.get("reason", ""))}})
+	_trim_story()
 
 
 func _on_tracks_changed(tracks: Dictionary) -> void:
@@ -786,7 +888,18 @@ func _process(delta: float) -> void:
 	if not _story_pending.is_empty() and not _auto_in_flight and _since_line >= STORY_GAP:
 		var s: Dictionary = _story_pending.pop_front()
 		_cooldown = maxf(_cooldown, STORY_GAP)
-		_emit_line(str(s["text"]), s["meta"])
+		if s.has("adversary") and is_ai_available():
+			# Le LLM ne fait que reformuler la réplique procédurale (et retombe dessus s'il dérape).
+			_auto_in_flight = true
+			var meta: Dictionary = s["meta"]
+			var on_text := func(text: String) -> void:
+				_auto_in_flight = false
+				_emit_line(text, meta)
+			var system := Prompts.adversary_system() if str(meta.get("speaker", "")) == AiConfig.ADVERSARY_NAME else Prompts.ambient_system()
+			_ask(system, Prompts.build_adversary_prompt(s["adversary"], world_context()), func() -> String: return str(s["text"]),
+				on_text, 2, false, int(s["adversary"].get("epoch", -1)))
+		else:
+			_emit_line(str(s["text"]), s["meta"])
 		return
 	if _auto_in_flight or _cooldown > 0.0:
 		return
@@ -885,22 +998,34 @@ func _request_narration(context: Dictionary, automatic: bool) -> void:
 			_auto_in_flight = false
 		var first: Variant = context.get("events", [{}])[0] if not context.get("events", []).is_empty() else context
 		_emit_line(text, {"source": "world" if automatic else "manual", "kind": str(first.get("type", "")) if first is Dictionary else ""})
+	var epoch := _current_epoch()
+	context["epoch"] = epoch
 	_ask(
 		Prompts.narration_system(), Prompts.build_narration_prompt(context),
-		func() -> String: return procedural.narrate(context), on_text, 3, not automatic)
+		func() -> String: return procedural.narrate(context), on_text, 3, not automatic, epoch)
 
 
 ## Envoie au LLM ; en cas d'échec ou d'absence de serveur, utilise le générateur procédural.
-func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, max_sentences: int, priority: bool = true) -> void:
+## epoch >= 0 : le prompt reçoit l'époque et la liste des interdits, et une réponse anachronique est
+## remplacée par le repli procédural.
+func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, max_sentences: int, priority: bool = true, epoch := -1) -> void:
 	if client == null or not (client.is_available() or client.detecting):
 		_emit_deferred(emit, fallback.call())
 		return
+	var full_prompt := prompt
+	if epoch >= 0:
+		full_prompt += "\n" + Prompts.epoch_rules(epoch)
 	var on_reply := func(ok: bool, text: String) -> void:
-		var out: String = Prompts.sanitize_output(text, max_sentences) if ok else ""
+		var out: String = Prompts.vet_output(text, max_sentences, epoch) if ok else ""
 		if out == "":
 			out = fallback.call()
 		emit.call(out)
-	client.request(system, prompt, on_reply, {"priority": priority})
+	client.request(system, full_prompt, on_reply, {"priority": priority})
+
+
+## Époque effective du monde (niveau technologique réel de la civilisation de tête, sinon ère et date).
+func _current_epoch() -> int:
+	return Epoch.current(_gm_context())
 
 
 func _emit_deferred(emit: Callable, text: String) -> void:

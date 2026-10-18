@@ -31,6 +31,9 @@ static func round_line(rd: Dictionary, actions := -1) -> String:
 	var parts := PackedStringArray()
 	var name := str(rd.get("name", "")).strip_edges()
 	var index := int(rd.get("index", 0))
+	# La stratégie peut nommer la manche par son numéro (« Manche 3 ») : on ne le répète pas.
+	if name.to_lower().begins_with("manche"):
+		name = ""
 	if name != "":
 		parts.append("Manche %d : %s." % [index, name] if index > 0 else "%s commence." % name)
 	elif index > 0:

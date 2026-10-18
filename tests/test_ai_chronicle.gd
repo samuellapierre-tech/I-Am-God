@@ -81,7 +81,7 @@ func test_faits_assez_nombreux_et_bien_formes() -> String:
 			ids[f["id"]] = true
 			ids[f["t"]] = true
 			for k in f:
-				if not k in ["t", "id", "min_year", "max_year"] + FactBase.TAG_KEYS:
+				if not k in ["t", "id", "min_year", "max_year", "min_era", "max_era"] + FactBase.TAG_KEYS:
 					return "%s : clé inconnue « %s »" % [f["id"], k]
 			for k in FactBase.TAG_KEYS:
 				if f.has(k) and not (f[k] is Array and not f[k].is_empty()):

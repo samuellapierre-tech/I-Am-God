@@ -169,6 +169,10 @@ func test_sans_reponse_ne_rien_faire() -> String:
 	var gm := GameMaster.new(4)
 	gm.meteor_delay = 0.0  # pas de délai de début de partie dans ce test
 	gm.timeout_s = 30.0
+	# La pierre n'est proposée qu'à la fin du Crétacé (zéro anachronisme) : pas encore de peuples.
+	ctx["era"] = "Mésozoïque"
+	ctx["year"] = -67_000_000.0
+	ctx["species"] = []
 	gm.consider(GameMaster.meteor_trigger(ctx))
 	var d := gm.open_dilemma(gm.tick(1.0)["open"], ctx)
 	for i in 100:
