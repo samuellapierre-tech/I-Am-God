@@ -17,6 +17,7 @@ const AiConfig := preload("res://src/ai/ai_config.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
 const Inventor := preload("res://src/ai/inventor.gd")
 const GameMaster := preload("res://src/ai/game_master.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Part des phrases d'ambiance qui rappellent un choix passé de Dieu (quand il y en a).
 const MEMORY_SHARE := 0.12
@@ -77,6 +78,8 @@ var _seed := 0
 var _count := 0
 var _recent_texts: Array[String] = []
 var _recent_facts: Array[String] = []
+## Époque effective de la phrase en cours (epoch.gd) : rien d'anachronique.
+var _epoch := Epoch.LAST
 var _parcel: ParcelNarrator
 ## Mémoire des inventions (profils des espèces et des peuples), partagée avec le narrateur.
 var inventor: Inventor
@@ -96,6 +99,7 @@ func _init(p_seed: int = -1) -> void:
 func ambient(ctx: Dictionary) -> Dictionary:
 	_count += 1
 	rng.seed = hash([_seed, _count])
+	_epoch = Epoch.current(ctx)
 	var mode: Dictionary = ctx.get("mode", {})
 	var line := {}
 	var past: Array = ctx.get("choices", [])
@@ -174,14 +178,18 @@ func scene(ctx: Dictionary) -> Dictionary:
 ## Rend un gabarit choisi au hasard, en évitant de répéter un texte récent.
 func _render_avoiding_repeat(templates: Array, m: Dictionary, ctx: Dictionary, extra: Dictionary) -> String:
 	var text := ""
-	for _attempt in 4:
-		var slots := _parcel.slots_for(Procedural.era_key(ctx.get("era", "")), m, m.get("snapshot", {}), ctx.get("year", null))
+	var fallback := ""
+	for _attempt in 10:
+		var slots := _parcel.slots_for(ctx.get("era", ""), m, m.get("snapshot", {}), ctx.get("year", null))
 		slots.merge(extra, true)
 		slots["narrateur"] = AiConfig.NARRATOR_NAME
 		text = ParcelNarrator.render(templates[rng.randi() % templates.size()], slots)
+		if not Epoch.is_clean(text, _epoch):
+			continue
+		fallback = text
 		if not text in _recent_texts:
-			break
-	return text
+			return text
+	return fallback if fallback != "" else ParcelNarrator.render(ParcelNarrator.SAFE_TEMPLATE, _parcel.slots_for(ctx.get("era", ""), m, m.get("snapshot", {}), ctx.get("year", null)))
 
 
 static func _compare_global(snap: Dictionary) -> String:

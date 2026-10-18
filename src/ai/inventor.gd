@@ -11,6 +11,7 @@ extends RefCounted
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Sons par lignée, pour les noms que les peuples se donnent (et donnent à leurs lieux).
 const PHONEMES := {
@@ -247,30 +248,40 @@ func pick_subject(ctx: Dictionary) -> Dictionary:
 	return {}
 
 
+## Une ligne sur un peuple ; {} si aucune n'est possible sans anachronisme à cette époque.
 func _people_line(p: Dictionary, sp: Dictionary, ctx: Dictionary) -> Dictionary:
 	var customs: Array = p["customs"] + p.get("llm_customs", [])
-	var slots := _base_slots(sp, ctx)
-	slots["peuple"] = slots["espece"]
-	slots["endonyme"] = p["endonym"]
-	slots["dieu"] = p["deity"]
-	slots["cause"] = p["deity_cause"]
-	slots["coutume"] = Procedural.apply_agreement(str(customs[rng.randi() % customs.size()]), {"espece": slots["_espece_pl"]})
-	slots["lieu_nom"] = p["place_name"]
-	slots["materiau"] = MATERIALS.get(Procedural.era_key(ctx.get("era", "")), MATERIALS["generic"])
-	var tpl: String = PEOPLE_TEMPLATES[rng.randi() % PEOPLE_TEMPLATES.size()]
-	return {"text": ParcelNarrator.render(tpl, slots), "kind": "invention", "source": "ambient",
-		"species_id": int(p["id"]), "profile": p}
+	var epoch := Epoch.current(ctx)
+	for _attempt in 10:
+		var slots := _base_slots(sp, ctx)
+		slots["peuple"] = slots["espece"]
+		slots["endonyme"] = p["endonym"]
+		slots["dieu"] = p["deity"]
+		slots["cause"] = p["deity_cause"]
+		slots["coutume"] = Procedural.apply_agreement(str(customs[rng.randi() % customs.size()]), {"espece": slots["_espece_pl"]})
+		slots["lieu_nom"] = p["place_name"]
+		slots["materiau"] = MATERIALS.get(Epoch.NAMES[epoch], MATERIALS["generic"])
+		var tpl: String = PEOPLE_TEMPLATES[rng.randi() % PEOPLE_TEMPLATES.size()]
+		var text := ParcelNarrator.render(tpl, slots)
+		if Epoch.is_clean(text, epoch):
+			return {"text": text, "kind": "invention", "source": "ambient", "species_id": int(p["id"]), "profile": p}
+	return {}
 
 
+## Une ligne sur une bête ; {} si aucune n'est possible sans anachronisme à cette époque.
 func _beast_line(p: Dictionary, sp: Dictionary, ctx: Dictionary) -> Dictionary:
-	var slots := _base_slots(sp, ctx)
 	var behaviors: Array = p["behaviors"]
-	slots["comportement"] = Procedural.apply_agreement(str(behaviors[rng.randi() % behaviors.size()]), {"espece": slots["_espece_pl"]})
 	var reasons: Array = ctx.get("mode", {}).get("reasons", [])
-	slots["raison"] = str(reasons[0]) if not reasons.is_empty() else "tout a pris un autre chemin"
-	var tpl: String = BEAST_TEMPLATES[rng.randi() % BEAST_TEMPLATES.size()]
-	return {"text": ParcelNarrator.render(tpl, slots), "kind": "invention", "source": "ambient",
-		"species_id": int(p["id"]), "profile": p}
+	var epoch := Epoch.current(ctx)
+	for _attempt in 10:
+		var slots := _base_slots(sp, ctx)
+		slots["comportement"] = Procedural.apply_agreement(str(behaviors[rng.randi() % behaviors.size()]), {"espece": slots["_espece_pl"]})
+		slots["raison"] = str(reasons[0]) if not reasons.is_empty() else "tout a pris un autre chemin"
+		var tpl: String = BEAST_TEMPLATES[rng.randi() % BEAST_TEMPLATES.size()]
+		var text := ParcelNarrator.render(tpl, slots)
+		if Epoch.is_clean(text, epoch):
+			return {"text": text, "kind": "invention", "source": "ambient", "species_id": int(p["id"]), "profile": p}
+	return {}
 
 
 func _base_slots(sp: Dictionary, ctx: Dictionary) -> Dictionary:
@@ -299,11 +310,14 @@ func _culture(sp: Dictionary, ctx: Dictionary, prng: RandomNumberGenerator) -> D
 		if DEITY_NAMES.has(t):
 			first_act = t
 			break
+	# La mémoire ne retient que des coutumes possibles à l'époque où on les invente.
+	var epoch := Epoch.current(ctx)
+	var pool := _custom_pool(sp, ctx).filter(func(c: String) -> bool: return Epoch.is_clean(c, epoch))
 	return {
 		"endonym": _word(clade, prng, 2 + prng.randi() % 2),
 		"place_name": _word(clade, prng, 2),
 		"deity": DEITY_NAMES[first_act], "deity_cause": DEITY_CAUSES[first_act], "deity_origin": first_act,
-		"customs": _pick_n(_custom_pool(sp, ctx), 3, prng),
+		"customs": _pick_n(pool if not pool.is_empty() else ["on se tait quand le ciel change"], 3, prng),
 	}
 
 

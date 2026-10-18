@@ -49,6 +49,7 @@ const REAL_ERAS := ["Archéen", "Grande Oxydation", "Terre boule de neige", "Exp
 	"Carbonifère", "Grande Mourance", "Trias", "Jurassique",
 	"Mésozoïque", "Cénozoïque", "Préhistoire", "Antiquité", "Moyen Âge", "Renaissance", "Industriel", "Moderne"]
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 const TAG_KEYS := ["clade", "biome", "land_use", "event"]
 ## Poids d'un tag qui correspond à la situation (un fait général vaut 1).
 const TAG_WEIGHTS := {"clade": 3.0, "biome": 2.0, "land_use": 3.0, "event": 4.0}
@@ -99,6 +100,9 @@ static func era_facts(era: String) -> Array:
 	for i in raw.size():
 		var f: Dictionary = raw[i].duplicate()
 		f["id"] = "%s#%d" % [era, i]
+		# Époque explicite (STRATEGIE.md §9) : un fait n'appartient qu'à son étape ou à son ère.
+		f["min_era"] = maxi(0, Epoch.index_of(era))
+		f["max_era"] = maxi(0, Epoch.index_of(era))
 		if window.size() == 2:
 			f["min_year"] = maxf(float(window[0]), float(f.get("min_year", -INF)))
 			f["max_year"] = minf(float(window[1]), float(f.get("max_year", INF)))

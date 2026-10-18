@@ -15,6 +15,7 @@ extends RefCounted
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Genres de moments racontés.
 const KINDS := ["land_use", "arrival", "departure", "extinction", "heat", "cold", "focus", "generic"]
@@ -81,6 +82,12 @@ const LEXICON := {
 		"fin": ["La vie est minuscule, mais elle tient bon.", "Rien ne bouge à l'œil nu, et pourtant tout commence.", "Le monde n'est encore qu'une promesse."],
 		"culture": ["des tapis de microbes"], "bati": ["des stromatolites"], "habitants": ["les premières cellules"],
 		"herbivore": ["les tapis de microbes"], "carnivore": ["les microbes chasseurs"], "omnivore": ["les cellules vagabondes"],
+	},
+	"Cambrien": {
+		"ciel": ["dans l'eau trouble des lagunes", "au-dessus des récifs", "sous la houle"],
+		"fin": ["Chaque carapace est une invention.", "Les mers débordent de formes nouvelles.", "Personne n'a encore marché sur la terre ferme."],
+		"culture": ["des algues"], "bati": ["des récifs"], "habitants": ["les premiers esprits"],
+		"herbivore": ["les brouteurs des récifs"], "carnivore": ["les chasseurs des récifs"], "omnivore": ["les trilobites"],
 	},
 	"Paléozoïque": {
 		"ciel": ["dans l'eau trouble des lagunes", "sous les fougères géantes", "au bord des marais chauds"],
@@ -187,7 +194,7 @@ const LAND_USE_TEMPLATES := {
 	"wild": [
 		"{ouverture} {terre} redevient sauvage {ciel}. {fin}",
 		"{date}, plus aucune main ne façonne {terre} : la vie y suit son propre cours.",
-		"Les herbes et les bêtes reprennent {terre}, sous ton regard tranquille. {fin}",
+		"Les plantes et les bêtes reprennent {terre}, sous ton regard tranquille. {fin}",
 	],
 	"thaw": [
 		"{ouverture} la glace se retire de {terre}, et la terre nue respire à nouveau. {fin}",
@@ -343,6 +350,8 @@ const FOCUS_TEMPLATES := [
 	"{date}, tu choisis de veiller sur {terre} ; {vue}.",
 	"tu te penches sur {terre} {ciel} : {vue}. {fin}",
 ]
+## Phrase neutre, valable à toute époque, si aucun gabarit ne l'est.
+const SAFE_TEMPLATE := "{date}, le temps passe sur ta parcelle."
 const GENERIC_TEMPLATES := [
 	"{date}, sur {terre} : {resume}.",
 	"{ouverture} sur {terre}, {resume}. {fin}",
@@ -599,21 +608,29 @@ static func _land_use_key(to: String, prev_use: String) -> String:
 
 ## Texte (1 ou 2 phrases, deuxième personne) pour un moment. Déterministe : même graine, même suite
 ## d'appels -> mêmes textes.
-func narrate(m: Dictionary, era: Variant = "", year: Variant = null) -> String:
+## epoch : époque effective (epoch.gd) ; -1 = déduite de l'ère et de la date. Aucun mot anachronique :
+## on essaie les gabarits (et leurs emplacements) jusqu'à un texte propre, sinon une phrase neutre.
+func narrate(m: Dictionary, era: Variant = "", year: Variant = null, epoch := -1) -> String:
 	_count += 1
 	var kind := str(m.get("kind", "generic"))
 	var snap: Dictionary = m.get("snapshot", {})
 	if year == null:
 		year = snap.get("year", null)
+	if epoch < 0:
+		epoch = Epoch.from_era_year(era, year)
 	rng.seed = hash([_seed, _count, kind, str(m.get("land_use", "")), int(m.get("species_id", -1))])
 	var e := lexicon_key(era, year)
-	var slots := _slots(e, m, snap, year)
 	var templates := templates_for(m)
 	var idx := rng.randi() % templates.size()
 	if templates[idx] == _last_template and templates.size() > 1:
 		idx = (idx + 1) % templates.size()
-	_last_template = templates[idx]
-	return render(templates[idx], slots)
+	for attempt in templates.size() * 3:
+		var tpl: String = templates[(idx + attempt) % templates.size()]
+		var text := render(tpl, _slots(e, m, snap, year))
+		if Epoch.is_clean(text, epoch):
+			_last_template = tpl
+			return text
+	return render(SAFE_TEMPLATE, _slots(e, m, snap, year)).replace("ce coin de forêt", "ta parcelle")
 
 
 ## Gabarits candidats pour un moment (exposé pour les tests).
@@ -671,7 +688,9 @@ static func lexicon_key(era: Variant, year: Variant) -> String:
 	var stage := FactBase.stage_for(era, year)
 	if stage in ["Archéen", "Grande Oxydation", "Terre boule de neige"]:
 		return "Précambrien"
-	if stage in ["Explosion cambrienne", "Sortie des eaux", "Carbonifère", "Grande Mourance"]:
+	if stage == "Explosion cambrienne":
+		return "Cambrien"
+	if stage in ["Sortie des eaux", "Carbonifère", "Grande Mourance"]:
 		return "Paléozoïque"
 	if stage in ["Trias", "Jurassique"]:
 		return "Mésozoïque"
