@@ -16,6 +16,8 @@ const REGROW_SMOOTHING := 7.0
 const FIRE_DROP := 0.1
 const FIRE_TIME := 10.0
 const SCORCH_TIME := 60.0
+## Durée (s) de l'émersion / immersion complète des terres pendant le prologue.
+const EMERGE_TIME := 8.0
 
 var parcel_size := ParcelLogic.PARCEL_SIZE
 
@@ -35,6 +37,9 @@ var _scorch := 0.0
 var _smoke: GPUParticles2D
 var _flood := 0.0
 var _flood_hold := 0.0
+## 1 : parcelle sous la mer (prologue), 0 : terres émergées. Lissé : les terres émergent peu à peu.
+var submerged_level := 0.0
+var _submerged_target := 0.0
 
 
 func _ready() -> void:
@@ -80,9 +85,15 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 		_state_a = tr[0]
 		_state_b = tr[1]
 		_blend = tr[2]
-	if not snap and (p.vegetation < _targets.vegetation - FIRE_DROP or (p.land_use == "crater" and _land_use != "crater")):
+	# Pas d'incendie sous la mer, dans la glace ni sous les eaux : la végétation y disparaît sans feu.
+	var no_fire := ParcelLogic.submerged(p.land_use) > 0.5 or ParcelLogic.submerged(_land_use) > 0.5 \
+		or p.land_use in ["ice", "ocean", "flooded"] or p.temperature_c < 0.0
+	if not snap and not no_fire and (p.vegetation < _targets.vegetation - FIRE_DROP or (p.land_use == "crater" and _land_use != "crater")):
 		ignite(_values.vegetation)
 	_land_use = p.land_use
+	_submerged_target = ParcelLogic.submerged(p.land_use)
+	if snap:
+		submerged_level = _submerged_target
 	_targets = {vegetation = p.vegetation, water = p.water, temperature_c = p.temperature_c, tech = p.tech}
 	if snap:
 		_values = _targets.duplicate()
@@ -116,6 +127,7 @@ func _process(delta: float) -> void:
 		if key == "vegetation" and _targets[key] > _values[key]:
 			kk = 1.0 - exp(-delta / REGROW_SMOOTHING)
 		_values[key] = lerpf(_values[key], _targets[key], kk)
+	submerged_level = move_toward(submerged_level, _submerged_target, delta / EMERGE_TIME)
 	_flood_hold = maxf(0.0, _flood_hold - delta)
 	var flood_target := 1.0 if _flood_hold > 0.0 else (0.55 if _land_use == "flooded" else 0.0)
 	_flood = lerpf(_flood, flood_target, 1.0 - exp(-delta / (2.0 if flood_target > _flood else 8.0)))
@@ -146,6 +158,7 @@ func _push() -> void:
 	_mat.set_shader_parameter("burn_density", _burn_density)
 	_mat.set_shader_parameter("scorch", _scorch)
 	_mat.set_shader_parameter("flood", _flood)
+	_mat.set_shader_parameter("river_visible", 1.0 - submerged_level)
 	_mat.set_shader_parameter("grow", clampf((_targets.vegetation - _values.vegetation) * 6.0, 0.0, 1.0))
 	for key in _values:
 		_mat.set_shader_parameter(key, _values[key])

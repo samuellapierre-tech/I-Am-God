@@ -56,7 +56,8 @@ static func make_smoke(extents: Vector2, amount: int, dark := true) -> GPUPartic
 	p.texture = puff_texture()
 	p.amount = amount
 	p.lifetime = 6.0
-	p.visibility_rect = Rect2(-extents - Vector2(400, 600), extents * 2.0 + Vector2(800, 800))
+	# Large : la fumée monte et dérive loin de sa zone d'émission (évite les coupures nettes).
+	p.visibility_rect = Rect2(-extents - Vector2(1500, 1500), extents * 2.0 + Vector2(3000, 3000))
 	# Les halos font 64 px : on agrandit par l'échelle.
 	pm.scale_min *= 1.5
 	pm.scale_max *= 2.5

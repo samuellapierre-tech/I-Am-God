@@ -13,36 +13,42 @@ const BIRDS_PER_FLOCK := 11
 const SWARMS := 8
 const INSECTS_PER_SWARM := 14
 const GLIDERS := 3
+const PLANKTON_GROUPS := 6
+const PLANKTON_PER_GROUP := 14
 
 var _birds: MultiMeshInstance2D
 var _insects: MultiMeshInstance2D
 var _gliders: MultiMeshInstance2D
+var _plankton: MultiMeshInstance2D
 
 
 func _ready() -> void:
 	_birds = _make(0, FLOCKS, BIRDS_PER_FLOCK)
 	_insects = _make(1, SWARMS, INSECTS_PER_SWARM)
 	_gliders = _make(2, GLIDERS, 1)
+	_plankton = _make(3, PLANKTON_GROUPS, PLANKTON_PER_GROUP)
+	_plankton.z_index = 2
 	_gliders.z_index = 3
 	_birds.z_index = 4
 	_insects.z_index = 2
 
 
-func apply_parcel(p: ParcelSim, swarm_centers: PackedVector2Array) -> void:
+func apply_parcel(p: ParcelSim, swarm_centers: PackedVector2Array, year := 0.0) -> void:
 	var c := p.cell
 	var seed_off := Vector2(fposmod(c.x * 0.137, 1.0), fposmod(c.y * 0.291, 1.0))
-	var counts := ParcelLogic.ambient_counts(p.land_use, p.vegetation, p.water, p.temperature_c, _has_clade(p, "pterosaure"))
+	var counts := ParcelLogic.ambient_counts(p.land_use, p.vegetation, p.water, p.temperature_c, _has_clade(p, "pterosaure"), year)
 	_set_visible(_birds, counts.flocks * BIRDS_PER_FLOCK)
 	_set_visible(_insects, counts.swarms * INSECTS_PER_SWARM)
 	_set_visible(_gliders, counts.gliders)
-	for mmi in [_birds, _insects, _gliders]:
+	_set_visible(_plankton, counts.plankton * PLANKTON_PER_GROUP)
+	for mmi in [_birds, _insects, _gliders, _plankton]:
 		var mat := mmi.material as ShaderMaterial
 		mat.set_shader_parameter("seed_offset", seed_off)
 	(_insects.material as ShaderMaterial).set_shader_parameter("swarm_centers", swarm_centers)
 
 
 func set_night(night: float) -> void:
-	for mmi in [_birds, _insects, _gliders]:
+	for mmi in [_birds, _insects, _gliders, _plankton]:
 		(mmi.material as ShaderMaterial).set_shader_parameter("night", night)
 
 

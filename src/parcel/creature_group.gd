@@ -41,6 +41,10 @@ var clade := ""
 var size := 0.3
 var length := 30.0
 var shape := 0
+## ParcelLogic.Locomotion : marche, nage en banc, fixé, rampe, vole.
+var locomotion := 0
+## La parcelle est sous l'eau (prologue).
+var aquatic := false
 var color := Color.WHITE
 var mmi: MultiMeshInstance2D
 
@@ -82,19 +86,21 @@ func _init(p_species_id: int, cell: Vector2i) -> void:
 
 ## Met à jour l'apparence depuis une entrée de parcel.fauna. Renvoie true si elle a changé
 ## (texture / silhouette à recharger).
-func set_species(f: Dictionary) -> bool:
+func set_species(f: Dictionary, p_aquatic := false) -> bool:
 	var new_role := String(f.get("role", "omnivore"))
 	var new_clade := String(f.get("clade", ""))
 	var new_size := float(f.get("size", 0.3))
-	var changed := new_role != role or new_clade != clade or absf(new_size - size) > 0.02
+	var changed := new_role != role or new_clade != clade or absf(new_size - size) > 0.02 or p_aquatic != aquatic
 	if not changed:
 		return false
 	role = new_role
 	clade = new_clade
 	size = new_size
+	aquatic = p_aquatic
 	length = ParcelLogic.creature_length(size)
-	shape = ParcelLogic.shape_for(clade, role, size)
-	color = ParcelLogic.species_color(role, species_id)
+	shape = ParcelLogic.shape_for(clade, role, size, aquatic)
+	locomotion = ParcelLogic.locomotion_for(shape, role, size)
+	color = ParcelLogic.species_color(role, species_id, shape)
 	return true
 
 
@@ -107,7 +113,7 @@ func leaving_count() -> int:
 
 
 func is_prey() -> bool:
-	return role == "herbivore" or role == "omnivore"
+	return (role == "herbivore" or role == "omnivore") and locomotion != ParcelLogic.Locomotion.SESSILE
 
 
 ## Aligne le nombre d'individus visibles sur `count`, sans saut (fondus). Quand l'effectif baisse,
@@ -166,7 +172,10 @@ func strike(i: int, from: Vector2, escapes: bool) -> void:
 
 func _spawn() -> void:
 	var p: Vector2
-	if role == "carnivore":
+	if locomotion == ParcelLogic.Locomotion.SESSILE:
+		# Colonies, algues, éponges, plantes : en taches éparses autour du centre de la colonie.
+		p = _clamp(herd_center + _random_in_circle(_herd_radius() * 2.2))
+	elif role == "carnivore" or locomotion == ParcelLogic.Locomotion.FLY:
 		p = _random_point(0.08)
 	else:
 		p = _clamp(herd_center + _random_in_circle(_herd_radius()))
@@ -196,6 +205,11 @@ func step(delta: float, ctx: Dictionary) -> void:
 	_update_herd(delta, spots)
 
 	var walk := 18.0 + 22.0 * size
+	match locomotion:
+		ParcelLogic.Locomotion.CRAWL:
+			walk *= 0.45
+		ParcelLogic.Locomotion.SWIM:
+			walk *= 1.5
 	var run := (95.0 if role == "carnivore" else 80.0) + 65.0 * size
 	var prey_role := is_prey()
 	var sep := length * 0.8
@@ -207,6 +221,11 @@ func step(delta: float, ctx: Dictionary) -> void:
 		var p := pos[i]
 		var st := state[i]
 		var desired := Vector2.ZERO
+		if locomotion == ParcelLogic.Locomotion.SESSILE:
+			# Fixé : seule l'ondulation (phase lente) anime la forme.
+			phase[i] = fposmod(phase[i] + delta * 0.15, 1.0)
+			state[i] = GRAZE
+			continue
 
 		# Les proies fuient les chasseurs proches (et se réveillent), sauf celles à terre.
 		if prey_role and st != DOWN:
@@ -216,47 +235,63 @@ func step(delta: float, ctx: Dictionary) -> void:
 				timer[i] = 1.2
 				goal[i] = _clamp(p + (p - threat).normalized() * 140.0)
 
-		if timer[i] <= 0.0:
+		if locomotion == ParcelLogic.Locomotion.FLY:
+			# Vol en zigzag d'un point à l'autre, brefs vols stationnaires.
+			if timer[i] <= 0.0 or p.distance_to(goal[i]) < 12.0:
+				goal[i] = _random_point(0.06)
+				timer[i] = _rng.randf_range(1.5, 4.5)
+			var to_goal := (goal[i] - p).normalized()
+			var zig := Vector2(-to_goal.y, to_goal.x) * sin(phase[i] * TAU * 3.0) * 0.6
+			desired = (to_goal + zig) * (110.0 + 60.0 * size)
+			st = RUN
+		elif locomotion == ParcelLogic.Locomotion.SWIM and role != "carnivore" and st != RUN:
+			# Banc : cohésion, alignement, cap commun vers le centre du banc qui se déplace.
+			desired = _school(i, n, walk)
+			st = WANDER
+		elif timer[i] <= 0.0:
 			if st == RUN or st == POUNCE or st == DOWN:
 				st = GRAZE # essoufflé, ou se relève
 				timer[i] = _rng.randf_range(2.0, 5.0)
 			else:
 				st = _decide(i, prey, prey_len, max_prey_len, spots, night)
 
-		match st:
-			WANDER, VISIT, DRINK:
-				var to := goal[i] - p
-				if to.length() < 6.0:
-					# Arrivé : broute, boit, se repose ou (espèce intelligente) travaille sur place.
-					timer[i] = _rng.randf_range(2.0, 6.0) if st == WANDER else _rng.randf_range(4.0, 8.0)
-					if st == DRINK and not river.is_empty():
-						heading[i] = (ParcelLogic.nearest_on_polyline(p, river) - p).angle()
-					st = GRAZE
-				else:
-					desired = to.normalized() * (walk * 1.3 if role == "sapient" else walk)
-			RUN:
-				if role == "carnivore":
-					var target := _nearest_prey(prey, prey_len, goal[i], 220.0, max_prey_len)
-					if target.x == INF:
-						st = WANDER
-						goal[i] = _clamp(p + _random_in_circle(250.0))
+		# Volants et bancs sont déjà pilotés ci-dessus ; les autres suivent leur état.
+		var steered := locomotion == ParcelLogic.Locomotion.FLY or (locomotion == ParcelLogic.Locomotion.SWIM and role != "carnivore" and st == WANDER)
+		if not steered:
+			match st:
+				WANDER, VISIT, DRINK:
+					var to := goal[i] - p
+					if to.length() < 6.0:
+						# Arrivé : broute, boit, se repose ou (espèce intelligente) travaille sur place.
+						timer[i] = _rng.randf_range(2.0, 6.0) if st == WANDER else _rng.randf_range(4.0, 8.0)
+						if st == DRINK and not river.is_empty():
+							heading[i] = (ParcelLogic.nearest_on_polyline(p, river) - p).angle()
+						st = GRAZE
 					else:
-						goal[i] = target
-						var d := target - p
-						if d.length() < length * 1.6:
-							st = POUNCE # bond final
-							timer[i] = 0.7
-						desired = d.normalized() * run
-				else:
-					desired = (goal[i] - p).normalized() * run
-			POUNCE:
-				var d := goal[i] - p
-				desired = d.normalized() * run * 1.8
-				if d.length() < length * 0.45 + 4.0:
-					_emit(EMIT_CATCH, goal[i], 0.0, 0.0)
-					st = EAT
-					timer[i] = _rng.randf_range(5.0, 8.0)
-					desired = Vector2.ZERO
+						desired = to.normalized() * (walk * 1.3 if role == "sapient" else walk)
+				RUN:
+					if role == "carnivore":
+						var target := _nearest_prey(prey, prey_len, goal[i], 220.0, max_prey_len)
+						if target.x == INF:
+							st = WANDER
+							goal[i] = _clamp(p + _random_in_circle(250.0))
+						else:
+							goal[i] = target
+							var d := target - p
+							if d.length() < length * 1.6:
+								st = POUNCE # bond final
+								timer[i] = 0.7
+							desired = d.normalized() * run
+					else:
+						desired = (goal[i] - p).normalized() * run
+				POUNCE:
+					var d := goal[i] - p
+					desired = d.normalized() * run * 1.8
+					if d.length() < length * 0.45 + 4.0:
+						_emit(EMIT_CATCH, goal[i], 0.0, 0.0)
+						st = EAT
+						timer[i] = _rng.randf_range(5.0, 8.0)
+						desired = Vector2.ZERO
 
 		# Séparation : pas d'empilement dans un troupeau.
 		if st != POUNCE:
@@ -287,7 +322,7 @@ func step(delta: float, ctx: Dictionary) -> void:
 
 ## Empreintes alternées gauche/droite et poussière sous les gros (ou ceux qui courent).
 func _footsteps(i: int, p: Vector2, moved: float, speed: float, walk: float, st: int) -> void:
-	if shape == ParcelLogic.Shape.BIRD or alpha[i] < 0.5:
+	if shape == ParcelLogic.Shape.BIRD or alpha[i] < 0.5 or aquatic or locomotion != ParcelLogic.Locomotion.WALK:
 		return
 	stride[i] += moved
 	var step_len := length * 0.4
@@ -367,6 +402,24 @@ func _decide(i: int, prey: PackedVector2Array, prey_len: PackedFloat32Array, max
 	return WANDER
 
 
+## Pilotage d'un poisson dans son banc.
+func _school(i: int, n: int, speed: float) -> Vector2:
+	var p := pos[i]
+	var coh := Vector2.ZERO
+	var ali := Vector2.ZERO
+	var count := 0
+	var r2 := (length * 5.0) ** 2
+	for j in n:
+		if j != i and pos[j].distance_squared_to(p) < r2:
+			coh += pos[j]
+			ali += vel[j]
+			count += 1
+	var steer := (herd_center - p).normalized() * speed * 0.7
+	if count > 0:
+		steer += (coh / count - p) * 0.6 + ali / count * 0.7
+	return steer.limit_length(speed)
+
+
 func _update_herd(delta: float, spots: PackedVector2Array) -> void:
 	herd_timer -= delta
 	if role == "sapient" and not spots.is_empty():
@@ -380,7 +433,10 @@ func _update_herd(delta: float, spots: PackedVector2Array) -> void:
 		if is_prey() and _can_drink() and _rng.randf() < 0.35:
 			herd_goal = _clamp(ParcelLogic.drinking_spot(herd_center, river, river_width, _herd_radius() * 0.6))
 		herd_timer = _rng.randf_range(20.0, 45.0)
-	herd_center = herd_center.move_toward(herd_goal, 10.0 * delta)
+		if locomotion == ParcelLogic.Locomotion.SWIM:
+			herd_timer = _rng.randf_range(7.0, 15.0) # les bancs changent souvent de cap
+	var herd_speed := 30.0 if locomotion == ParcelLogic.Locomotion.SWIM else 10.0
+	herd_center = herd_center.move_toward(herd_goal, herd_speed * delta)
 
 
 func _herd_radius() -> float:
@@ -413,6 +469,8 @@ func _fill_buffer(run_speed: float) -> void:
 		buffer.resize(capacity * STRIDE)
 	buffer.fill(0.0)
 	var quad := length * 1.35 # carré englobant queue, ailes et ombre
+	if shape == ParcelLogic.Shape.MICROBE:
+		quad *= ParcelLogic.MICROBE_SCALE
 	for i in n:
 		var st := state[i]
 		var q := quad * (1.18 if st == POUNCE else 1.0)
@@ -477,7 +535,7 @@ func _can_drink() -> bool:
 
 ## Les petits animaux ne traversent pas la rivière (eau libre) : on les garde sur la berge.
 func _wades() -> bool:
-	return size >= 0.6 or shape == ParcelLogic.Shape.BIRD
+	return size >= 0.6 or shape == ParcelLogic.Shape.BIRD or aquatic or locomotion == ParcelLogic.Locomotion.FLY or locomotion == ParcelLogic.Locomotion.SWIM
 
 
 func _random_point(inset: float) -> Vector2:

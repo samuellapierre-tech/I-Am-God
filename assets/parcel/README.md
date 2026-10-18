@@ -18,7 +18,15 @@ Le premier fichier trouvé gagne, du plus précis au plus générique.
 | 2 | `<clade>.png` | `dinosaure.png`, `oiseau.png`, `mammifere.png` |
 
 Clades actuels (`src/sim/species.gd`) : `dinosaure`, `oiseau`, `pterosaure`, `reptile`, `mammifere`,
-`primate`, `chimere`. Rôles : `herbivore`, `carnivore`, `omnivore`, `sapient`.
+`primate`, `chimere`. Prologue (de la première cellule au Trias) : `microbe`, `algue`, `eponge`,
+`arthropode`, `mollusque`, `poisson`, `plante`, `amphibien`, `insecte`, `synapside` (et `meduse` /
+`cnidaire`). Rôles : `herbivore`, `carnivore`, `omnivore`, `sapient`.
+
+Un clade inconnu ne plante jamais : il reçoit une silhouette générique tant que son image manque.
+Les organismes fixés (`microbe`, `algue`, `eponge`, `plante`) sont dessinés en colonies immobiles qui
+ondulent ; les nageurs (`poisson`, `meduse`, grands `arthropode` / `mollusque` chasseurs) en bancs.
+Pour un même clade, l'image peut différer sous l'eau et à terre via `<clade>_<role>.png`
+(ex. `arthropode_carnivore.png` pour l'anomalocaris, `arthropode_herbivore.png` pour le trilobite).
 
 - **Vue de dessus**, **tête vers la droite** (+x), créature centrée, fond transparent.
 - Image **carrée**, 256×256 conseillé (512×512 max). La créature occupe ~75 % de la largeur

@@ -20,6 +20,7 @@ const AmbientLayer := preload("res://src/parcel/ambient_layer.gd")
 const Atmosphere := preload("res://src/parcel/atmosphere.gd")
 const NightLights := preload("res://src/parcel/night_lights.gd")
 const ParcelParticles := preload("res://src/parcel/parcel_particles.gd")
+const WaterVeil := preload("res://src/parcel/water_veil.gd")
 
 ## Rayon visuel (unités monde) d'un pouvoir : base + par cellule de rayon.
 const FX_BASE_RADIUS := 90.0
@@ -45,6 +46,8 @@ var _held_update := false
 @onready var fx: PowerFx = $Sky/Fx
 @onready var atmosphere: Atmosphere = $Sky/Atmosphere
 @onready var lights: NightLights = $Sky/NightLights
+## Prologue : la parcelle vue à travers la mer, puis les terres qui émergent.
+@onready var water: WaterVeil = $Sky/WaterVeil
 ## Lumière ambiante (jour, aube, nuit, temps couvert) : assombrit tout le calque du monde ;
 ## lumières, météo et effets sont dans le calque "Sky", non assombri.
 @onready var daylight: CanvasModulate = $Daylight
@@ -82,6 +85,8 @@ func _on_parcel_updated() -> void:
 		terrain.set_landmarks(_landmarks)
 		structures.landmarks = _landmarks
 		creatures.set_landmarks(_landmarks)
+		water.set_landmarks(_landmarks)
+		water.set_cell(p.cell)
 	terrain.apply_parcel(p, changed)
 	structures.apply_parcel(p)
 	creatures.spots = structures.spots()
@@ -90,7 +95,7 @@ func _on_parcel_updated() -> void:
 	atmosphere.apply_parcel(p)
 	lights.land_use = p.land_use
 	lights.campfire = ParcelLogic.campfire_near(_landmarks)
-	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, _landmarks.river))
+	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, _landmarks.river), p.year)
 
 
 func _process(delta: float) -> void:
@@ -107,7 +112,8 @@ func _process(delta: float) -> void:
 	var p = GameState.parcel
 	if p != null:
 		var rs := ParcelLogic.river_state(p.land_use, p.water, atmosphere.snow_cover)
-		creatures.set_river_open(rs.x > 0.5 and rs.y < 0.5)
+		creatures.set_river_open(rs.x > 0.5 and rs.y < 0.5 and terrain.submerged_level < 0.5)
+		water.update_water(terrain.submerged_level, ParcelLogic.sea_tint(p.year), atmosphere.sky)
 
 	var powers := _powers()
 	var power := String(powers.get("power")) if powers != null and "power" in powers else ""

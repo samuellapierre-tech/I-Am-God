@@ -9,10 +9,21 @@ const CREATURE_DIR := "res://assets/parcel/creatures/"
 const STRUCTURE_DIR := "res://assets/parcel/structures/"
 
 ## Types de sol dessinés par shaders/parcel_terrain.gdshader (mêmes indices côté shader).
-enum Ground { GRASS, LUSH, DRY, SAND, TUNDRA, SNOW, ROCK, WATER, MUD, CRATER, DIRT, PAVED, URBAN, RUBBLE, TAIGA }
+## Les cinq derniers servent au prologue (de la première cellule aux premiers dinosaures).
+enum Ground { GRASS, LUSH, DRY, SAND, TUNDRA, SNOW, ROCK, WATER, MUD, CRATER, DIRT, PAVED, URBAN, RUBBLE, TAIGA,
+	SEABED, MAT, REEF, BARREN, SWAMP }
 
 ## Silhouettes des créatures de remplacement (mêmes indices dans shaders/parcel_creature.gdshader).
-enum Shape { QUADRUPED, BIPED, BIRD, LONG_NECK, REPTILE, HUMANOID }
+## GENERIC : tout clade inconnu (jamais d'erreur, juste une forme neutre).
+enum Shape { QUADRUPED, BIPED, BIRD, LONG_NECK, REPTILE, HUMANOID, GENERIC, MICROBE, ALGA, SPONGE,
+	ARTHROPOD, MYRIAPOD, MOLLUSK, JELLY, FISH, PLANT, AMPHIBIAN, DRAGONFLY, SYNAPSID }
+
+## Façons de bouger : marcher, nager en banc, rester fixé (colonies, algues, éponges, plantes),
+## ramper sur le fond, voler en zigzag.
+enum Locomotion { WALK, SWIM, SESSILE, CRAWL, FLY }
+
+## Usages du sol sous la mer (prologue) : la parcelle est vue à travers l'eau.
+const SUBMERGED_USES := ["seabed", "microbial_mat", "reef"]
 
 const BIOME_GROUND := {
 	"Abysses": Ground.WATER, "Océan": Ground.WATER, "Glace": Ground.SNOW, "Toundra": Ground.TUNDRA,
@@ -24,6 +35,8 @@ const LAND_USE_GROUND := {
 	"ocean": Ground.WATER, "ice": Ground.SNOW, "crater": Ground.CRATER, "flooded": Ground.MUD,
 	"town": Ground.PAVED, "city": Ground.PAVED, "megacity": Ground.URBAN, "arcology": Ground.URBAN,
 	"ruins": Ground.RUBBLE,
+	"seabed": Ground.SEABED, "microbial_mat": Ground.MAT, "reef": Ground.REEF, "barren": Ground.BARREN,
+	"swamp_forest": Ground.SWAMP,
 }
 ## Sol piétiné / labouré (chemins de terre) selon l'usage.
 const LAND_USE_WEAR := {"camp": 0.25, "pasture": 0.35, "farmland": 0.55, "village": 0.6}
@@ -31,7 +44,8 @@ const LAND_USE_WEAR := {"camp": 0.25, "pasture": 0.35, "farmland": 0.55, "villag
 const GROUND_VEGETATION := {
 	Ground.WATER: 0.0, Ground.SNOW: 0.05, Ground.CRATER: 0.0, Ground.ROCK: 0.35, Ground.SAND: 0.15,
 	Ground.TUNDRA: 0.35, Ground.MUD: 0.25, Ground.DIRT: 0.5, Ground.PAVED: 0.3, Ground.URBAN: 0.15,
-	Ground.RUBBLE: 0.9,
+	Ground.RUBBLE: 0.9, Ground.SEABED: 0.3, Ground.MAT: 0.0, Ground.REEF: 0.35, Ground.BARREN: 0.04,
+	Ground.SWAMP: 1.0,
 }
 const LAND_USE_VEGETATION := {
 	"camp": 0.85, "pasture": 0.5, "farmland": 0.4, "village": 0.45, "town": 0.35, "city": 0.25,
@@ -42,6 +56,13 @@ const ROLE_COLORS := {
 	"herbivore": Color("e9d8a6"), "carnivore": Color("d1495b"), "omnivore": Color("edae49"),
 	"sapient": Color("8ecae6"),
 }
+
+const SESSILE_COLORS := {
+	Shape.MICROBE: Color(0.32, 0.62, 0.5), Shape.ALGA: Color(0.36, 0.55, 0.22),
+	Shape.SPONGE: Color(0.9, 0.62, 0.38), Shape.PLANT: Color(0.24, 0.52, 0.2),
+}
+## Les colonies microbiennes sont minuscules : on les dessine en taches plus grandes que nature.
+const MICROBE_SCALE := 3.0
 
 const MIN_CREATURE_LENGTH := 14.0
 const MAX_CREATURE_LENGTH := 110.0
@@ -91,7 +112,9 @@ static func creature_length(size: float) -> float:
 	return lerpf(MIN_CREATURE_LENGTH, MAX_CREATURE_LENGTH, clampf(size, 0.0, 1.0))
 
 
-static func shape_for(clade: String, role: String, size: float) -> int:
+## aquatic : la parcelle est sous l'eau (un arthropode y est trilobite ou anomalocaris, à terre
+## mille-pattes).
+static func shape_for(clade: String, role: String, size: float, aquatic := false) -> int:
 	if role == "sapient":
 		return Shape.HUMANOID
 	match slug(clade):
@@ -103,7 +126,63 @@ static func shape_for(clade: String, role: String, size: float) -> int:
 			if role == "carnivore" or role == "omnivore":
 				return Shape.BIPED
 			return Shape.LONG_NECK if size >= 0.9 else Shape.QUADRUPED
-	return Shape.QUADRUPED
+		"mammifere", "primate", "chimere":
+			return Shape.QUADRUPED
+		"microbe", "bacterie", "cyanobacterie", "archee":
+			return Shape.MICROBE
+		"algue":
+			return Shape.ALGA
+		"eponge":
+			return Shape.SPONGE
+		"cnidaire", "meduse":
+			return Shape.JELLY
+		"arthropode", "trilobite":
+			return Shape.ARTHROPOD if aquatic else Shape.MYRIAPOD
+		"mollusque":
+			return Shape.MOLLUSK
+		"poisson":
+			return Shape.FISH
+		"plante":
+			return Shape.PLANT
+		"amphibien":
+			return Shape.AMPHIBIAN
+		"insecte":
+			return Shape.DRAGONFLY
+		"synapside":
+			return Shape.SYNAPSID
+	return Shape.GENERIC
+
+
+static func locomotion_for(shape: int, role: String, size: float) -> int:
+	match shape:
+		Shape.MICROBE, Shape.ALGA, Shape.SPONGE, Shape.PLANT:
+			return Locomotion.SESSILE
+		Shape.FISH, Shape.JELLY:
+			return Locomotion.SWIM
+		Shape.ARTHROPOD:
+			# Les grands chasseurs (anomalocaris) nagent ; les trilobites rampent sur le fond.
+			return Locomotion.SWIM if role == "carnivore" and size >= 0.3 else Locomotion.CRAWL
+		Shape.MOLLUSK:
+			return Locomotion.SWIM if size >= 0.3 else Locomotion.CRAWL
+		Shape.MYRIAPOD:
+			return Locomotion.CRAWL
+		Shape.DRAGONFLY:
+			return Locomotion.FLY
+	return Locomotion.WALK
+
+
+## 1 si la parcelle est sous la mer (prologue), 0 sinon.
+static func submerged(land_use: String) -> float:
+	return 1.0 if land_use in SUBMERGED_USES else 0.0
+
+
+## Teinte et turbidité de l'eau selon l'âge : rouge-orangé trouble avant la Grande Oxydation
+## (océan riche en fer, sans oxygène), puis bleue et claire. Renvoie Color(r, g, b, turbidité).
+static func sea_tint(year: float) -> Color:
+	var oxygen := smoothstep(-2.5e9, -1.8e9, year)
+	var anoxic := Color(0.6, 0.34, 0.16, 0.7)
+	var modern := Color(0.07, 0.36, 0.5, 0.28)
+	return anoxic.lerp(modern, oxygen)
 
 
 ## État affiché par shaders/parcel_creature.gdshader (0 marche, 1 broute, 2 dort, 3 court,
@@ -123,8 +202,10 @@ static func visual_state(group_state: int) -> float:
 
 
 ## Couleur de remplacement : teinte du rôle, légèrement décalée par espèce pour les distinguer.
-static func species_color(role: String, species_id: int) -> Color:
-	var base: Color = ROLE_COLORS.get(role, Color(0.8, 0.8, 0.8))
+## shape : les organismes fixés (colonies, algues, éponges, plantes) gardent leur couleur
+## naturelle plutôt que celle de leur rôle.
+static func species_color(role: String, species_id: int, shape := -1) -> Color:
+	var base: Color = SESSILE_COLORS.get(shape, ROLE_COLORS.get(role, Color(0.8, 0.8, 0.8)))
 	var h := posmod(hash(species_id), 1000) / 1000.0 - 0.5
 	return Color.from_hsv(fposmod(base.h + h * 0.08, 1.0), clampf(base.s + h * 0.2, 0.0, 1.0),
 		clampf(base.v - absf(h) * 0.25, 0.0, 1.0))
@@ -132,18 +213,23 @@ static func species_color(role: String, species_id: int) -> Color:
 
 ## Vie d'ambiance (purement décorative) : nombre de vols d'oiseaux, d'essaims, d'ombres de
 ## ptérosaures. Rien dans un cratère, peu en ville, pas d'insectes dans le froid.
+## Les oiseaux n'existent qu'après -150 Ma, les insectes volants après -400 Ma ; sous la mer,
+## seulement du plancton.
 static func ambient_counts(land_use: String, vegetation: float, water: float, temperature_c: float,
-		pterosaurs: bool) -> Dictionary:
-	var hostile := land_use in ["ocean", "crater", "ice"] or temperature_c < -5.0
+		pterosaurs: bool, year := 0.0) -> Dictionary:
+	if land_use in SUBMERGED_USES:
+		return {flocks = 0, swarms = 0, gliders = 0, plankton = 6}
+	var hostile := land_use in ["ocean", "crater", "ice", "barren"] or temperature_c < -5.0
 	var flocks := 0
-	if land_use != "crater":
+	if land_use != "crater" and year > -150e6:
 		flocks = clampi(roundi(vegetation * 3.0) + (1 if water > 0.5 else 0), 0 if hostile else 1, 3)
 	var swarms := 0
-	if not hostile and temperature_c >= 4.0:
+	if not hostile and temperature_c >= 4.0 and year > -400e6:
 		swarms = clampi(roundi((vegetation * 0.6 + water * 0.4) * 8.0), 0, 8)
 		if land_use in ["city", "megacity", "arcology"]:
 			swarms = mini(swarms, 2)
-	return {flocks = flocks, swarms = swarms, gliders = 3 if pterosaurs and land_use != "crater" else 0}
+	return {flocks = flocks, swarms = swarms, gliders = 3 if pterosaurs and land_use != "crater" else 0,
+		plankton = 0}
 
 
 ## Centres des essaims d'insectes : stables pour une parcelle, de préférence au bord de l'eau

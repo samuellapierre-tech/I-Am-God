@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://src/parcel/parcel_view.gd" id="1_view"]
 [ext_resource type="Script" path="res://src/parcel/parcel_terrain.gd" id="2_terrain"]
@@ -11,6 +11,7 @@
 [ext_resource type="Script" path="res://src/parcel/ambient_layer.gd" id="9_ambient"]
 [ext_resource type="Script" path="res://src/parcel/atmosphere.gd" id="10_atmosphere"]
 [ext_resource type="Script" path="res://src/parcel/night_lights.gd" id="11_lights"]
+[ext_resource type="Script" path="res://src/parcel/water_veil.gd" id="12_water"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_terrain"]
 shader = ExtResource("3_shader")
@@ -39,6 +40,10 @@ script = ExtResource("9_ambient")
 
 [node name="Sky" type="CanvasLayer" parent="."]
 follow_viewport_enabled = true
+
+[node name="WaterVeil" type="Node2D" parent="Sky"]
+texture_filter = 2
+script = ExtResource("12_water")
 
 [node name="NightLights" type="Node2D" parent="Sky"]
 texture_filter = 2

@@ -28,6 +28,8 @@ var autumn := 0.0
 var _base_temp := 15.0
 var _water := 0.3
 var _land_use := "wild"
+## Sous la mer (prologue) : ni pluie, ni neige, ni feuilles à l'écran.
+var _submerged := false
 var _cell := Vector2i.ZERO
 var _weather_timer := 20.0
 var _weather_index := 0
@@ -62,6 +64,9 @@ func apply_parcel(p: ParcelSim) -> void:
 	_base_temp = p.temperature_c
 	_water = p.water
 	_land_use = p.land_use
+	_submerged = ParcelLogic.submerged(p.land_use) > 0.5
+	if _submerged and weather != "clear":
+		_set_weather("clear")
 	if p.cell != _cell:
 		_cell = p.cell
 		_weather_index = 0
@@ -98,14 +103,16 @@ func _process(delta: float) -> void:
 	year_t = fposmod(year_t + delta / ParcelLogic.YEAR_LENGTH, 1.0)
 	var eff := effective_temperature()
 	snow_cover = maxf(ParcelLogic.snow_cover(eff, _water), _levels.snow * 0.6)
-	autumn = ParcelLogic.autumn(year_t, _base_temp)
+	autumn = 0.0 if _submerged else ParcelLogic.autumn(year_t, _base_temp)
+	if _submerged:
+		snow_cover = 0.0
 
 	_forced_ash = maxf(0.0, _forced_ash - delta)
 	_weather_timer -= delta
 	if _weather_timer <= 0.0 and _forced_ash <= 0.0:
 		_weather_index += 1
 		_rng.seed = hash([_cell, _weather_index])
-		_set_weather(ParcelLogic.pick_weather(_rng.randf(), _water, eff, _land_use))
+		_set_weather("clear" if _submerged else ParcelLogic.pick_weather(_rng.randf(), _water, eff, _land_use))
 	for k in _levels:
 		var target := 1.0 if k == weather else 0.0
 		_levels[k] = move_toward(_levels[k], target, delta * WEATHER_FADE)

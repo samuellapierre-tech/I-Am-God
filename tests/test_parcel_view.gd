@@ -378,3 +378,94 @@ func test_avoid_landmarks() -> String:
 	if ParcelLogic.river_state("ice", 0.5, 0.0).y != 1.0:
 		return "rivière gelée sous la banquise"
 	return ""
+
+
+func test_prologue_shapes_and_motion() -> String:
+	var S: Dictionary = ParcelLogic.Shape
+	var L: Dictionary = ParcelLogic.Locomotion
+	var cases := [
+		# clade, rôle, taille, sous l'eau, forme attendue, déplacement attendu
+		["microbe", "herbivore", 0.02, true, S.MICROBE, L.SESSILE],
+		["algue", "herbivore", 0.1, true, S.ALGA, L.SESSILE],
+		["éponge", "herbivore", 0.1, true, S.SPONGE, L.SESSILE],
+		["arthropode", "herbivore", 0.15, true, S.ARTHROPOD, L.CRAWL],
+		["arthropode", "carnivore", 0.6, true, S.ARTHROPOD, L.SWIM],
+		["arthropode", "herbivore", 0.3, false, S.MYRIAPOD, L.CRAWL],
+		["mollusque", "carnivore", 0.4, true, S.MOLLUSK, L.SWIM],
+		["poisson", "omnivore", 0.2, true, S.FISH, L.SWIM],
+		["plante", "herbivore", 0.3, false, S.PLANT, L.SESSILE],
+		["amphibien", "carnivore", 0.3, false, S.AMPHIBIAN, L.WALK],
+		["insecte", "carnivore", 0.2, false, S.DRAGONFLY, L.FLY],
+		["synapside", "carnivore", 0.5, false, S.SYNAPSID, L.WALK],
+		["reptile", "carnivore", 0.4, false, S.REPTILE, L.WALK],
+		["méduse", "carnivore", 0.2, true, S.JELLY, L.SWIM],
+		["xénomorphe inconnu", "omnivore", 0.4, false, S.GENERIC, L.WALK],
+		["", "herbivore", 0.4, false, S.GENERIC, L.WALK],
+	]
+	for c in cases:
+		var shape := ParcelLogic.shape_for(c[0], c[1], c[2], c[3])
+		var err := _expect(shape, c[4], "forme de %s" % c[0])
+		if err != "":
+			return err
+		err = _expect(ParcelLogic.locomotion_for(shape, c[1], c[2]), c[5], "déplacement de %s" % c[0])
+		if err != "":
+			return err
+	return ""
+
+
+func test_prologue_ground_and_sea() -> String:
+	var G: Dictionary = ParcelLogic.Ground
+	for c in [["seabed", G.SEABED], ["microbial_mat", G.MAT], ["reef", G.REEF], ["barren", G.BARREN],
+			["swamp_forest", G.SWAMP], ["usage_futur_inconnu", G.GRASS]]:
+		var err := _expect(ParcelLogic.ground_kind(c[0], "Forêt tempérée"), c[1], "sol de %s" % c[0])
+		if err != "":
+			return err
+	if ParcelLogic.submerged("reef") != 1.0 or ParcelLogic.submerged("swamp_forest") != 0.0:
+		return "seuls les fonds marins sont sous l'eau"
+	var early := ParcelLogic.sea_tint(-3.8e9)
+	var late := ParcelLogic.sea_tint(-500e6)
+	if early.r <= early.b or late.b <= late.r:
+		return "mer rouge-orangé avant l'oxygène, bleue ensuite"
+	if early.a <= late.a:
+		return "la mer ancienne est plus trouble"
+	var under := ParcelLogic.ambient_counts("reef", 0.5, 1.0, 25.0, false, -500e6)
+	if under.flocks != 0 or under.swarms != 0 or under.plankton == 0:
+		return "sous la mer : plancton seulement"
+	if ParcelLogic.ambient_counts("wild", 0.9, 0.8, 25.0, false, -300e6).flocks != 0:
+		return "pas d'oiseaux au Carbonifère"
+	if ParcelLogic.ambient_counts("wild", 0.9, 0.8, 25.0, false, -300e6).swarms == 0:
+		return "des insectes au Carbonifère"
+	return ""
+
+
+func test_school_and_sessile_groups() -> String:
+	var ctx := {prey = PackedVector2Array(), prey_len = PackedFloat32Array(), hunters = PackedVector2Array(), spots = PackedVector2Array()}
+	var reef := CreatureGroup.new(11, Vector2i(2, 2))
+	reef.set_species({role = "herbivore", clade = "éponge", size = 0.1}, true)
+	reef.set_target(12)
+	var before := reef.pos.duplicate()
+	for i in 30:
+		reef.step(0.1, ctx)
+	if reef.pos != before:
+		return "les éponges ne bougent pas"
+	var fish := CreatureGroup.new(12, Vector2i(2, 2))
+	fish.set_species({role = "omnivore", clade = "poisson", size = 0.2}, true)
+	fish.set_target(20)
+	for i in 80:
+		fish.step(0.1, ctx)
+	var c := Vector2.ZERO
+	for p in fish.pos:
+		c += p
+	c /= fish.pos.size()
+	var spread := 0.0
+	for p in fish.pos:
+		spread = maxf(spread, p.distance_to(c))
+	if spread > 400.0:
+		return "un banc doit rester groupé (%f)" % spread
+	if fish.emits.size() > 0:
+		return "les poissons ne laissent pas d'empreintes"
+	var odd := CreatureGroup.new(13, Vector2i(2, 2))
+	odd.set_species({role = "omnivore", clade = "clade_jamais_vu", size = 0.5})
+	odd.set_target(3)
+	odd.step(0.1, ctx)
+	return _expect(odd.shape, ParcelLogic.Shape.GENERIC, "clade inconnu")

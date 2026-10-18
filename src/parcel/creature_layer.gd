@@ -40,6 +40,7 @@ func _ready() -> void:
 
 func apply_parcel(p: ParcelSim) -> void:
 	var seen := {}
+	var aquatic := ParcelLogic.submerged(p.land_use) > 0.5
 	for f in p.fauna:
 		var id := int(f.species_id)
 		seen[id] = true
@@ -48,7 +49,7 @@ func apply_parcel(p: ParcelSim) -> void:
 			g = CreatureGroup.new(id, p.cell)
 			_groups[id] = g
 			_give_river(g)
-		if g.set_species(f) or g.mmi == null:
+		if g.set_species(f, aquatic) or g.mmi == null:
 			_refresh_look(g)
 		g.set_target(int(f.count))
 	for id in _groups:
@@ -141,7 +142,7 @@ func _build_context() -> void:
 			if is_prey and st != CreatureGroup.DOWN:
 				prey.append(g.pos[i])
 				prey_len.append(g.length)
-			elif g.role == "carnivore" and (st == CreatureGroup.RUN or st == CreatureGroup.POUNCE):
+			elif g.role == "carnivore" and g.locomotion != ParcelLogic.Locomotion.FLY and (st == CreatureGroup.RUN or st == CreatureGroup.POUNCE):
 				hunters.append(g.pos[i])
 	_ctx = {prey = prey, prey_len = prey_len, hunters = hunters, spots = spots, night = night}
 
@@ -196,10 +197,15 @@ func _refresh_look(g: CreatureGroup) -> void:
 	mat.shader = CREATURE_SHADER
 	mat.set_shader_parameter("use_texture", tex != null)
 	mat.set_shader_parameter("shape", g.shape)
+	var swimmer := g.locomotion == ParcelLogic.Locomotion.SWIM
+	mat.set_shader_parameter("variant", 1 if swimmer and g.shape in [ParcelLogic.Shape.ARTHROPOD, ParcelLogic.Shape.MOLLUSK] else 0)
 	g.mmi.material = mat
 	g.mmi.texture = tex
 	# Les volants au-dessus, puis les plus gros au-dessus des petits.
-	g.mmi.z_index = 2 if g.shape == ParcelLogic.Shape.BIRD else 1
+	g.mmi.z_index = 3 if g.locomotion == ParcelLogic.Locomotion.FLY else (2 if g.shape == ParcelLogic.Shape.BIRD else 1)
+	# Les organismes fixés (tapis, algues, éponges, plantes) restent sous les animaux.
+	if g.locomotion == ParcelLogic.Locomotion.SESSILE:
+		g.mmi.z_index = 0
 	_sort_children()
 
 

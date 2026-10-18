@@ -1,7 +1,7 @@
 shader_type canvas_item;
 // Vie d'ambiance entièrement calculée sur GPU (aucune mise à jour CPU par image) :
 // kind 0 = vols de petits oiseaux en V, 1 = essaims d'insectes (lucioles la nuit),
-// 2 = ombres de ptérosaures qui planent en cercles.
+// 2 = ombres de ptérosaures qui planent en cercles, 3 = plancton qui dérive (sous la mer).
 // Les instances sont posées à l'origine ; INSTANCE_CUSTOM : x = groupe, y = membre, z = graine.
 
 uniform int kind = 0;
@@ -55,6 +55,13 @@ void vertex() {
 		angle = 0.0;
 		size = mix(5.0, 14.0, night);
 		flap = 0.5 + 0.5 * sin(TIME * (2.0 + member_seed * 3.0) + m * 7.0);
+	} else if (kind == 3) {
+		vec2 home = vec2(h(vec2(g, m)), h(vec2(m, g + 7.0))) * parcel_size;
+		pos = home + vec2(sin(TIME * 0.11 + m) * 60.0 + TIME * 6.0, cos(TIME * 0.09 + g) * 40.0);
+		pos = mod(pos, parcel_size);
+		angle = 0.0;
+		size = 6.0 + 4.0 * member_seed;
+		flap = 0.5 + 0.5 * sin(TIME * 1.5 + m * 3.0);
 	} else {
 		vec2 drift = vec2(cos(TIME * 0.021 + g * 2.0 + h(vec2(g, 1.0)) * 6.0), sin(TIME * 0.017 + g * 3.0)) * parcel_size * 0.33;
 		vec2 c = parcel_size * 0.5 + drift;
@@ -97,6 +104,9 @@ void fragment() {
 		} else {
 			COLOR = vec4(vec3(0.1, 0.09, 0.07), (1.0 - smoothstep(0.3, 0.6, d)) * 0.75);
 		}
+	} else if (kind == 3) {
+		float d = length(p);
+		COLOR = vec4(vec3(0.8, 0.95, 0.75), (1.0 - smoothstep(0.1, 1.0, d)) * (0.25 + 0.3 * flap));
 	} else {
 		// Ombre floue : on adoucit le bord selon la distance.
 		float d = bird(p * vec2(1.0, 0.9), 0.6 + flap);
