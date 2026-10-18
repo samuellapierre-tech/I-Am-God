@@ -25,11 +25,11 @@ const LEVEL_BY_DIFFICULTY := {eveil = "random", divin = "greedy", apocalypse = "
 ## Cartes en plus de l'intensité dans la main de Samaël.
 const HAND_EXTRA := 3
 ## Oracle : pas de simulation par projection (basse résolution), projections au plus (dont la
-## référence sans frappe), unités de travail par image (fork ou pas ≈ 1 ms), budget de temps strict.
+## référence sans frappe). Il tourne sur un thread dédié : l'image ne paie que la relève des
+## résultats, sous ORACLE_BUDGET_USEC (budget de temps strict par image).
 const ORACLE_SUBSTEPS := 10
 const ORACLE_MAX_CANDIDATES := 5
-const ORACLE_UNITS_PER_UPDATE := 2
-const ORACLE_BUDGET_USEC := 8000
+const ORACLE_BUDGET_USEC := 4000
 ## Horizon de l'Oracle : ce nombre de manches.
 const ORACLE_ROUNDS := 2.0
 const ORACLE_WEIGHT := 3.0
@@ -45,17 +45,32 @@ var level := "greedy"
 var habits := {}
 ## Contre préféré connu de Samaël ("" : aucun).
 var favorite := ""
-## Mesures du budget de temps de l'Oracle (µs) : dernier appel de think(), maximum observé.
+## Mesures du budget de temps de l'Oracle (µs) : dernier appel de think(), maximum observé, et
+## attente la plus longue au moment d'un choix (projections pas encore finies, rare).
 var last_think_usec := 0
 var max_think_usec := 0
+var max_wait_usec := 0
 
 var _rng := RandomNumberGenerator.new()
-## Coût moyen d'une unité de travail (µs), pour ne jamais commencer une unité qui dépasserait le budget.
-var _unit_cost := 1500.0
-var _jobs: Array = []
-var _snapshot: RefCounted = null
+var _thread: Thread = null
+## État partagé avec le thread de l'Oracle (le thread ne tient aucune référence à Samaël).
+var _shared := OracleState.new()
+var _strategy_script: Script = load("res://src/strategy/strategy.gd")
 var _oracle := {}
 var _base := {}
+
+
+class OracleState:
+	extends RefCounted
+	var mutex := Mutex.new()
+	var pending := 0
+	var cancel := false
+
+	func cancelled() -> bool:
+		mutex.lock()
+		var c := cancel
+		mutex.unlock()
+		return c
 
 
 func _init(p_seed: int, difficulty: String) -> void:
@@ -111,75 +126,97 @@ func _update_favorite() -> void:
 # =============================================================================================
 
 ## Prépare la consultation de l'Oracle pour une main : référence sans frappe + une projection par
-## frappe distincte. Le travail se fait ensuite dans think(), image après image.
+## frappe distincte, calculées sur un thread dédié (l'image n'attend jamais). Le résultat ne dépend
+## pas du temps de calcul : choose() attend la fin des projections (elles ont une demi-manche).
 func plan(hand: Array, world: RefCounted, cell: Vector2i, horizon_years: float) -> void:
-	_jobs.clear()
+	_join()
 	_oracle.clear()
 	_base.clear()
-	_snapshot = null
 	if level != "oracle" or hand.is_empty():
 		return
-	_snapshot = world.fork()
+	var jobs := [{key = "", action = {}}]
 	var keys := {}
-	_jobs.append(_job("", {}, cell, horizon_years))
 	for t in hand:
 		var a := _action_of(t)
 		var key := _key(a)
 		if keys.has(key) or keys.size() >= ORACLE_MAX_CANDIDATES - 1:
 			continue
 		keys[key] = true
-		_jobs.append(_job(key, a, cell, horizon_years))
+		jobs.append({key = key, action = a})
+	_shared.mutex.lock()
+	_shared.pending = jobs.size()
+	_shared.cancel = false
+	_shared.mutex.unlock()
+	_thread = Thread.new()
+	_thread.start(_run.bind(world.fork(), jobs, cell, horizon_years, _shared, _strategy_script))
 
 
+## Projections restant à calculer.
 func oracle_pending() -> int:
-	return _jobs.size()
+	_shared.mutex.lock()
+	var n := _shared.pending
+	_shared.mutex.unlock()
+	return n
 
 
-## Avance l'Oracle d'au plus `units` unités de travail, sans dépasser ORACLE_BUDGET_USEC.
-func think(units := ORACLE_UNITS_PER_UPDATE) -> void:
+## Appelée à chaque image : récupère les projections terminées, sans jamais attendre.
+func think() -> void:
 	var t0 := Time.get_ticks_usec()
-	while units > 0 and not _jobs.is_empty():
-		if Time.get_ticks_usec() - t0 + _unit_cost * 2.0 > ORACLE_BUDGET_USEC:
-			break
-		var u0 := Time.get_ticks_usec()
-		if _jobs[0].done:
-			_finish_job(_jobs.pop_front())
-		else:
-			_work(_jobs[0])
-		units -= 1
-		_unit_cost = lerpf(_unit_cost, float(Time.get_ticks_usec() - u0), 0.3)
+	if _thread != null and not _thread.is_alive():
+		_join()
 	last_think_usec = Time.get_ticks_usec() - t0
 	max_think_usec = maxi(max_think_usec, last_think_usec)
 
 
-func _job(key: String, action: Dictionary, cell: Vector2i, horizon: float) -> Dictionary:
-	return {key = key, action = action, cell = cell, horizon = horizon, fork = null,
-		left = ORACLE_SUBSTEPS, events = [] as Array[Dictionary], era = 0, done = false}
-
-
-func _work(job: Dictionary) -> void:
-	if job.fork == null:
-		job.fork = _snapshot.fork()
-		job.fork.max_substeps = 1
-		job.era = job.fork.era_index()
-		if not job.action.is_empty():
-			job.events.append_array(job.fork.apply_divine_action(job.action))
+## Attend la fin de l'Oracle (avant un choix). Mesure l'attente éventuelle.
+func wait_oracle() -> void:
+	if _thread == null:
 		return
-	job.events.append_array(job.fork.step(float(job.horizon) / ORACLE_SUBSTEPS))
-	job.era = maxi(int(job.era), job.fork.era_index())
-	job.left -= 1
-	job.done = job.left <= 0
+	var t0 := Time.get_ticks_usec()
+	_join()
+	max_wait_usec = maxi(max_wait_usec, Time.get_ticks_usec() - t0)
 
 
-func _finish_job(job: Dictionary) -> void:
-	var m := measure(job.fork, _snapshot, job.cell, job.events, job.era)
-	if job.key == "":
-		_base = m
-		for k in _oracle.keys():
-			_oracle[k] = damage(_base, _oracle[k].metrics) if not _base.is_empty() else 0.0
-	else:
-		_oracle[job.key] = {metrics = m} if _base.is_empty() else damage(_base, m)
-	job.fork = null
+func _join() -> void:
+	if _thread == null:
+		return
+	var out: Dictionary = _thread.wait_to_finish()
+	_thread = null
+	_base = out.get("", {})
+	for k in out:
+		if k != "" and not _base.is_empty():
+			_oracle[k] = damage(_base, out[k])
+
+
+## Thread de l'Oracle : copies du monde projetées à basse résolution (comme project_future).
+static func _run(snapshot: RefCounted, jobs: Array, cell: Vector2i, horizon: float, shared: OracleState,
+		strategy_script: Script) -> Dictionary:
+	var out := {}
+	for job in jobs:
+		var f: RefCounted = snapshot.fork()
+		f.max_substeps = 1
+		var events: Array[Dictionary] = []
+		if not job.action.is_empty():
+			events.append_array(f.apply_divine_action(job.action))
+		var era: int = f.era_index()
+		for i in ORACLE_SUBSTEPS:
+			if shared.cancelled():
+				return out
+			events.append_array(f.step(horizon / ORACLE_SUBSTEPS))
+			era = maxi(era, f.era_index())
+		out[job.key] = measure(f, snapshot, cell, events, era, strategy_script)
+		shared.mutex.lock()
+		shared.pending -= 1
+		shared.mutex.unlock()
+	return out
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and _thread != null:
+		_shared.mutex.lock()
+		_shared.cancel = true
+		_shared.mutex.unlock()
+		_thread.wait_to_finish()
 
 
 ## Dégâts prévus par l'Oracle pour cette carte (0 si la projection n'est pas finie).
@@ -189,7 +226,8 @@ func oracle_damage(t: Dictionary) -> float:
 
 
 ## État d'un futur projeté : vitalité de la parcelle, extinctions, technologie, peuples conscients.
-static func measure(fork: RefCounted, origin: RefCounted, cell: Vector2i, events: Array, era_reached: int) -> Dictionary:
+static func measure(fork: RefCounted, origin: RefCounted, cell: Vector2i, events: Array, era_reached: int,
+		strategy_script: Script) -> Dictionary:
 	var typed: Array[Dictionary] = []
 	for e in events:
 		typed.append(e)
@@ -203,13 +241,9 @@ static func measure(fork: RefCounted, origin: RefCounted, cell: Vector2i, events
 	for n in fork.region_niches(cell):
 		density += float(n.density)
 	return {
-		vitality = _vitality(fork, parcel), density = density, extinct = summary.get("extinct_species", []).size(),
+		vitality = strategy_script.vitality_of(fork, parcel), density = density, extinct = summary.get("extinct_species", []).size(),
 		lead_tech = lead, sapients = summary.get("sapient_species", []).size(),
 	}
-
-
-static func _vitality(world: RefCounted, parcel: RefCounted) -> float:
-	return load("res://src/strategy/strategy.gd").vitality_of(world, parcel)
 
 
 ## Dégâts d'un futur par rapport à la référence (plus grand = pire pour Dieu).
@@ -235,7 +269,7 @@ static func project_damage(world: RefCounted, cell: Vector2i, action: Dictionary
 		for i in substeps:
 			events.append_array(f.step(horizon / substeps))
 			era = maxi(era, f.era_index())
-		res.append(measure(f, world, cell, events, era))
+		res.append(measure(f, world, cell, events, era, load("res://src/strategy/strategy.gd")))
 	return damage(res[0], res[1])
 
 
@@ -256,6 +290,8 @@ func choose(hand: Array, n: int, ctx: Dictionary) -> Array:
 			picked.append(t)
 		_time_random(picked)
 		return picked
+	if level == "oracle":
+		wait_oracle()
 	var pool := hand.duplicate()
 	for k in n:
 		var best: Dictionary = {}

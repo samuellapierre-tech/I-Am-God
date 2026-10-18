@@ -121,7 +121,7 @@ d'interface `scenes/strategy_hud.tscn` chargée par chemin par `main.gd`.
 
 `GameState.strategy` (créé par `new_world`, `null` tant que le module n'est pas fusionné) expose :
 
-- `aspect: String`, `difficulty: String`
+- `aspect: String`, `difficulty: String`, `mode: String` — `"eternity"` (par défaut) | `"trial"` (§10)
 - `round: Dictionary` — `{index, name, stage, starts_year, ends_year, threats: Array[Dictionary]}`
 - `actions_left: int`, `actions_per_round: int`
 - `tracks: Dictionary` — `{collapses: int, collapse_limit: int, vitality: float 0..1, works: {life, land, mind, legacy: bool}, deck_left: int}`
@@ -151,8 +151,9 @@ en début de manche et engagée à `COMMIT_AT` (mi-manche) dans `next_threats` (
 alors). Il ne crée aucune carte et ne lit que ce que le joueur voit. Niveau selon la difficulté :
 `eveil` → `random`, `divin` → `greedy` (dégâts immédiats, Grands Œuvres non scellés, risque
 d'effondrement, budget du joueur, habitudes apprises), `apocalypse` → `oracle` (en plus : `fork()` +
-projection basse résolution façon `project_future()`, étalée sur les images : au plus
-`ORACLE_UNITS_PER_UPDATE` unités et `ORACLE_BUDGET_USEC` µs par image). Déterministe à graine égale et
+projection basse résolution façon `project_future()`, sur un thread dédié : l'image ne paie que la
+relève des résultats, sous `ORACLE_BUDGET_USEC` ; le choix attend la fin des projections, qui ont une
+demi-manche, pour rester déterministe). Déterministe à graine égale et
 à suite d'appels égale.
 
 - Carte choisie : champ `samael: {reason_code: String, score: float}`.
@@ -174,6 +175,33 @@ les Cataclysmes et les contres (`Rules.counters(kind, era)`, table `POWER_MIN_ER
 anachronique (recul d'une civilisation) est remplacée à la révélation et se dissipe si elle n'a pas
 encore frappé. Ex. : `famine`/`war` Antiquité, `pollution` Industriel, `nuclear_war` atome (5,25),
 `hostile_ai` âge de l'information (`AI_TECH` = 5,75).
+
+### Deux modes : Éternité (par défaut) et Épreuve (STRATEGIE.md §10)
+
+`GameState.strategy_mode` (`"eternity"` par défaut), choisi à l'écran de lancement :
+`GameState.configure_strategy(aspect, difficulty, mode)`. `new_world` appelle
+`sim.set_endless(mode == "eternity")` si la simulation l'expose (`has_method`).
+
+- **Épreuve** (`trial`) : règles ci-dessus, inchangées (victoire, défaite, `game_over`).
+- **Éternité** (`eternity`) : jamais de `game_over`. Une condition de défaite (effondrements au seuil,
+  parcelle morte, sablier vide) ou les quatre Grands Œuvres **ferment un chapitre** : signal
+  `chapter_closed(chapter)` (instance et relais `GameState`) avec
+  `chapter = {index, reason_code: "collapses"|"parcel_dead"|"deck_empty"|"works_complete", reason, collected}`
+  (le bilan d'Ézéchiel vient de `src/ai/`). Les menaces restantes se dissipent, les pistes repartent
+  (effondrements à 0, Grands Œuvres du cycle à sceller de nouveau, pioche reformée, intensité de départ)
+  et un nouveau chapitre commence (`round.name` = « Chapitre N »).
+  - Les menaces laissées passer ne comptent pas dans les effondrements (seules les cascades naturelles
+    comptent) ; Samaël y est un rival doux (choix au hasard, pas d'apprentissage).
+  - `strategy.collection: Array[{work, label, chapter}]` : Grands Œuvres collectionnés sans limite
+    (`work = "samael"` : bonus d'un défi) ; `tracks.collected` en donne le nombre.
+  - **Défis de Samaël** (`src/strategy/challenges.gd`) : un défi facultatif ouvert à la fois,
+    `strategy.challenge = {id, kind, title, text, reward: "action"|"work", reward_text, issued_chapter,
+    deadline_chapter, state: "open"|"won"|"lost", species_id, species_name, threshold, goal, progress,
+    era_at_issue}` ; `strategy.challenges_done` (20 derniers). `kind` : `keep_alive`, `vitality`,
+    `counter`, `quiet`, `new_age`, `new_species`, `civilization` (bornes d'époque comme les cartes ; un
+    défi ne nomme que des espèces vivantes). Récompense : +1 action au chapitre suivant ou un Grand
+    Œuvre bonus ; un échec ne coûte rien. `samael_move` porte aussi `kind = "challenge"`,
+    `"challenge_won"`, `"challenge_lost"` avec `challenge` et `reason_code = "challenge_<kind>"`.
 
 Tout pouvoir lancé par le joueur passe par `strategy.spend_action()` (refusé si le budget est épuisé).
 Les menaces frappent via `WorldSim.apply_divine_action` ou des perturbations de la simulation : la

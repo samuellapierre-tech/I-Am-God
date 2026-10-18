@@ -41,6 +41,23 @@ func test_format() -> String:
 		return "raison de Samaël : %s" % Fmt.samael_reason("targets_work_mind")
 	if not Fmt.samael_reason("exploits_habit_flood").contains("Déluge"):
 		return "raison d'habitude : %s" % Fmt.samael_reason("exploits_habit_flood")
+	# Éternité : ton doux, défis lisibles.
+	var ev := {state = "pending", strikes_year = 1000.0, revealed = true}
+	if Fmt.threat_status(ev, 0.0, "eternity")[0] != "Dans 1 000 ans environ":
+		return "statut Éternité : %s" % Fmt.threat_status(ev, 0.0, "eternity")[0]
+	ev.state = "struck"
+	if Fmt.threat_status(ev, 0.0, "eternity")[0] != "Passée" or Fmt.threat_status(ev, 0.0)[0] != "A frappé":
+		return "menace passée : Éternité « %s », Épreuve « %s »" % [Fmt.threat_status(ev, 0.0, "eternity")[0], Fmt.threat_status(ev, 0.0)[0]]
+	var c := {title = "Bouclier", kind = "counter", text = "Contre 2 menaces.", reward_text = "+1 action", state = "open", progress = 1, goal = 2}
+	var lines: Array = Fmt.challenge_lines(c)
+	if not lines[0].contains("Samaël") or not lines[2].begins_with("1/2"):
+		return "défi : %s" % [lines]
+	c.state = "lost"
+	if not Fmt.challenge_lines(c)[2].contains("sans conséquence"):
+		return "défi manqué : %s" % Fmt.challenge_lines(c)[2]
+	for id in Rules.MODE_ORDER:
+		if Fmt.mode_text(id) == "":
+			return "mode sans texte : %s" % id
 	for code in ["random", "max_damage", "chain_risk", "budget_exhausted", "oracle_foresees", "cataclysm"]:
 		if Fmt.samael_reason(code) == "":
 			return "raison sans texte : %s" % code
@@ -59,6 +76,9 @@ func test_game_state_wiring() -> String:
 	if gs.strategy == null:
 		gs.free()
 		return "new_world ne crée pas GameState.strategy"
+	if gs.strategy.mode != "eternity":
+		gs.free()
+		return "le mode par défaut doit être l'Éternité (%s)" % gs.strategy.mode
 	if started != [1] or revealed.is_empty():
 		gs.free()
 		return "signaux de début de manche non relayés : %s / %s" % [started, revealed]

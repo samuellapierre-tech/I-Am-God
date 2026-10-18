@@ -14,6 +14,10 @@ extends RefCounted
 ## - Samaël (samael.gd), l'adversaire, reçoit chaque manche une main de cartes légales et choisit
 ##   celles qu'il révèle et quand elles frappent (§8). Rien n'apparaît avant son époque (§9).
 ##
+## - Deux modes (§10) : « eternity » (par défaut : pas de fin de partie, une défaite ferme un
+##   chapitre et les pistes repartent, Samaël est un rival doux qui propose des défis facultatifs, les
+##   Grands Œuvres se collectionnent sans limite) et « trial » (victoire ou défaite).
+##
 ## Pur et déterministe à graine égale : aucun accès à GameState ni à l'arbre de scènes.
 ## Utilisation : start(world, parcel) puis update(world, parcel, events) à chaque image (renvoie les
 ## événements produits par les frappes, à relayer comme ceux de WorldSim.step).
@@ -31,9 +35,14 @@ signal actions_changed(actions_left: int)
 signal samael_move(move: Dictionary)
 ## Samaël a appris une habitude du joueur : {power, weight, share}.
 signal samael_learned(habit: Dictionary)
+## Éternité : un chapitre se ferme sur une « défaite » (ou les quatre Grands Œuvres) et le monde
+## continue : {index, reason_code, reason, collected}. reason_code : "collapses", "parcel_dead",
+## "deck_empty", "works_complete".
+signal chapter_closed(chapter: Dictionary)
 
 const Rules := preload("res://src/strategy/strategy_rules.gd")
 const Samael := preload("res://src/strategy/samael.gd")
+const Challenges := preload("res://src/strategy/challenges.gd")
 
 ## Samaël engage ses cartes de la manche suivante à cette fraction de la manche (le Prophète les
 ## voit alors) ; l'Oracle d'Apocalypse travaille entre le début de manche et ce moment.
@@ -58,6 +67,14 @@ const FULL_DIVERSITY := 4.0
 
 var aspect := Rules.DEFAULT_ASPECT
 var difficulty := Rules.DEFAULT_DIFFICULTY
+## "eternity" (par défaut) | "trial".
+var mode := Rules.DEFAULT_MODE
+## Éternité : Grands Œuvres collectionnés, sans limite : [{work, label, chapter}] (work "samael" :
+## Grand Œuvre bonus d'un défi relevé).
+var collection: Array[Dictionary] = []
+## Éternité : défi de Samaël en cours ({} : aucun) et derniers défis tranchés.
+var challenge: Dictionary = {}
+var challenges_done: Array[Dictionary] = []
 ## {index, name, stage, act, act_name, starts_year, ends_year, steps, threats: Array[Dictionary], recap}
 ## ends_year et strikes_year sont réestimés à chaque mise à jour au rythme courant de la simulation.
 @warning_ignore("shadowed_global_identifier")
@@ -101,20 +118,37 @@ var _round_stats := {countered = 0, struck = 0, collapses = 0}
 ## Main de Samaël pour la manche suivante (privée) ; engagée dans next_threats à COMMIT_AT.
 var _hand: Array[Dictionary] = []
 var _committed := false
+var _close_request := {}
+var _bonus_next := 0
+var _challenge_rng := RandomNumberGenerator.new()
+var _next_challenge_id := 1
+var _challenge_counters := 0
+var _challenge_powers := 0
+var _challenge_new_species := false
+var _deck_size := 0
+var _deck_cats := 0
 
 
-func _init(p_seed: int, p_aspect := Rules.DEFAULT_ASPECT, p_difficulty := Rules.DEFAULT_DIFFICULTY) -> void:
+func _init(p_seed: int, p_aspect := Rules.DEFAULT_ASPECT, p_difficulty := Rules.DEFAULT_DIFFICULTY,
+		p_mode := Rules.DEFAULT_MODE) -> void:
 	aspect = p_aspect if Rules.ASPECTS.has(p_aspect) else Rules.DEFAULT_ASPECT
 	difficulty = p_difficulty if Rules.DIFFICULTIES.has(p_difficulty) else Rules.DEFAULT_DIFFICULTY
-	_rng.seed = hash("%d:%s:%s" % [p_seed, aspect, difficulty])
+	mode = p_mode if p_mode in Rules.MODE_ORDER else Rules.DEFAULT_MODE
+	_rng.seed = hash("%d:%s:%s" % [p_seed, aspect, difficulty]) if mode == "trial" \
+		else hash("%d:%s:%s:%s" % [p_seed, aspect, difficulty, mode])
+	_challenge_rng.seed = hash("challenges:%d" % p_seed)
 	var d := Rules.difficulty(difficulty)
 	actions_per_round = int(d.actions)
-	_build_deck(int(d.deck), int(d.cataclysms))
-	samael = Samael.new(p_seed, difficulty)
+	_deck_size = int(d.deck)
+	_deck_cats = int(d.cataclysms)
+	_build_deck(_deck_size, _deck_cats)
+	# En Éternité, Samaël est un rival doux : il tire ses menaces au hasard et n'apprend rien.
+	samael = Samael.new(p_seed, difficulty if mode == "trial" else "eveil")
 	samael.learned.connect(samael_learned.emit)
 	tracks = {
 		collapses = 0, collapse_limit = int(d.collapse_limit), vitality = 1.0,
 		works = {life = false, land = false, mind = false, legacy = false}, deck_left = _deck.size(),
+		collected = 0,
 	}
 
 
@@ -173,6 +207,10 @@ func update(world: RefCounted, parcel: RefCounted, events: Array = []) -> Array[
 		out.append_array(_end_round(world, parcel))
 	_refresh_tracks(world, parcel)
 	_check_end()
+	if mode == "eternity":
+		_check_challenge(world)
+		if not _close_request.is_empty():
+			_close_chapter(world, parcel)
 	return out
 
 
@@ -208,6 +246,8 @@ func spend_action(kind: String) -> bool:
 		action_refused.emit(kind)
 		return false
 	actions_left -= cost
+	if not kind.begins_with("seal_"):
+		_challenge_powers += 1
 	if kind == "spawn_species" and aspect == "creator":
 		_creator_free = false
 	if aspect == "destroyer" and kind in Rules.CATASTROPHES:
@@ -219,6 +259,7 @@ func spend_action(kind: String) -> bool:
 		if kind in t.counters:
 			_resolve(t, true)
 			samael.note_counter(kind)
+			_challenge_counters += 1
 			n -= 1
 	if cost != 0:
 		actions_changed.emit(actions_left)
@@ -242,6 +283,8 @@ func seal_work(id: String) -> bool:
 	if not spend_action("seal_" + id):
 		return false
 	tracks.works[id] = true
+	collection.append({work = id, label = String(Rules.WORKS[id].label), chapter = int(round.get("index", 0))})
+	tracks.collected = collection.size()
 	tracks_changed.emit(tracks)
 	_check_end()
 	return true
@@ -417,20 +460,30 @@ func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
 		_commit(world, parcel)
 	var cards := next_threats
 	next_threats = []
+	if cards.is_empty() and _deck.is_empty() and mode == "eternity":
+		# Le sablier se retourne : un chapitre se ferme, la pioche se reforme.
+		_reset_cycle()
+		chapter_closed.emit({index = int(round.get("index", 0)), reason_code = "deck_empty",
+			reason = Rules.CHAPTER_REASONS.deck_empty, collected = collection.size()})
+		_hand = _draw_hand(world, parcel)
+		_commit(world, parcel)
+		cards = next_threats
+		next_threats = []
 	if cards.is_empty() and _deck.is_empty():
 		_finish(false, "Le sablier cosmique est vide : la pioche de menaces s'est épuisée avant les quatre Grands Œuvres.")
 		return
 	var idx := int(round.get("index", 0)) + 1
 	var act := Rules.act_for(world.era_index(), not world.get_sapient_species().is_empty())
-	var steps: float = Rules.ROUND_STEPS if act == "act3" else Rules.ROUND_STEPS_WILD
+	var steps: float = Rules.round_steps(world.era_index(), act)
 	round = {
-		index = idx, name = "Manche %d" % idx, stage = world.current_era(), act = act,
+		index = idx, name = ("Chapitre %d" if mode == "eternity" else "Manche %d") % idx, stage = world.current_era(), act = act,
 		act_name = Rules.ACT_NAMES.get(act, act), starts_year = world.year, ends_year = world.year,
 		steps = steps, threats = [] as Array[Dictionary], recap = recap,
 	}
 	_round_era = world.era_index()
 	_progress = 0.0
-	actions_left = actions_per_round
+	actions_left = actions_per_round + _bonus_next
+	_bonus_next = 0
 	_creator_free = true
 	_creator_bonus = 0
 	_chain_this_round = 0
@@ -461,6 +514,8 @@ func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
 	_refresh_tracks(world, parcel)
 	round_started.emit(round)
 	samael_move.emit({kind = "taunt_hook", threat = {}, reason_code = _taunt_code()})
+	if mode == "eternity" and challenge.is_empty():
+		_propose_challenge(world, parcel)
 	for t in round.threats:
 		threat_revealed.emit(t)
 		samael_move.emit({kind = "reveal", threat = t, reason_code = String(t.get("samael", {}).get("reason_code", "random"))})
@@ -532,6 +587,8 @@ func _end_round(world: RefCounted, parcel: RefCounted) -> Array[Dictionary]:
 			out.append_array(_strike(t, world, parcel))
 	_detect_chains(world, out)
 	samael.end_round()
+	if mode == "eternity" and not challenge.is_empty() and int(challenge.deadline_chapter) <= int(round.index):
+		_settle_challenge(Challenges.at_deadline(challenge))
 	var recap := "%s : %d menace(s) contrée(s), %d frappée(s)" % [round.name, _round_stats.countered, _round_stats.struck]
 	if _round_stats.collapses > 0:
 		recap += ", %d effondrement(s) en chaîne" % _round_stats.collapses
@@ -598,8 +655,8 @@ func _strike(t: Dictionary, world: RefCounted, parcel: RefCounted) -> Array[Dict
 	_round_stats.struck += 1
 	_resolve(t, false)
 	samael_move.emit({kind = "strike", threat = t, reason_code = String(t.get("samael", {}).get("reason_code", "random"))})
-	# Une crise non contrée qui frappe une espèce déjà en chute : effondrement en chaîne.
-	if collapsing:
+	# Une crise non contrée qui frappe une espèce déjà en chute : effondrement en chaîne (Épreuve).
+	if collapsing and mode == "trial":
 		_add_collapse()
 	return out
 
@@ -629,6 +686,9 @@ func _detect_chains(world: RefCounted, events: Array) -> void:
 			var anc: Dictionary = chain[i]
 			var type := String(anc.type)
 			if type.begins_with("divine_"):
+				break
+			# Éternité : laisser passer une menace ne coûte rien sur les pistes.
+			if type.begins_with("threat_") and mode == "eternity":
 				break
 			if type.begins_with("threat_") or type in CHAIN_TYPES:
 				if not _chained.has(anc.id):
@@ -693,12 +753,128 @@ func _check_end() -> void:
 	var all := true
 	for id in Rules.WORK_ORDER:
 		all = all and bool(tracks.works[id])
+	if mode == "eternity":
+		# Pas de fin de partie : la condition ferme le chapitre (traité en fin d'update).
+		if not _close_request.is_empty():
+			return
+		if all:
+			_close_request = {code = "works_complete"}
+		elif int(tracks.collapses) >= int(tracks.collapse_limit):
+			_close_request = {code = "collapses"}
+		elif _dead_for >= DEAD_ROUNDS and _vitality_peak >= VITALITY_ALIVE:
+			_close_request = {code = "parcel_dead"}
+		return
 	if all:
 		_finish(true, "Les quatre Grands Œuvres sont scellés : le monde porte ta marque pour toujours.")
 	elif int(tracks.collapses) >= int(tracks.collapse_limit):
 		_finish(false, "Effondrements en chaîne (%d/%d) : le monde échappe à Dieu." % [tracks.collapses, tracks.collapse_limit])
 	elif _dead_for >= DEAD_ROUNDS and _vitality_peak >= VITALITY_ALIVE:
 		_finish(false, "La parcelle est morte : plus rien n'y vit.")
+
+
+# =============================================================================================
+# Éternité : chapitres et défis
+# =============================================================================================
+
+## Ferme le chapitre en cours (Éternité) : les menaces restantes se dissipent, les pistes repartent,
+## un nouveau chapitre commence. La collection de Grands Œuvres est conservée.
+func _close_chapter(world: RefCounted, parcel: RefCounted) -> void:
+	var code := String(_close_request.code)
+	_close_request = {}
+	for t in round.get("threats", []):
+		if t.state == "pending":
+			t.state = "fizzled"
+			_resolve(t, false)
+	# Un défi dont l'échéance tombe ici est tranché ; les autres continuent au chapitre suivant.
+	if not challenge.is_empty() and int(challenge.deadline_chapter) <= int(round.index):
+		_settle_challenge(Challenges.at_deadline(challenge))
+	var info := {index = int(round.get("index", 0)), reason_code = code, reason = String(Rules.CHAPTER_REASONS[code]),
+		collected = collection.size()}
+	_reset_cycle()
+	_vitality_peak = 0.0
+	_dead_for = 0.0
+	chapter_closed.emit(info)
+	_hand = _draw_hand(world, parcel)
+	_commit(world, parcel)
+	_start_round(world, parcel, info.reason)
+
+
+## Les pistes repartent : effondrements à zéro, Grands Œuvres du cycle à sceller de nouveau,
+## pioche reformée, intensité de départ.
+func _reset_cycle() -> void:
+	tracks.collapses = 0
+	for id in Rules.WORK_ORDER:
+		tracks.works[id] = false
+	_discard.clear()
+	cataclysms = 0
+	_build_deck(_deck_size, _deck_cats)
+	_hand.clear()
+	next_threats.clear()
+	_committed = false
+	_chain_this_round = 0
+	tracks.deck_left = _deck.size()
+	tracks_changed.emit(tracks)
+
+
+func _challenge_context(world: RefCounted, parcel: RefCounted) -> Dictionary:
+	var here := _parcel_species(world, parcel)
+	var names := {}
+	for s in here:
+		names[int(s.species_id)] = _species_name(world, int(s.species_id))
+	var sapients: Array = world.get_sapient_species()
+	for id in sapients:
+		names[int(id)] = _species_name(world, int(id))
+	return {
+		era = world.era_index(), species = here, sapients = sapients, names = names,
+		vitality = float(tracks.vitality), budget = actions_per_round,
+		land = parcel != null and not parcel.land_use in ["ocean", "ice"],
+	}
+
+
+func _propose_challenge(world: RefCounted, parcel: RefCounted) -> void:
+	var c := Challenges.make(_challenge_rng, _challenge_context(world, parcel), int(round.index), _next_challenge_id)
+	if c.is_empty():
+		return
+	_next_challenge_id += 1
+	challenge = c
+	_challenge_counters = 0
+	_challenge_powers = 0
+	_challenge_new_species = false
+	samael_move.emit({kind = "challenge", threat = {}, challenge = c, reason_code = "challenge_" + String(c.kind)})
+
+
+func _check_challenge(world: RefCounted) -> void:
+	if challenge.is_empty():
+		return
+	var res := Challenges.check(challenge, {
+		alive = func(id): return _alive(world, id),
+		sapient = func(id): return _alive(world, id) and bool(world.species[id].sapient),
+		vitality = float(tracks.vitality), era = world.era_index(), counters = _challenge_counters,
+		powers = _challenge_powers, new_species = _challenge_new_species,
+	})
+	if res != "":
+		_settle_challenge(res)
+
+
+## Tranche le défi en cours ("open" : abandonné sans suite, le chapitre ayant été fermé avant).
+func _settle_challenge(res: String) -> void:
+	var c := challenge
+	challenge = {}
+	if res == "open":
+		return
+	c.state = res
+	if res == "won":
+		if c.reward == "action":
+			_bonus_next += 1
+		else:
+			collection.append({work = "samael", label = "Défi relevé : %s" % c.title, chapter = int(round.get("index", 0))})
+			tracks.collected = collection.size()
+			tracks_changed.emit(tracks)
+	challenges_done.append(c)
+	if challenges_done.size() > 20:
+		challenges_done.pop_front()
+	samael_move.emit({kind = "challenge_won" if res == "won" else "challenge_lost", threat = {}, challenge = c,
+		reason_code = "challenge_" + String(c.kind)})
 
 
 func _finish(win: bool, reason: String) -> void:
@@ -724,6 +900,8 @@ func _note_fauna(parcel: RefCounted, silent: bool) -> void:
 		if _seen_fauna.has(id):
 			continue
 		_seen_fauna[id] = true
+		if not silent:
+			_challenge_new_species = true
 		if not silent and aspect == "creator" and not over and _creator_bonus < Rules.CREATOR_BONUS_MAX:
 			_creator_bonus += 1
 			actions_left += 1

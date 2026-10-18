@@ -29,6 +29,14 @@ var _vitality_bar: ProgressBar
 var _vitality_label: Label
 var _work_buttons := {}
 var _deck_label: Label
+var _collection_label: Label
+var _challenge_panel: PanelContainer
+var _challenge_title: Label
+var _challenge_text: Label
+var _challenge_state: Label
+var _mode_buttons := {}
+var _mode_text: Label
+var _chosen_mode := Rules.DEFAULT_MODE
 var _threats_panel: PanelContainer
 var _threats_header: Label
 var _cards_box: VBoxContainer
@@ -59,6 +67,8 @@ func _ready() -> void:
 	GameState.threat_resolved.connect(func(_t, _c): _refresh())
 	GameState.tracks_changed.connect(func(_t): _refresh())
 	GameState.game_over.connect(_on_game_over)
+	GameState.chapter_closed.connect(_on_chapter_closed)
+	GameState.samael_move.connect(_on_samael_move)
 	_bind()
 	if "--strategy-autostart" in OS.get_cmdline_user_args():
 		_launch.visible = false
@@ -140,6 +150,10 @@ func _build_tracks(root: Control) -> void:
 	_deck_label.tooltip_text = "Sablier cosmique : cartes restantes dans la pioche de menaces. Vide avant les quatre Grands Œuvres : défaite."
 	_deck_label.mouse_filter = Control.MOUSE_FILTER_PASS
 	row.add_child(_deck_label)
+	_collection_label = _label("", 17, Fmt.GOLD)
+	_collection_label.tooltip_text = "Éternité : Grands Œuvres collectionnés depuis le début, sans limite (défis relevés compris)."
+	_collection_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	row.add_child(_collection_label)
 
 
 func _build_threats(root: Control) -> void:
@@ -152,6 +166,29 @@ func _build_threats(root: Control) -> void:
 	_threats_header = _label("Menaces", 17, Fmt.GOLD)
 	_threats_header.mouse_filter = Control.MOUSE_FILTER_PASS
 	col.add_child(_threats_header)
+	# Éternité : le défi facultatif de Samaël, au-dessus des cartes.
+	_challenge_panel = PanelContainer.new()
+	var cs := StyleBoxFlat.new()
+	cs.bg_color = Color(0.14, 0.08, 0.18, 0.9)
+	cs.border_color = Fmt.SAMAEL
+	cs.border_width_left = 4
+	cs.set_corner_radius_all(4)
+	cs.content_margin_left = 8
+	cs.content_margin_right = 6
+	cs.content_margin_top = 4
+	cs.content_margin_bottom = 5
+	_challenge_panel.add_theme_stylebox_override("panel", cs)
+	var ccol := VBoxContainer.new()
+	ccol.add_theme_constant_override("separation", 1)
+	_challenge_panel.add_child(ccol)
+	_challenge_title = _label("", 15, Fmt.SAMAEL, true)
+	ccol.add_child(_challenge_title)
+	_challenge_text = _label("", 15, Fmt.TEXT, true)
+	ccol.add_child(_challenge_text)
+	_challenge_state = _label("", 14, Fmt.DIM, true)
+	ccol.add_child(_challenge_state)
+	_challenge_panel.visible = false
+	col.add_child(_challenge_panel)
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -192,9 +229,28 @@ func _build_banner(root: Control) -> void:
 
 func _build_launch(root: Control) -> void:
 	_launch = _modal(root)
-	var box := _modal_box(_launch, Vector2(860, 600))
+	var box := _modal_box(_launch, Vector2(880, 780))
 	box.add_child(_title_label("Quel dieu seras-tu ?"))
-	box.add_child(_label("Le monde joue contre toi : menaces, Cataclysmes, effondrements. Scelle les quatre Grands Œuvres avant que le sablier ne se vide.", 16, Fmt.DIM, true))
+	box.add_child(_label("Mode", 18, Fmt.GOLD))
+	var modes := HBoxContainer.new()
+	modes.add_theme_constant_override("separation", 10)
+	box.add_child(modes)
+	var mgroup := ButtonGroup.new()
+	for id in Rules.MODE_ORDER:
+		var b := _toggle(String(Rules.MODES[id].label), mgroup)
+		# Éternité, le mode par défaut, est mis en avant.
+		b.custom_minimum_size = Vector2(500, 56) if id == Rules.DEFAULT_MODE else Vector2(330, 56)
+		b.add_theme_font_size_override("font_size", 22 if id == Rules.DEFAULT_MODE else 18)
+		if id == Rules.DEFAULT_MODE:
+			b.add_theme_color_override("font_color", Fmt.GOLD)
+			b.add_theme_color_override("font_pressed_color", Fmt.GOLD)
+			b.text += " (recommandé)"
+		b.pressed.connect(_choose_mode.bind(id))
+		modes.add_child(b)
+		_mode_buttons[id] = b
+	_mode_text = _label("", 16, Fmt.TEXT, true)
+	_mode_text.custom_minimum_size.y = 48
+	box.add_child(_mode_text)
 	box.add_child(_label("Aspect divin", 18, Fmt.GOLD))
 	var aspects := GridContainer.new()
 	aspects.columns = 4
@@ -285,14 +341,23 @@ func _refresh() -> void:
 	if st == null:
 		return
 	var tr: Dictionary = st.tracks
+	var calm: bool = st.mode == "eternity"
+	_collection_label.visible = calm
+	_collection_label.text = "Collection %d" % int(tr.get("collected", 0))
+	_challenge_panel.visible = calm and not st.challenge.is_empty()
+	if _challenge_panel.visible:
+		var lines: Array = Fmt.challenge_lines(st.challenge)
+		_challenge_title.text = lines[0]
+		_challenge_text.text = lines[1]
+		_challenge_state.text = lines[2]
 	_pips.text = Fmt.pips(st.actions_left, st.actions_per_round)
 	_pips.add_theme_color_override("font_color", Fmt.GOLD if st.actions_left > 0 else Fmt.DIM)
 	_collapses.text = "Effondrements %d/%d" % [tr.collapses, tr.collapse_limit]
 	_collapses.add_theme_color_override("font_color",
-		Fmt.DANGER if int(tr.collapses) >= int(tr.collapse_limit) - 2 else Fmt.TEXT)
+		Fmt.DANGER if int(tr.collapses) >= int(tr.collapse_limit) - 2 and not calm else Fmt.TEXT)
 	_vitality_bar.value = float(tr.vitality)
 	_vitality_label.text = "%d %%" % int(round(float(tr.vitality) * 100.0))
-	_vitality_bar.modulate = Fmt.DANGER if float(tr.vitality) < 0.2 else Fmt.SAFE
+	_vitality_bar.modulate = Fmt.DANGER if float(tr.vitality) < 0.2 and not calm else Fmt.SAFE
 	for id in Rules.WORK_ORDER:
 		var b: Button = _work_buttons[id]
 		var sealed: bool = tr.works[id]
@@ -304,7 +369,7 @@ func _refresh() -> void:
 		b.tooltip_text = "%s — %s\n%s" % [Rules.WORKS[id].label, Rules.WORKS[id].text,
 			"Scellé." if sealed else ("★ Atteint : clique pour sceller (%d actions)." % Rules.SEAL_COST if ready else "Pas encore atteint dans la simulation.")]
 	_deck_label.text = "Pioche %d" % int(tr.deck_left)
-	_deck_label.add_theme_color_override("font_color", Fmt.DANGER if int(tr.deck_left) <= 10 else Fmt.TEXT)
+	_deck_label.add_theme_color_override("font_color", Fmt.DANGER if int(tr.deck_left) <= 10 and not calm else Fmt.TEXT)
 	_threats_header.text = "%s · intensité %d" % [st.round.get("name", ""), st.current_intensity()]
 	_threats_header.tooltip_text = Fmt.round_title(st.round)
 	var now: float = GameState.sim.year if GameState.sim != null else 0.0
@@ -342,9 +407,30 @@ func _on_round_started(r: Dictionary) -> void:
 	_rebuild_cards()
 	_refresh()
 	var n: int = r.get("threats", []).size()
-	_show_banner("%s — %s" % [r.get("name", ""), r.get("stage", "")],
-		("%s. " % r.recap if String(r.get("recap", "")) != "" else "") +
-		"%d menace%s révélée%s. %d actions." % [n, "s" if n > 1 else "", "s" if n > 1 else "", GameState.strategy.actions_per_round])
+	var st: RefCounted = GameState.strategy
+	var recap := String(r.get("recap", ""))
+	if recap != "" and not recap.ends_with("."):
+		recap += "."
+	var body := "%d menace%s révélée%s. %d actions." % [n, "s" if n > 1 else "", "s" if n > 1 else "", st.actions_left]
+	if st.mode == "eternity":
+		body = "%d événement%s à venir. %d actions, rien ne presse." % [n, "s" if n > 1 else "", st.actions_left]
+	_show_banner("%s — %s" % [r.get("name", ""), r.get("stage", "")], (recap + " " if recap != "" else "") + body)
+
+
+## Éternité : une « défaite » ferme doucement le chapitre ; le monde continue.
+func _on_chapter_closed(c: Dictionary) -> void:
+	_show_banner("Fin du chapitre %d" % int(c.get("index", 0)), String(c.get("reason", "")))
+
+
+func _on_samael_move(m: Dictionary) -> void:
+	var c: Dictionary = m.get("challenge", {})
+	match String(m.get("kind", "")):
+		"challenge":
+			_refresh()
+		"challenge_won":
+			_show_banner("Défi relevé", "%s — %s" % [c.get("title", ""), c.get("reward_text", "")])
+		"challenge_lost":
+			_show_banner("Défi manqué", "%s — sans conséquence. Samaël sourit." % c.get("title", ""))
 
 
 func _show_banner(title: String, text: String) -> void:
@@ -401,6 +487,8 @@ func _on_game_over(victory: bool, reason: String) -> void:
 func _open_launch() -> void:
 	_chosen_aspect = GameState.strategy_aspect
 	_chosen_difficulty = GameState.strategy_difficulty
+	_chosen_mode = GameState.strategy_mode
+	_mode_buttons[_chosen_mode].button_pressed = true
 	_aspect_buttons[_chosen_aspect].button_pressed = true
 	_difficulty_buttons[_chosen_difficulty].button_pressed = true
 	_refresh_launch()
@@ -410,6 +498,11 @@ func _open_launch() -> void:
 
 func _choose_aspect(id: String) -> void:
 	_chosen_aspect = id
+	_refresh_launch()
+
+
+func _choose_mode(id: String) -> void:
+	_chosen_mode = id
 	_refresh_launch()
 
 
@@ -425,11 +518,16 @@ func _on_watch() -> void:
 
 func _refresh_launch() -> void:
 	_aspect_text.text = String(Rules.ASPECTS[_chosen_aspect].text)
-	_difficulty_text.text = Fmt.difficulty_text(_chosen_difficulty)
+	_mode_text.text = Fmt.mode_text(_chosen_mode)
+	var diff := Fmt.difficulty_text(_chosen_difficulty)
+	if _chosen_mode == "eternity":
+		# En Éternité, Samaël est un rival doux quelle que soit la difficulté.
+		diff = diff.get_slice("\n", 0).replace(" · défaite à", " · chapitre clos à").replace("par manche", "par chapitre") + "\nSamaël, rival doux, propose des défis facultatifs."
+	_difficulty_text.text = diff
 
 
 func _on_launch() -> void:
-	GameState.configure_strategy(_chosen_aspect, _chosen_difficulty)
+	GameState.configure_strategy(_chosen_aspect, _chosen_difficulty, _chosen_mode)
 	_launch.visible = false
 	GameState.paused = false
 	_bind()
