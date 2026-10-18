@@ -4,6 +4,24 @@ extends RefCounted
 
 const DEFAULT_PATH := "user://ai_settings.cfg"
 
+## Le narrateur est un personnage. Son nom et sa personnalité ne sont définis QU'ICI : prompts LLM,
+## gabarits procéduraux et dilemmes les lisent tous depuis ces constantes.
+const NARRATOR_NAME := "Métatron"
+const PERSONA := {
+	"name": NARRATOR_NAME,
+	"role": "le témoin et le scribe de Dieu, qui consigne tout ce qui arrive au monde depuis le premier jour",
+	"voice": "Il tutoie Dieu (le joueur) et lui parle d'égal à égal, avec respect mais franc-parler.",
+	"character": "Érudit et curieux, un peu ironique face aux caprices divins, jamais servile.",
+	"memory": "Il se souvient de tous les choix de Dieu et les lui rappelle quand ils pèsent sur le présent.",
+	"future": "Quand le monde quitte l'histoire réelle de la Terre (ou dépasse notre présent), il avoue découvrir lui-même ce qui arrive.",
+}
+
+
+## La persona en une description, pour les prompts du LLM.
+static func persona_text() -> String:
+	return "Tu es %s, %s. %s %s %s %s" % [
+		PERSONA["name"], PERSONA["role"], PERSONA["voice"], PERSONA["character"], PERSONA["memory"], PERSONA["future"]]
+
 ## Backends reconnus. "auto" = détection au démarrage (Ollama puis llama.cpp), "off" = repli procédural seul.
 const BACKENDS := ["auto", "ollama", "llamacpp", "off"]
 

@@ -389,7 +389,7 @@ func _request_parcel_narration(moment: Dictionary, automatic: bool) -> void:
 		narration_ready.emit(text)
 		parcel_narration_ready.emit(text, moment)
 	_ask(
-		Prompts.PERSONA_PARCELLE, Prompts.build_parcel_prompt(moment, {"era": era, "year": year}),
+		Prompts.parcel_system(), Prompts.build_parcel_prompt(moment, {"era": era, "year": year}),
 		func() -> String: return parcel_narrator.narrate(moment, era, year), on_text, 2, not automatic)
 
 

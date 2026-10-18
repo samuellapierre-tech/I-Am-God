@@ -775,7 +775,7 @@ func test_parcelle_file_anti_spam() -> String:
 
 
 func test_parcelle_prompt_llm() -> String:
-	var s := Prompts.PERSONA_PARCELLE
+	var s := Prompts.parcel_system()
 	for needle in ["français", "1 ou 2 phrases", "deuxième personne", "Dieu"]:
 		if not s.contains(needle):
 			return "persona parcelle sans « %s »" % needle
