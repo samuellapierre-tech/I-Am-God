@@ -1,39 +1,128 @@
 extends Node2D
-## Vue parcelle (provisoire) : le terrain suivi, plein écran, vu de haut.
-## Version minimale du contrat : sol coloré selon l'usage, structures et un point par individu.
-## La branche feature/parcel-view la remplace (terrain, créatures animées, transitions).
+## Vue parcelle : le terrain suivi, plein écran, vu de haut. Cœur visuel du jeu.
+## - Terrain (shader) : sol selon biome et usage, végétation, eau, fondus de transition.
+## - Créatures : exactement parcel.fauna[].count individus animés par espèce.
+## - Structures : parcel.structures à leurs positions stables.
+## - Pouvoirs : clic avec un pouvoir sélectionné sur le globe -> GameState.apply_divine_action.
+## - Molette arrière au zoom minimal -> vue globe.
+## La vue n'invente rien : nombres, rôles et constructions viennent de GameState.parcel.
 
-const GROUND := {
-	"ocean": Color("1d4e7a"), "ice": Color("dfe9f0"), "wild": Color("4f7a3a"), "crater": Color("4a3a33"),
-	"flooded": Color("3f6f86"), "camp": Color("5a7d3c"), "pasture": Color("7f9a4a"),
-	"farmland": Color("a39a52"), "village": Color("8e8a5c"), "town": Color("7c7a6e"),
-	"city": Color("6b6b70"), "megacity": Color("4c4d58"), "arcology": Color("2c2a3e"),
-	"ruins": Color("6a6150"), "rewild": Color("44703c"),
-}
-const ROLE_COLORS := {
-	"herbivore": Color("e9d8a6"), "carnivore": Color("d1495b"), "omnivore": Color("edae49"),
-	"sapient": Color("8ecae6"),
-}
+const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
+const ParcelAssets := preload("res://src/parcel/parcel_assets.gd")
+const Powers := preload("res://src/map/divine_powers.gd")
+const WorldSim := preload("res://src/sim/world_sim.gd")
+const Terrain := preload("res://src/parcel/parcel_terrain.gd")
+const StructureLayer := preload("res://src/parcel/structure_layer.gd")
+const CreatureLayer := preload("res://src/parcel/creature_layer.gd")
+const PowerFx := preload("res://src/parcel/power_fx.gd")
+const ParcelCamera := preload("res://src/parcel/parcel_camera.gd")
 
-@onready var camera: Camera2D = $Camera
+## Rayon visuel (unités monde) d'un pouvoir : base + par cellule de rayon.
+const FX_BASE_RADIUS := 90.0
+const FX_RADIUS_PER_CELL := 8.0
+
+var assets := ParcelAssets.new()
+var _cell := Vector2i(-999, -999)
+## Position du dernier clic de pouvoir, en attente de divine_action_applied.
+var _pending_click := Vector2.INF
+
+@onready var terrain: Terrain = $Terrain
+@onready var structures: StructureLayer = $Structures
+@onready var creatures: CreatureLayer = $Creatures
+@onready var fx: PowerFx = $Fx
+@onready var camera: ParcelCamera = $Camera
 
 
 func _ready() -> void:
-	GameState.parcel_updated.connect(queue_redraw)
+	structures.assets = assets
+	creatures.assets = assets
+	GameState.parcel_updated.connect(_on_parcel_updated)
+	GameState.divine_action_applied.connect(_on_divine_action)
+	camera.exit_requested.connect(GameState.set_view_mode.bind("globe"))
+	_on_parcel_updated()
 
 
-func _draw() -> void:
+func _on_parcel_updated() -> void:
 	var p = GameState.parcel
 	if p == null:
 		return
-	var size := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, size), GROUND.get(p.land_use, Color.DIM_GRAY))
-	for s in p.structures:
-		var r: float = s.size * size.y
-		draw_rect(Rect2(s.pos * size - Vector2(r, r) * 0.5, Vector2(r, r)), Color(0, 0, 0, 0.35))
-	for f in p.fauna:
-		var rng := RandomNumberGenerator.new()
-		rng.seed = hash([p.cell, f.species_id])
-		for k in f.count:
-			var pos := Vector2(rng.randf(), rng.randf()) * size
-			draw_circle(pos, 4.0 + 14.0 * f.size, ROLE_COLORS.get(f.role, Color.WHITE))
+	var changed: bool = p.cell != _cell
+	if changed:
+		_cell = p.cell
+		creatures.clear()
+		structures.clear()
+		camera.reset_view()
+	terrain.apply_parcel(p, changed)
+	structures.apply_parcel(p)
+	creatures.spots = structures.spots()
+	creatures.apply_parcel(p)
+
+
+func _process(_delta: float) -> void:
+	var power := _power()
+	fx.preview_power = power
+	if power != "":
+		fx.preview_radius = _fx_radius(_globe_int("radius", 0))
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton and event.pressed):
+		return
+	var mb := event as InputEventMouseButton
+	if mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	var power := _power()
+	var p = GameState.parcel
+	if power == "" or p == null or GameState.sim == null:
+		return
+	var world_pos := get_canvas_transform().affine_inverse() * mb.position
+	var info := Powers.get_power(power)
+	var species_id := ParcelLogic.choose_species(info, creatures.species_at(world_pos),
+		_globe_int("target_species", -1), p.fauna)
+	_pending_click = world_pos
+	GameState.apply_divine_action(Powers.make_action(power, p.cell, species_id, _globe_int("radius", int(info.get("radius", 0)))))
+	_pending_click = Vector2.INF
+	get_viewport().set_input_as_handled()
+
+
+## Effet visuel : au point cliqué, ou au centre si l'action vient du globe et touche la parcelle.
+func _on_divine_action(action: Dictionary, _consequences: Array) -> void:
+	var power := String(action.get("type", ""))
+	var radius := int(action.get("radius", 0))
+	if _pending_click != Vector2.INF:
+		fx.spawn(power, _pending_click, _fx_radius(radius))
+	else:
+		var p = GameState.parcel
+		if p == null or not ParcelLogic.region_hits_parcel(action.get("region", Vector2i(-999, -999)), radius, p.cell, WorldSim.WIDTH):
+			return
+		fx.spawn(power, ParcelLogic.PARCEL_SIZE * 0.5, ParcelLogic.PARCEL_SIZE.x * 0.6)
+	if power == "meteor":
+		camera.shake(28.0)
+	elif power in ["flood", "ice_age", "extinct"]:
+		camera.shake(8.0)
+
+
+func _fx_radius(cells: int) -> float:
+	return FX_BASE_RADIUS + FX_RADIUS_PER_CELL * cells
+
+
+## Le globe (ou l'ancienne carte) porte l'état du pouvoir choisi dans le HUD.
+func _globe() -> Object:
+	var parent := get_parent()
+	if parent == null or not "globe" in parent:
+		return null
+	return parent.get("globe")
+
+
+func _power() -> String:
+	var g := _globe()
+	if g == null or not "power" in g:
+		return ""
+	return String(g.get("power"))
+
+
+func _globe_int(prop: String, fallback: int) -> int:
+	var g := _globe()
+	if g == null or not prop in g:
+		return fallback
+	return int(g.get(prop))

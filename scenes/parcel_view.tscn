@@ -1,9 +1,32 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=9 format=3]
 
-[ext_resource type="Script" path="res://src/parcel/parcel_view.gd" id="1_parcel"]
+[ext_resource type="Script" path="res://src/parcel/parcel_view.gd" id="1_view"]
+[ext_resource type="Script" path="res://src/parcel/parcel_terrain.gd" id="2_terrain"]
+[ext_resource type="Shader" path="res://shaders/parcel_terrain.gdshader" id="3_shader"]
+[ext_resource type="Script" path="res://src/parcel/structure_layer.gd" id="4_structures"]
+[ext_resource type="Script" path="res://src/parcel/creature_layer.gd" id="5_creatures"]
+[ext_resource type="Script" path="res://src/parcel/power_fx.gd" id="6_fx"]
+[ext_resource type="Script" path="res://src/parcel/parcel_camera.gd" id="7_camera"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_terrain"]
+shader = ExtResource("3_shader")
 
 [node name="ParcelView" type="Node2D"]
-script = ExtResource("1_parcel")
+script = ExtResource("1_view")
+
+[node name="Terrain" type="Node2D" parent="."]
+material = SubResource("ShaderMaterial_terrain")
+script = ExtResource("2_terrain")
+
+[node name="Structures" type="Node2D" parent="."]
+script = ExtResource("4_structures")
+
+[node name="Creatures" type="Node2D" parent="."]
+script = ExtResource("5_creatures")
+
+[node name="Fx" type="Node2D" parent="."]
+z_index = 5
+script = ExtResource("6_fx")
 
 [node name="Camera" type="Camera2D" parent="."]
-anchor_mode = 0
+script = ExtResource("7_camera")

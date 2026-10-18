@@ -1,0 +1,236 @@
+extends RefCounted
+## Tests de la vue parcelle (fonctions pures de src/parcel/parcel_logic.gd et groupes de
+## créatures hors scène). Chaque test renvoie "" en cas de succès, sinon un message d'erreur.
+
+const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
+const CreatureGroup := preload("res://src/parcel/creature_group.gd")
+
+
+func _expect(got, want, what: String) -> String:
+	if got != want:
+		return "%s : obtenu %s, attendu %s" % [what, str(got), str(want)]
+	return ""
+
+
+func test_reconcile_counts() -> String:
+	# [actifs, partants, cible] -> {revive, spawn, retire}
+	var cases := [
+		[[0, 0, 5], {revive = 0, spawn = 5, retire = 0}],
+		[[5, 0, 5], {revive = 0, spawn = 0, retire = 0}],
+		[[8, 0, 3], {revive = 0, spawn = 0, retire = 5}],
+		[[3, 4, 5], {revive = 2, spawn = 0, retire = 0}],
+		[[3, 1, 6], {revive = 1, spawn = 2, retire = 0}],
+		[[4, 2, 0], {revive = 0, spawn = 0, retire = 4}],
+		[[2, 0, -3], {revive = 0, spawn = 0, retire = 2}],
+	]
+	for c in cases:
+		var a: Array = c[0]
+		var r := ParcelLogic.reconcile(a[0], a[1], a[2])
+		var err := _expect(r, c[1], "reconcile(%d, %d, %d)" % a)
+		if err != "":
+			return err
+		# Invariant : après application, il reste exactement max(cible, 0) actifs.
+		var active: int = a[0] + r.revive + r.spawn - r.retire
+		if active != maxi(a[2], 0):
+			return "reconcile(%d, %d, %d) laisse %d actifs" % [a[0], a[1], a[2], active]
+	return ""
+
+
+func test_group_tracks_count_exactly() -> String:
+	var g := CreatureGroup.new(4, Vector2i(10, 20))
+	g.set_species({role = "herbivore", clade = "dinosaure", size = 0.8})
+	var ctx := {prey = PackedVector2Array(), hunters = PackedVector2Array(), spots = PackedVector2Array()}
+	for target in [12, 30, 7, 7, 0, 18, 40, 3]:
+		g.set_target(target)
+		if g.active_count() != target:
+			return "après set_target(%d) : %d actifs" % [target, g.active_count()]
+		g.step(0.3, ctx)
+		if g.active_count() != target:
+			return "après un pas : %d actifs au lieu de %d" % [g.active_count(), target]
+	# Les partants s'effacent en fondu puis disparaissent.
+	for i in 20:
+		g.step(0.2, ctx)
+	return _expect(g.pos.size(), 3, "individus restants après les fondus")
+
+
+func test_group_fades_instead_of_jumping() -> String:
+	var g := CreatureGroup.new(1, Vector2i.ZERO)
+	g.set_species({role = "carnivore", clade = "dinosaure", size = 0.9})
+	var ctx := {prey = PackedVector2Array([Vector2(500, 500)]), hunters = PackedVector2Array(), spots = PackedVector2Array()}
+	g.set_target(4)
+	for a in g.alpha:
+		if a != 0.0:
+			return "un nouvel individu doit apparaître transparent"
+	g.step(0.4, ctx)
+	for a in g.alpha:
+		if a <= 0.0 or a >= 1.0:
+			return "fondu d'apparition attendu, alpha = %f" % a
+	g.set_target(1)
+	if g.pos.size() != 4:
+		return "les partants doivent rester le temps du fondu"
+	return ""
+
+
+func test_group_buffer_layout() -> String:
+	var g := CreatureGroup.new(2, Vector2i.ZERO)
+	g.set_species({role = "sapient", clade = "primate", size = 0.1})
+	g.set_target(5)
+	g.step(0.1, {prey = PackedVector2Array(), hunters = PackedVector2Array(), spots = PackedVector2Array([Vector2(300, 300)])})
+	if g.buffer.size() != g.capacity * CreatureGroup.STRIDE or g.capacity < 5:
+		return "tampon MultiMesh mal dimensionné : %d pour %d" % [g.buffer.size(), g.capacity]
+	for i in 5:
+		var o := i * CreatureGroup.STRIDE
+		if Vector2(g.buffer[o + 3], g.buffer[o + 7]) != g.pos[i]:
+			return "origine de l'instance %d incorrecte" % i
+	return ""
+
+
+func test_asset_resolution() -> String:
+	var files := {
+		"res://assets/parcel/creatures/dinosaure.png": true,
+		"res://assets/parcel/creatures/primate_sapient.png": true,
+		"res://assets/parcel/structures/building_megacity.png": true,
+		"res://assets/parcel/structures/hut.png": true,
+	}
+	var exists := func(path: String) -> bool: return files.has(path)
+	var cases := [
+		[ParcelLogic.creature_asset_candidates("dinosaure", "carnivore"), "res://assets/parcel/creatures/dinosaure.png"],
+		[ParcelLogic.creature_asset_candidates("primate", "sapient"), "res://assets/parcel/creatures/primate_sapient.png"],
+		[ParcelLogic.creature_asset_candidates("ptérosaure", "carnivore"), ""],
+		[ParcelLogic.creature_asset_candidates("", "herbivore"), ""],
+		[ParcelLogic.structure_asset_candidates("building", "megacity"), "res://assets/parcel/structures/building_megacity.png"],
+		[ParcelLogic.structure_asset_candidates("building", "town"), ""],
+		[ParcelLogic.structure_asset_candidates("hut", "village"), "res://assets/parcel/structures/hut.png"],
+	]
+	for c in cases:
+		var err := _expect(ParcelLogic.resolve_asset(c[0], exists), c[1], "asset pour %s" % str(c[0]))
+		if err != "":
+			return err
+	var cands := ParcelLogic.creature_asset_candidates("Ptérosaure", "carnivore")
+	return _expect(cands[1], "res://assets/parcel/creatures/pterosaure.png", "nom sans accents")
+
+
+func test_slug() -> String:
+	var cases := {
+		"Ptérosaure": "pterosaure", "mammifère": "mammifere", "chimère": "chimere",
+		"Forêt tempérée": "foret_temperee", "Dromæosauridés": "dromaeosaurides", "a-b/c": "a_bc",
+	}
+	for k in cases:
+		var err := _expect(ParcelLogic.slug(k), cases[k], "slug(%s)" % k)
+		if err != "":
+			return err
+	return ""
+
+
+func test_ground_state() -> String:
+	var G := ParcelLogic.Ground
+	var cases := [
+		["wild", "Désert", G.SAND], ["wild", "Forêt tropicale", G.LUSH], ["ocean", "Savane", G.WATER],
+		["crater", "Toundra", G.CRATER], ["megacity", "Steppe", G.URBAN], ["farmland", "Steppe", G.DRY],
+		["rewild", "Inconnu", G.GRASS],
+	]
+	for c in cases:
+		var err := _expect(ParcelLogic.ground_kind(c[0], c[1]), c[2], "ground_kind(%s, %s)" % [c[0], c[1]])
+		if err != "":
+			return err
+	if ParcelLogic.ground_state("crater", "Savane").z != 0.0:
+		return "pas de végétation dans un cratère"
+	if ParcelLogic.ground_state("farmland", "Savane").y <= 0.0:
+		return "les terres agricoles doivent être labourées"
+	return ""
+
+
+func test_transition() -> String:
+	var a := Vector3(0, 0, 1)
+	var b := Vector3(3, 0, 0.15)
+	var c := Vector3(9, 0, 0)
+	var err := _expect(ParcelLogic.next_transition(a, a, 1.0, b), [a, b, 0.0], "nouvelle cible")
+	if err != "":
+		return err
+	err = _expect(ParcelLogic.next_transition(a, b, 0.4, b), [a, b, 0.4], "même cible : on continue")
+	if err != "":
+		return err
+	err = _expect(ParcelLogic.next_transition(a, b, 0.25, a), [b, a, 0.75], "retour : on rembobine")
+	if err != "":
+		return err
+	err = _expect(ParcelLogic.next_transition(a, b, 0.8, c), [b, c, 0.0], "cible pendant un fondu")
+	if err != "":
+		return err
+	return _expect(ParcelLogic.next_transition(a, b, 0.2, c), [a, c, 0.0], "cible au début d'un fondu")
+
+
+func test_creature_appearance() -> String:
+	var S := ParcelLogic.Shape
+	var cases := [
+		["dinosaure", "carnivore", 0.95, S.BIPED], ["dinosaure", "herbivore", 1.0, S.LONG_NECK],
+		["dinosaure", "herbivore", 0.8, S.QUADRUPED], ["oiseau", "omnivore", 0.1, S.BIRD],
+		["ptérosaure", "carnivore", 0.5, S.BIRD], ["reptile", "carnivore", 0.6, S.REPTILE],
+		["dinosaure", "sapient", 0.3, S.HUMANOID], ["mammifère", "herbivore", 0.1, S.QUADRUPED],
+	]
+	for c in cases:
+		var err := _expect(ParcelLogic.shape_for(c[0], c[1], c[2]), c[3], "shape_for(%s, %s)" % [c[0], c[1]])
+		if err != "":
+			return err
+	if ParcelLogic.creature_length(1.0) <= ParcelLogic.creature_length(0.1):
+		return "les grosses espèces doivent être plus grandes"
+	if ParcelLogic.species_color("carnivore", 3) != ParcelLogic.species_color("carnivore", 3):
+		return "couleur non déterministe"
+	if ParcelLogic.species_color("carnivore", 3).is_equal_approx(ParcelLogic.species_color("herbivore", 3)):
+		return "rôles indiscernables"
+	return ""
+
+
+func test_choose_species() -> String:
+	var fauna := [{species_id = 4, count = 3}, {species_id = 9, count = 12}]
+	var smite := {id = "plague", needs_species = true}
+	var cases := [
+		[smite, 4, 7, 4], [smite, -1, 7, 7], [smite, -1, -1, 9],
+		[{id = "meteor", needs_species = false}, 4, 7, -1],
+		[{id = "spawn_species", needs_species = false}, 4, 7, 7],
+	]
+	for c in cases:
+		var err := _expect(ParcelLogic.choose_species(c[0], c[1], c[2], fauna), c[3], "choose_species(%s)" % c[0].id)
+		if err != "":
+			return err
+	return _expect(ParcelLogic.choose_species(smite, -1, -1, []), -1, "parcelle vide")
+
+
+func test_camera_limits() -> String:
+	var parcel := Vector2(1920, 1080)
+	var err := _expect(ParcelLogic.cover_zoom(Vector2(1920, 1080), parcel), 1.0, "zoom de couverture")
+	if err != "":
+		return err
+	if ParcelLogic.cover_zoom(Vector2(1920, 1200), parcel) < 1200.0 / 1080.0:
+		return "la parcelle doit couvrir tout l'écran"
+	err = _expect(ParcelLogic.wheel_out(1.0, 1.0, 1.15), {zoom = 1.0, exit = true}, "molette au minimum")
+	if err != "":
+		return err
+	if ParcelLogic.wheel_out(2.0, 1.0, 1.15).exit:
+		return "pas de sortie avant le zoom minimal"
+	err = _expect(ParcelLogic.clamp_camera(Vector2(0, 0), 2.0, Vector2(1920, 1080), parcel), Vector2(480, 270), "coin haut-gauche")
+	if err != "":
+		return err
+	return _expect(ParcelLogic.clamp_camera(Vector2(100, 900), 1.0, Vector2(1920, 1080), parcel), Vector2(960, 540), "zoom minimal : centré")
+
+
+func test_region_hits_parcel() -> String:
+	var cases := [
+		[Vector2i(70, 40), 0, Vector2i(70, 40), true], [Vector2i(75, 40), 4, Vector2i(70, 40), false],
+		[Vector2i(73, 44), 5, Vector2i(70, 40), true], [Vector2i(254, 40), 3, Vector2i(1, 40), true],
+	]
+	for c in cases:
+		var err := _expect(ParcelLogic.region_hits_parcel(c[0], c[1], c[2], 256), c[3], "région %s rayon %d" % [c[0], c[1]])
+		if err != "":
+			return err
+	return ""
+
+
+func test_structure_key_stable() -> String:
+	var a := {kind = "hut", pos = Vector2(0.31234, 0.7), size = 0.04}
+	var b := {kind = "hut", pos = Vector2(0.31234, 0.7), size = 0.05}
+	var c := {kind = "building", pos = Vector2(0.31234, 0.7), size = 0.05}
+	if ParcelLogic.structure_key(a) != ParcelLogic.structure_key(b):
+		return "la clé ne doit dépendre que du type et de la position"
+	if ParcelLogic.structure_key(a) == ParcelLogic.structure_key(c):
+		return "types différents, clés identiques"
+	return ""
