@@ -24,9 +24,12 @@ const ASPECTS := {
 const DIFFICULTY_ORDER := ["eveil", "divin", "apocalypse"]
 ## deck : taille de la pioche (sablier cosmique), cataclysmes compris.
 const DIFFICULTIES := {
-	eveil = {label = "Éveil", actions = 5, cataclysms = 4, collapse_limit = 10, deck = 96},
-	divin = {label = "Divin", actions = 4, cataclysms = 5, collapse_limit = 8, deck = 84},
-	apocalypse = {label = "Apocalypse", actions = 3, cataclysms = 6, collapse_limit = 6, deck = 72},
+	eveil = {label = "Éveil", actions = 5, cataclysms = 4, collapse_limit = 10, deck = 96,
+		samael = "Samaël tire ses menaces au hasard."},
+	divin = {label = "Divin", actions = 4, cataclysms = 5, collapse_limit = 8, deck = 84,
+		samael = "Samaël joue ce qui fait le plus mal tout de suite, vise tes Grands Œuvres et apprend tes habitudes."},
+	apocalypse = {label = "Apocalypse", actions = 3, cataclysms = 6, collapse_limit = 6, deck = 72,
+		samael = "Samaël consulte l'Oracle comme toi pour viser ce qui fera le plus mal dans plusieurs manches."},
 }
 
 const DEFAULT_ASPECT := "guardian"
@@ -95,20 +98,20 @@ const THREATS := {
 	# --- Prologue -------------------------------------------------------------------------------
 	oxidation = {title = "Grande Oxydation", text = "L'oxygène empoisonne les lignées anciennes.",
 		acts = ["prologue"], strike = "plague", target = "abundant", radius = 10,
-		counters = ["save", "bless"], weight = 3.0},
+		counters = ["save", "bless"], weight = 3.0, max_era = Eras.MESOZOIC - 1},
 	anoxia = {title = "Anoxie des mers", text = "Les eaux s'asphyxient.",
 		acts = ["prologue", "act1"], strike = "plague", target = "abundant", radius = 12,
-		counters = ["flood", "bless"], weight = 2.0},
+		counters = ["flood", "bless"], weight = 2.0, max_era = Eras.MESOZOIC},
 	snowball = {title = "Terre boule de neige", text = "La planète gèle.",
 		acts = ["prologue"], strike = "ice_age", target = "none", radius = 30,
-		counters = ["bless", "save"], weight = 1.0, major = true},
+		counters = ["bless", "save"], weight = 1.0, major = true, max_era = Eras.MESOZOIC - 1},
 	# --- Monde sauvage ----------------------------------------------------------------------------
 	drought = {title = "Sécheresse", text = "Les pluies cessent, les troupeaux dépérissent.",
 		acts = ["act1", "act2", "act3"], strike = "plague", target = "herbivore", radius = 8,
-		counters = ["flood", "bless"], weight = 2.0},
+		counters = ["flood", "bless"], weight = 2.0, min_era = Eras.MESOZOIC},
 	overgrazing = {title = "Surpâturage", text = "Une espèce trop nombreuse ravage la parcelle.",
-		acts = ["prologue", "act1", "act2", "act3"], strike = "plague", target = "abundant", radius = 8,
-		counters = ["plague", "flood"], weight = 0.5},
+		acts = ["act1", "act2", "act3"], strike = "plague", target = "herbivore", radius = 8,
+		counters = ["plague", "flood"], weight = 0.5, min_era = Eras.MESOZOIC},
 	epidemic = {title = "Épidémie", text = "Un mal se répand de proche en proche.",
 		acts = ["prologue", "act1", "act2", "act3"], strike = "plague", target = "abundant", radius = 10,
 		counters = ["save", "bless"], weight = 2.0},
@@ -120,7 +123,7 @@ const THREATS := {
 		counters = ["save", "bless"], weight = 0.0},
 	glaciation = {title = "Glaciation", text = "Les glaces avancent.",
 		acts = ["act1", "act2", "act3"], strike = "ice_age", target = "none", radius = 30,
-		counters = ["bless", "save"], weight = 1.0},
+		counters = ["bless", "save"], weight = 1.0, min_era = Eras.MESOZOIC},
 	heatwave = {title = "Dérive du climat", text = "La chaleur monte, les mers aussi.",
 		acts = ["prologue", "act1", "act2", "act3"], strike = "flood", target = "none", radius = 10,
 		counters = ["ice_age", "bless"], weight = 0.5},
@@ -131,18 +134,25 @@ const THREATS := {
 		acts = ["prologue", "act1", "act2", "act3"], strike = "meteor", target = "none", radius = 4,
 		counters = ["save", "bless"], weight = 0.0, major = true},
 	# --- Civilisations ----------------------------------------------------------------------------
+	# Époques (§9) : min_era / max_era (indices de eras.gd), min_tech (civilisation de tête). L'ère
+	# sapiente découle du niveau technologique réel : un monde divergent suit sa technique, pas la date.
 	famine = {title = "Famine", text = "Les récoltes manquent.",
 		acts = ["act3"], strike = "plague", target = "sapient", radius = 8,
-		counters = ["bless", "flood"], weight = 2.0},
+		counters = ["bless", "flood"], weight = 2.0, min_era = Eras.FIRST_SAPIENT_ERA + 1, min_tech = 1.0},
 	war = {title = "Guerre", text = "Les peuples prennent les armes.",
 		acts = ["act3"], strike = "plague", target = "sapient", radius = 10,
-		counters = ["bless", "uplift"], weight = 1.5},
-	pollution = {title = "Pollution", text = "Fumées et rejets montent jusqu'au ciel.",
+		counters = ["bless", "uplift"], weight = 1.5, min_era = Eras.FIRST_SAPIENT_ERA + 1, min_tech = 1.0},
+	pollution = {title = "Pollution industrielle", text = "Fumées et rejets montent jusqu'au ciel.",
 		acts = ["act3"], strike = "flood", target = "none", radius = 12,
-		counters = ["uplift", "ice_age"], weight = 0.0},
+		counters = ["uplift", "ice_age"], weight = 0.0, min_era = Eras.FIRST_SAPIENT_ERA + 4, min_tech = 4.0},
+	nuclear_war = {title = "Guerre nucléaire", text = "Les arsenaux de l'atome s'ouvrent.",
+		acts = ["act3"], strike = "meteor", target = "none", radius = 3,
+		counters = ["bless", "uplift"], weight = 0.0, major = true,
+		min_era = Eras.FIRST_SAPIENT_ERA + 5, min_tech = 5.25},
 	hostile_ai = {title = "IA hostile", text = "Une intelligence née des machines se retourne contre ses créateurs.",
 		acts = ["act3"], strike = "plague", target = "sapient", radius = 20,
-		counters = ["uplift", "save"], weight = 0.0, major = true},
+		counters = ["uplift", "save"], weight = 0.0, major = true,
+		min_era = Eras.FIRST_SAPIENT_ERA + 5, min_tech = AI_TECH},
 }
 
 ## Cataclysme pioché : menace majeure tirée selon l'acte.
@@ -150,8 +160,16 @@ const MAJOR_BY_ACT := {
 	prologue = ["snowball", "impact", "supervolcano"],
 	act1 = ["impact", "supervolcano", "glaciation"],
 	act2 = ["glaciation", "supervolcano", "impact"],
-	act3 = ["hostile_ai", "supervolcano", "impact"],
+	act3 = ["hostile_ai", "nuclear_war", "supervolcano", "impact"],
 }
+
+## Borne d'ère « aucune limite ».
+const NO_ERA_LIMIT := 1000000
+## Âge de l'information (≈ 2025) : réseaux d'ordinateurs (jalon à 75 % du niveau 5).
+const AI_TECH := 5.75
+## Pouvoirs divins proposés en contre : intemporels (ce sont des gestes de Dieu), mais la table
+## permet de borner un pouvoir à une époque si l'un d'eux devenait anachronique.
+const POWER_MIN_ERA := {}
 
 # =============================================================================================
 # Grands Œuvres (§4)
@@ -195,11 +213,34 @@ static func act_for(era_index: int, has_sapient: bool) -> String:
 	return "act2"
 
 
-## Pouvoirs qui contrent une menace de ce type.
-static func counters(kind: String) -> Array[String]:
+## Pouvoirs qui contrent une menace de ce type (filtrés par époque si `era` est donné).
+static func counters(kind: String, era := NO_ERA_LIMIT) -> Array[String]:
 	var out: Array[String] = []
 	for c in THREATS.get(kind, {}).get("counters", []):
-		out.append(String(c))
+		if era >= int(POWER_MIN_ERA.get(c, -NO_ERA_LIMIT)):
+			out.append(String(c))
+	return out
+
+
+## Zéro anachronisme (§9) : la carte est-elle possible à cette ère, avec ce niveau technologique de
+## la civilisation de tête (-1 : aucune) ?
+static func epoch_ok(kind: String, era: int, lead_tech: float) -> bool:
+	var def: Dictionary = THREATS.get(kind, {})
+	if def.is_empty():
+		return false
+	if era < int(def.get("min_era", -NO_ERA_LIMIT)) or era > int(def.get("max_era", NO_ERA_LIMIT)):
+		return false
+	return not def.has("min_tech") or lead_tech >= float(def.min_tech)
+
+
+## Types de carte légaux maintenant (acte et époque).
+static func legal_kinds(act: String, era: int, lead_tech: float, majors := false) -> Array[String]:
+	var out: Array[String] = []
+	for k in THREATS:
+		var def: Dictionary = THREATS[k]
+		if bool(def.get("major", false)) == majors and act in def.acts and epoch_ok(k, era, lead_tech):
+			out.append(String(k))
+	out.sort()
 	return out
 
 

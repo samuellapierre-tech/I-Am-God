@@ -12,12 +12,11 @@ extends CanvasLayer
 const Fmt := preload("res://src/ui/strategy/strategy_format.gd")
 const Rules := preload("res://src/strategy/strategy_rules.gd")
 const ThreatCard := preload("res://src/ui/strategy/threat_card.gd")
+const Layout := preload("res://src/ui/layout.gd")
 
-## Zones de l'écran de référence 1920×1080 (mêmes valeurs que src/ui/layout.gd de la branche
-## hud-stats : STRATEGY_TRACKS et STRATEGY_THREATS ; à remplacer par Layout une fois fusionnée).
-const REF_SIZE := Vector2(1920, 1080)
-const TRACKS_ZONE := Rect2(500, 60, 920, 44)
-const THREATS_ZONE := Rect2(1668, 12, 240, 480)
+## Zones de l'écran de référence (src/ui/layout.gd) ; l'annonce de manche est transitoire.
+const TRACKS_ZONE := Layout.STRATEGY_TRACKS
+const THREATS_ZONE := Layout.STRATEGY_THREATS
 const BANNER_ZONE := Rect2(610, 116, 700, 96)
 const BANNER_TIME := 6.0
 const REFRESH := 0.2
@@ -449,15 +448,7 @@ func _on_new_game() -> void:
 # =============================================================================================
 
 static func _place(c: Control, zone: Rect2, anchor: Vector2) -> void:
-	var origin := REF_SIZE * anchor
-	c.anchor_left = anchor.x
-	c.anchor_right = anchor.x
-	c.anchor_top = anchor.y
-	c.anchor_bottom = anchor.y
-	c.offset_left = zone.position.x - origin.x
-	c.offset_top = zone.position.y - origin.y
-	c.offset_right = zone.end.x - origin.x
-	c.offset_bottom = zone.end.y - origin.y
+	Layout.place(c, zone, anchor)
 
 
 static func _panel(alpha: float) -> PanelContainer:

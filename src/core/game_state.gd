@@ -18,6 +18,10 @@ signal threat_revealed(threat: Dictionary)
 signal threat_resolved(threat: Dictionary, countered: bool)
 signal tracks_changed(tracks: Dictionary)
 signal game_over(victory: bool, reason: String)
+## Samaël, l'adversaire : {kind: "reveal"|"strike"|"taunt_hook", threat, reason_code} (le narrateur
+## lui donne la parole), et les habitudes du joueur qu'il a apprises : {power, weight, share}.
+signal samael_move(move: Dictionary)
+signal samael_learned(habit: Dictionary)
 
 const WorldSim := preload("res://src/sim/world_sim.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
@@ -121,6 +125,8 @@ func _make_strategy() -> void:
 	strategy.threat_resolved.connect(threat_resolved.emit)
 	strategy.tracks_changed.connect(tracks_changed.emit)
 	strategy.game_over.connect(game_over.emit)
+	strategy.samael_move.connect(samael_move.emit)
+	strategy.samael_learned.connect(samael_learned.emit)
 	strategy.start(sim, parcel)
 
 

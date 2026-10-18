@@ -189,15 +189,17 @@ func test_cataclysm_increases_intensity() -> String:
 	var g2 := _setup()
 	var st2: RefCounted = g2.st
 	st2._deck.append({cataclysm = true, kind = "", severity = 1.0})
-	st2.next_threats = st2._draw_round_cards(g2.sim, g2.parcel)
-	var has_cat := false
-	for t in st2.next_threats:
-		has_cat = has_cat or t.cataclysm
-	if not has_cat:
-		return "Cataclysme pioché mais absent des menaces suivantes"
+	st2._hand = st2._draw_hand(g2.sim, g2.parcel)
+	st2._committed = false
+	var cats := 0
+	for t in st2._hand:
+		cats += 1 if t.cataclysm else 0
+	if cats == 0:
+		return "Cataclysme pioché mais absent de la main"
+	var expected: int = st2.cataclysms + cats
 	_next_round(g2)
-	if st2.cataclysms != 1:
-		return "Cataclysme révélé sans effet (cataclysms = %d)" % st2.cataclysms
+	if st2.cataclysms != expected:
+		return "Cataclysme révélé sans effet (cataclysms = %d, attendu %d)" % [st2.cataclysms, expected]
 	return ""
 
 
@@ -271,6 +273,7 @@ func test_empty_deck_defeat() -> String:
 	var st: RefCounted = g.st
 	st._deck.clear()
 	st.next_threats.clear()
+	st._hand.clear()
 	var ended := []
 	st.game_over.connect(func(v, r): ended.append([v, r]))
 	_next_round(g)
@@ -285,7 +288,7 @@ func test_threats_reflect_world() -> String:
 	var g := _setup()
 	var st: RefCounted = g.st
 	# Chaque carte a une cible cohérente et des contres explicites.
-	for t in st.round.threats + st.next_threats:
+	for t in st.round.threats + st._hand:
 		var def: Dictionary = Rules.THREATS[t.kind]
 		if not t.act in def.acts and not t.cataclysm:
 			return "%s piochée hors de son acte (%s)" % [t.kind, t.act]

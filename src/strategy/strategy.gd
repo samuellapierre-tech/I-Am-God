@@ -11,6 +11,9 @@ extends RefCounted
 ## - Pistes : effondrements en chaîne (lus dans la chaîne causale), vitalité de la parcelle,
 ##   4 Grands Œuvres à sceller, sablier (pioche).
 ##
+## - Samaël (samael.gd), l'adversaire, reçoit chaque manche une main de cartes légales et choisit
+##   celles qu'il révèle et quand elles frappent (§8). Rien n'apparaît avant son époque (§9).
+##
 ## Pur et déterministe à graine égale : aucun accès à GameState ni à l'arbre de scènes.
 ## Utilisation : start(world, parcel) puis update(world, parcel, events) à chaque image (renvoie les
 ## événements produits par les frappes, à relayer comme ceux de WorldSim.step).
@@ -24,8 +27,17 @@ signal game_over(victory: bool, reason: String)
 signal action_refused(kind: String)
 ## Le nombre d'actions restantes a changé.
 signal actions_changed(actions_left: int)
+## Samaël agit : {kind: "reveal"|"strike"|"taunt_hook", threat: Dictionary, reason_code: String}.
+signal samael_move(move: Dictionary)
+## Samaël a appris une habitude du joueur : {power, weight, share}.
+signal samael_learned(habit: Dictionary)
 
 const Rules := preload("res://src/strategy/strategy_rules.gd")
+const Samael := preload("res://src/strategy/samael.gd")
+
+## Samaël engage ses cartes de la manche suivante à cette fraction de la manche (le Prophète les
+## voit alors) ; l'Oracle d'Apocalypse travaille entre le début de manche et ce moment.
+const COMMIT_AT := 0.5
 
 ## Types d'événements de WorldSim qui forment une crise (maillon d'un effondrement en chaîne).
 const CHAIN_TYPES := ["extinction", "collapse"]
@@ -56,8 +68,10 @@ var actions_per_round := 4
 var tracks := {}
 ## Grands Œuvres dont la condition est remplie dans la simulation (scellables).
 var works_ready := {life = false, land = false, mind = false, legacy = false}
-## Menaces de la manche suivante (déjà piochées ; visibles seulement pour le Prophète).
+## Menaces de la manche suivante, une fois choisies par Samaël (visibles seulement pour le Prophète).
 var next_threats: Array[Dictionary] = []
+## L'adversaire (son intelligence dépend de la difficulté).
+var samael: Samael
 ## Cataclysmes piochés (intensité).
 var cataclysms := 0
 var over := false
@@ -84,6 +98,9 @@ var _creator_free := true
 var _creator_bonus := 0
 var _seen_fauna := {}
 var _round_stats := {countered = 0, struck = 0, collapses = 0}
+## Main de Samaël pour la manche suivante (privée) ; engagée dans next_threats à COMMIT_AT.
+var _hand: Array[Dictionary] = []
+var _committed := false
 
 
 func _init(p_seed: int, p_aspect := Rules.DEFAULT_ASPECT, p_difficulty := Rules.DEFAULT_DIFFICULTY) -> void:
@@ -93,6 +110,8 @@ func _init(p_seed: int, p_aspect := Rules.DEFAULT_ASPECT, p_difficulty := Rules.
 	var d := Rules.difficulty(difficulty)
 	actions_per_round = int(d.actions)
 	_build_deck(int(d.deck), int(d.cataclysms))
+	samael = Samael.new(p_seed, difficulty)
+	samael.learned.connect(samael_learned.emit)
 	tracks = {
 		collapses = 0, collapse_limit = int(d.collapse_limit), vitality = 1.0,
 		works = {life = false, land = false, mind = false, legacy = false}, deck_left = _deck.size(),
@@ -112,7 +131,8 @@ func start(world: RefCounted, parcel: RefCounted) -> void:
 	_last_year = world.year
 	_note_fauna(parcel, true)
 	_refresh_tracks(world, parcel)
-	next_threats = _draw_round_cards(world, parcel)
+	_hand = _draw_hand(world, parcel)
+	_commit(world, parcel)
 	_start_round(world, parcel, "")
 
 
@@ -138,6 +158,12 @@ func update(world: RefCounted, parcel: RefCounted, events: Array = []) -> Array[
 			out.append_array(_strike(t, world, parcel))
 	_detect_chains(world, out)
 	_update_years(world)
+	# Samaël prépare la manche suivante : Oracle (Apocalypse), puis choix engagé.
+	if not _committed:
+		if _progress >= COMMIT_AT:
+			_commit(world, parcel)
+		else:
+			samael.think()
 	# Le bonus du Destructeur se dissipe en une manche ; la parcelle doit rester morte une demi-manche.
 	_vitality_bonus = maxf(0.0, _vitality_bonus - Rules.DESTROYER_BONUS_MAX * (_progress - before))
 	_dead_for = _dead_for + (_progress - before) if float(tracks.vitality) <= VITALITY_DEAD else 0.0
@@ -192,14 +218,20 @@ func spend_action(kind: String) -> bool:
 			break
 		if kind in t.counters:
 			_resolve(t, true)
+			samael.note_counter(kind)
 			n -= 1
 	if cost != 0:
 		actions_changed.emit(actions_left)
 	return true
 
 
-## Types de pouvoirs qui contrent cette menace.
+## Types de pouvoirs qui contrent cette menace (filtrés par époque à la création de la carte).
 func counters_for(threat: Dictionary) -> Array[String]:
+	if threat.has("counters"):
+		var out: Array[String] = []
+		for c in threat.counters:
+			out.append(String(c))
+		return out
 	return Rules.counters(String(threat.get("kind", "")))
 
 
@@ -252,10 +284,11 @@ func _build_deck(size: int, cats: int) -> void:
 			_deck.append(c)
 
 
-## Pioche les cartes d'une manche selon l'intensité. Les Cataclysmes s'ajoutent (ne comptent pas).
-func _draw_round_cards(world: RefCounted, parcel: RefCounted) -> Array[Dictionary]:
+## Pioche la main de Samaël : intensité + HAND_EXTRA cartes. Les Cataclysmes s'ajoutent (ne comptent
+## pas) et seront révélés d'office.
+func _draw_hand(world: RefCounted, parcel: RefCounted) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
-	var n := Rules.intensity(cataclysms)
+	var n := Rules.intensity(cataclysms) + Samael.HAND_EXTRA
 	var drawn := 0
 	while drawn < n and not _deck.is_empty():
 		var card: Dictionary = _deck.pop_back()
@@ -270,12 +303,17 @@ func _draw_round_cards(world: RefCounted, parcel: RefCounted) -> Array[Dictionar
 
 func _make_threat(card: Dictionary, world: RefCounted, parcel: RefCounted) -> Dictionary:
 	var act := Rules.act_for(world.era_index(), not world.get_sapient_species().is_empty())
+	var era: int = world.era_index()
+	var lead := _leading_tech(world)
 	var kind := String(card.kind)
 	var severity := float(card.severity)
 	if card.cataclysm:
-		var majors: Array = Rules.MAJOR_BY_ACT.get(act, Rules.MAJOR_BY_ACT.act1)
-		kind = String(majors[_rng.randi_range(0, majors.size() - 1)])
-	elif kind == "" or not act in Rules.THREATS[kind].acts:
+		var majors := []
+		for k in Rules.MAJOR_BY_ACT.get(act, Rules.MAJOR_BY_ACT.act1):
+			if Rules.epoch_ok(k, era, lead):
+				majors.append(k)
+		kind = String(majors[_rng.randi_range(0, majors.size() - 1)]) if not majors.is_empty() else "impact"
+	elif kind == "" or not act in Rules.THREATS[kind].acts or not Rules.epoch_ok(kind, era, lead):
 		kind = _pick_kind(act, world, parcel)
 	if kind == "":
 		kind = "heatwave"  # toujours possible : vise la parcelle, pas une espèce
@@ -284,7 +322,7 @@ func _make_threat(card: Dictionary, world: RefCounted, parcel: RefCounted) -> Di
 	var t := {
 		id = _next_id, kind = kind, title = def.title, text = def.text,
 		target = {region = _cell(parcel), species_id = sid}, target_name = _species_name(world, sid),
-		strikes_year = 0.0, strike_at = 1.0, revealed = false, severity = severity, countered = false, counters = Rules.counters(kind),
+		strikes_year = 0.0, strike_at = 1.0, revealed = false, severity = severity, countered = false, counters = Rules.counters(kind, era),
 		state = "pending", action = def.strike, cataclysm = bool(card.cataclysm),
 		returning = card.kind != "" and not card.cataclysm, act = act,
 	}
@@ -314,7 +352,7 @@ func _kind_weights(act: String, world: RefCounted, parcel: RefCounted) -> Dictio
 	var w := {}
 	for k in Rules.THREATS:
 		var def: Dictionary = Rules.THREATS[k]
-		if act in def.acts and not def.get("major", false):
+		if act in def.acts and not def.get("major", false) and Rules.epoch_ok(k, world.era_index(), _leading_tech(world)):
 			w[k] = float(def.weight)
 	var fauna := _parcel_species(world, parcel)
 	var ocean: bool = parcel != null and parcel.land_use == "ocean"
@@ -339,8 +377,6 @@ func _kind_weights(act: String, world: RefCounted, parcel: RefCounted) -> Dictio
 		_bump(w, "epidemic", 1.0)
 	if lead >= 4.0:
 		_bump(w, "pollution", 3.0)
-	if lead >= 6.0:
-		_bump(w, "hostile_ai", 2.0)
 	if ocean:
 		w.erase("drought")
 		_bump(w, "anoxia", 1.0)
@@ -377,6 +413,8 @@ func _cataclysm() -> void:
 # =============================================================================================
 
 func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
+	if not _committed:
+		_commit(world, parcel)
 	var cards := next_threats
 	next_threats = []
 	if cards.is_empty() and _deck.is_empty():
@@ -397,26 +435,94 @@ func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
 	_creator_bonus = 0
 	_chain_this_round = 0
 	_round_stats = {countered = 0, struck = 0, collapses = 0}
-	# Cartes de la manche : les Cataclysmes prennent effet à leur révélation.
+	# Cartes de la manche : les Cataclysmes prennent effet à leur révélation. Une carte devenue
+	# anachronique (la civilisation a reculé) est remplacée par une carte légale de même gravité.
+	var era: int = world.era_index()
+	var lead := _leading_tech(world)
 	for t in cards:
 		if t.cataclysm:
 			_cataclysm()
+		if not Rules.epoch_ok(t.kind, era, lead):
+			var fresh := _make_threat({cataclysm = false, kind = "", severity = t.severity}, world, parcel)
+			for key in ["kind", "title", "text", "target", "target_name", "counters", "action", "act"]:
+				t[key] = fresh[key]
+			t.samael = {reason_code = "fallback", score = 0.0}
 		if t.target.species_id >= 0 and not _alive(world, t.target.species_id):
 			_retarget(t, world, parcel)
 		t.target.region = _cell(parcel)
-	var n := cards.size()
-	for i in n:
-		cards[i].revealed = true
-		cards[i].strike_at = Rules.STRIKE_FROM + (Rules.STRIKE_TO - Rules.STRIKE_FROM) * (i + _rng.randf()) / float(n)
-		round.threats.append(cards[i])
+		t.revealed = true
+		round.threats.append(t)
 	_update_years(world)
-	# La manche suivante est piochée dès maintenant (le Prophète la voit).
-	next_threats = _draw_round_cards(world, parcel)
+	# Main de la manche suivante : Samaël la travaille (Oracle) jusqu'à COMMIT_AT.
+	_hand = _draw_hand(world, parcel)
+	_committed = false
+	var normal := _hand.filter(func(t): return not t.cataclysm)
+	samael.plan(normal, world, _cell(parcel), Samael.ORACLE_ROUNDS * float(round.steps) * world.ideal_step_years())
 	_refresh_tracks(world, parcel)
 	round_started.emit(round)
+	samael_move.emit({kind = "taunt_hook", threat = {}, reason_code = _taunt_code()})
 	for t in round.threats:
 		threat_revealed.emit(t)
+		samael_move.emit({kind = "reveal", threat = t, reason_code = String(t.get("samael", {}).get("reason_code", "random"))})
 	actions_changed.emit(actions_left)
+
+
+## Samaël choisit dans sa main les cartes de la manche suivante ; les autres retournent sous la pioche.
+func _commit(world: RefCounted, parcel: RefCounted) -> void:
+	_committed = true
+	var forced: Array[Dictionary] = []
+	var normal: Array = []
+	for t in _hand:
+		if t.cataclysm:
+			forced.append(t)
+		else:
+			normal.append(t)
+	_hand = []
+	var chosen: Array = samael.choose(normal, Rules.intensity(cataclysms), _samael_context(world, parcel))
+	for t in normal:
+		if not t in chosen:
+			_deck.insert(0, {cataclysm = false, kind = "", severity = t.severity})
+	for t in forced:
+		t.samael = {reason_code = "cataclysm", score = 0.0}
+		t.strike_at = Rules.STRIKE_FROM + (Rules.STRIKE_TO - Rules.STRIKE_FROM) * _rng.randf()
+	next_threats = forced
+	for t in chosen:
+		next_threats.append(t)
+	next_threats.sort_custom(func(a, b): return float(a.strike_at) < float(b.strike_at))
+
+
+## Ce que Samaël voit (rien de plus que le joueur) : parcelle, peuples, alertes, pistes, budget.
+func _samael_context(world: RefCounted, parcel: RefCounted) -> Dictionary:
+	var here := _parcel_species(world, parcel)
+	var smartest := -1
+	var best := -1.0
+	for s in here:
+		var sp: Dictionary = world.species[s.species_id]
+		if not sp.sapient and float(sp.traits.intelligence) > best:
+			best = float(sp.traits.intelligence)
+			smartest = int(s.species_id)
+	var collapsing := []
+	if parcel != null:
+		for a in parcel.alerts:
+			if a.kind == "species_collapse":
+				collapsing.append(int(a.species_id))
+	return {
+		species = here, sapients = world.get_sapient_species(), smartest = smartest, collapsing = collapsing,
+		collapses = tracks.collapses, collapse_limit = tracks.collapse_limit, works = tracks.works,
+		works_ready = works_ready, budget = actions_per_round,
+	}
+
+
+## Accroche pour la parole de Samaël en début de manche (le texte vient de src/ai/).
+func _taunt_code() -> String:
+	if samael.favorite != "":
+		return "habit_known_" + samael.favorite
+	if int(tracks.collapses) >= int(tracks.collapse_limit) - 2:
+		return "collapse_near"
+	for id in Rules.WORK_ORDER:
+		if works_ready.get(id, false) and not tracks.works[id]:
+			return "work_within_reach_" + id
+	return "round_open"
 
 
 func _end_round(world: RefCounted, parcel: RefCounted) -> Array[Dictionary]:
@@ -425,6 +531,7 @@ func _end_round(world: RefCounted, parcel: RefCounted) -> Array[Dictionary]:
 		if t.state == "pending":
 			out.append_array(_strike(t, world, parcel))
 	_detect_chains(world, out)
+	samael.end_round()
 	var recap := "%s : %d menace(s) contrée(s), %d frappée(s)" % [round.name, _round_stats.countered, _round_stats.struck]
 	if _round_stats.collapses > 0:
 		recap += ", %d effondrement(s) en chaîne" % _round_stats.collapses
@@ -464,6 +571,11 @@ func _resolve(t: Dictionary, was_countered: bool) -> void:
 func _strike(t: Dictionary, world: RefCounted, parcel: RefCounted) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var def: Dictionary = Rules.THREATS[t.kind]
+	# Devenue anachronique (recul de la civilisation) : la menace se dissipe.
+	if not Rules.epoch_ok(t.kind, world.era_index(), _leading_tech(world)):
+		t.state = "fizzled"
+		_resolve(t, false)
+		return out
 	if String(def.target) != "none" and not _alive(world, t.target.species_id):
 		_retarget(t, world, parcel)
 		if not _alive(world, t.target.species_id):
@@ -485,6 +597,7 @@ func _strike(t: Dictionary, world: RefCounted, parcel: RefCounted) -> Array[Dict
 	t.state = "struck"
 	_round_stats.struck += 1
 	_resolve(t, false)
+	samael_move.emit({kind = "strike", threat = t, reason_code = String(t.get("samael", {}).get("reason_code", "random"))})
 	# Une crise non contrée qui frappe une espèce déjà en chute : effondrement en chaîne.
 	if collapsing:
 		_add_collapse()

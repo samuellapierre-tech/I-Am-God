@@ -133,6 +133,39 @@ précédente) ; une carte porte aussi `state` (`pending`/`countered`/`struck`/`f
 `-- --strategy-autostart` : pas d'écran de lancement. La racine causale d'une frappe est de type
 `threat_<kind>` (et non `divine_*`) : ce n'est pas un geste du joueur.
 
+### Samaël, l'adversaire (`src/strategy/samael.gd`, STRATEGIE.md §8)
+
+`strategy.samael` : à chaque manche, Samaël reçoit une **main** (intensité + `HAND_EXTRA` cartes
+légales tirées de la pioche ; les Cataclysmes sont révélés d'office) et choisit les cartes révélées et
+leur moment de frappe ; les autres retournent sous la pioche. La main de la manche suivante est tirée
+en début de manche et engagée à `COMMIT_AT` (mi-manche) dans `next_threats` (le Prophète les voit
+alors). Il ne crée aucune carte et ne lit que ce que le joueur voit. Niveau selon la difficulté :
+`eveil` → `random`, `divin` → `greedy` (dégâts immédiats, Grands Œuvres non scellés, risque
+d'effondrement, budget du joueur, habitudes apprises), `apocalypse` → `oracle` (en plus : `fork()` +
+projection basse résolution façon `project_future()`, étalée sur les images : au plus
+`ORACLE_UNITS_PER_UPDATE` unités et `ORACLE_BUDGET_USEC` µs par image). Déterministe à graine égale et
+à suite d'appels égale.
+
+- Carte choisie : champ `samael: {reason_code: String, score: float}`.
+- Signaux (instance et relais `GameState`) : `samael_move(move)` avec
+  `move = {kind: "reveal"|"strike"|"taunt_hook", threat: Dictionary, reason_code: String}` et
+  `samael_learned(habit)` avec `habit = {power, weight, share}`.
+- `reason_code` stables (le texte vient de `src/ai/` ; `src/ui/strategy/strategy_format.gd` en a une
+  version courte pour les cartes) : `random`, `max_damage`, `targets_work_<life|land|mind|legacy>`,
+  `chain_risk`, `budget_exhausted`, `exploits_habit_<pouvoir>`, `oracle_foresees`, `cataclysm`,
+  `fallback`. Accroches `taunt_hook` : `round_open`, `habit_known_<pouvoir>`, `collapse_near`,
+  `work_within_reach_<œuvre>`.
+
+### Zéro anachronisme (STRATEGIE.md §9)
+
+Chaque type de carte (`strategy_rules.gd`, `THREATS`) peut porter `min_era`, `max_era` (constantes de
+`eras.gd`) et `min_tech` (niveau de la civilisation de tête, donc la technique réelle d'un monde
+divergent, pas la date). `Rules.epoch_ok(kind, era, lead_tech)` filtre la pioche, la main de Samaël,
+les Cataclysmes et les contres (`Rules.counters(kind, era)`, table `POWER_MIN_ERA`) ; une carte devenue
+anachronique (recul d'une civilisation) est remplacée à la révélation et se dissipe si elle n'a pas
+encore frappé. Ex. : `famine`/`war` Antiquité, `pollution` Industriel, `nuclear_war` atome (5,25),
+`hostile_ai` âge de l'information (`AI_TECH` = 5,75).
+
 Tout pouvoir lancé par le joueur passe par `strategy.spend_action()` (refusé si le budget est épuisé).
 Les menaces frappent via `WorldSim.apply_divine_action` ou des perturbations de la simulation : la
 chaîne causale reste la seule source de vérité.

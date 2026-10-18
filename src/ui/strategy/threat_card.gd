@@ -14,6 +14,7 @@ var _title: Label
 var _target: Label
 var _status: Label
 var _counters: HFlowContainer
+var _samael: Label
 var _state := ""
 
 
@@ -41,6 +42,13 @@ func _ready() -> void:
 	col.add_child(_target)
 	_status = _line(16, Fmt.GOLD)
 	col.add_child(_status)
+	# Ligne discrète : pourquoi Samaël a choisi cette carte.
+	_samael = _line(14, Fmt.SAMAEL)
+	_samael.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	var reason := Fmt.samael_reason(String(threat.get("samael", {}).get("reason_code", "")))
+	_samael.text = "Samaël : " + reason
+	_samael.visible = reason != ""
+	col.add_child(_samael)
 	_counters = HFlowContainer.new()
 	_counters.add_theme_constant_override("h_separation", 4)
 	_counters.add_theme_constant_override("v_separation", 2)
