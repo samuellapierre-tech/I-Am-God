@@ -1,4 +1,11 @@
 ; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
 config_version=5
 
 [application]
@@ -22,14 +29,10 @@ window/vsync/vsync_mode=0
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
-; GPU en priorité : le rendu de la planète et le calcul des champs passent par des shaders.
-rendering_device/driver.windows="d3d12"
 textures/canvas_textures/default_texture_filter=0
+rendering_device/driver.windows="d3d12"
 anti_aliasing/quality/msaa_2d=2
 
 [threading]
 
-; CPU en priorité : la simulation est répartie sur tous les coeurs via WorkerThreadPool.
-worker_pool/max_threads=-1
 worker_pool/low_priority_thread_ratio=0.25

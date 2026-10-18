@@ -6,6 +6,8 @@ extends Node
 
 const PARCEL_SCENE := "res://scenes/parcel_view.tscn"
 const STATS_SCENE := "res://scenes/stats_panel.tscn"
+## Interface du narrateur maître du jeu (Ézéchiel) : fil de narration et dilemmes.
+const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn", "res://scenes/dilemma_panel.tscn"]
 const ParcelPowers := preload("res://src/ui/parcel_powers.gd")
 
 var parcel_view: Node
@@ -18,8 +20,9 @@ func _ready() -> void:
 	parcel_view = load(PARCEL_SCENE).instantiate()
 	add_child(parcel_view)
 	move_child(parcel_view, 0)
-	if ResourceLoader.exists(STATS_SCENE):
-		add_child(load(STATS_SCENE).instantiate())
+	for path in [STATS_SCENE] + OVERLAY_SCENES:
+		if ResourceLoader.exists(path):
+			add_child(load(path).instantiate())
 	powers = ParcelPowers.new()
 	powers.name = "ParcelPowers"
 	add_child(powers)

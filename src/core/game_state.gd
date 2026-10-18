@@ -40,7 +40,7 @@ func _ready() -> void:
 func new_world(seed: int) -> void:
 	sim = WorldSim.new(seed)
 	_last_era = sim.current_era()
-	select_parcel(_first_land_cell(DEFAULT_PARCEL))
+	select_parcel(_liveliest_cell())
 	world_updated.emit()
 	era_changed.emit(_last_era)
 
@@ -99,6 +99,32 @@ func _refresh_parcel() -> void:
 	for event in parcel.update(events):
 		event_occurred.emit(event)
 	parcel_updated.emit()
+
+
+## Parcelle de départ : la terre la plus vivante du monde (plusieurs espèces établies, climat
+## tempéré à chaud, humide), pour que la partie s'ouvre sur des dinosaures et non sur un désert.
+## Une cellule testée par région écologique (4×4) ; déterministe à graine égale.
+func _liveliest_cell() -> Vector2i:
+	var best := _first_land_cell(DEFAULT_PARCEL)
+	var best_score := -1.0
+	for y in range(2, WorldSim.HEIGHT, 4):
+		for x in range(2, WorldSim.WIDTH, 4):
+			var i := y * WorldSim.WIDTH + x
+			if sim.elevation[i] < 0.0:
+				continue
+			var niches := sim.region_niches(Vector2i(x, y))
+			if niches.is_empty():
+				continue
+			var density := 0.0
+			for n in niches:
+				density += float(n.density)
+			var t := sim.temperature[i]
+			var climate := clampf(1.0 - absf(t - 0.6) * 3.0, 0.05, 1.0)
+			var score := density * niches.size() * climate * (0.5 + sim.moisture[i])
+			if score > best_score:
+				best_score = score
+				best = Vector2i(x, y)
+	return best
 
 
 ## Première cellule de terre en partant de `start` (balayage en spirale grossière).
