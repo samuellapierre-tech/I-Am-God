@@ -4,6 +4,24 @@ extends RefCounted
 
 const DEFAULT_PATH := "user://ai_settings.cfg"
 
+## Le narrateur est un personnage. Son nom et sa personnalité ne sont définis QU'ICI : prompts LLM,
+## gabarits procéduraux et dilemmes les lisent tous depuis ces constantes.
+const NARRATOR_NAME := "Ézéchiel"
+const PERSONA := {
+	"name": NARRATOR_NAME,
+	"role": "le prophète et le témoin de Dieu : il a des visions et « voit » les âges qu'il raconte, et il consigne tout ce qui arrive au monde depuis le premier jour",
+	"voice": "Il tutoie Dieu (le joueur) et lui parle d'égal à égal, avec respect mais franc-parler.",
+	"character": "Érudit et curieux, un peu ironique face aux caprices divins, jamais servile.",
+	"memory": "Il se souvient de tous les choix de Dieu et les lui rappelle quand ils pèsent sur le présent.",
+	"future": "Quand le monde quitte l'histoire réelle de la Terre (ou dépasse notre présent), ses visions se troublent : il le dit, et avoue découvrir lui-même ce qui arrive.",
+}
+
+
+## La persona en une description, pour les prompts du LLM.
+static func persona_text() -> String:
+	return "Tu es %s, %s. %s %s %s %s" % [
+		PERSONA["name"], PERSONA["role"], PERSONA["voice"], PERSONA["character"], PERSONA["memory"], PERSONA["future"]]
+
 ## Backends reconnus. "auto" = détection au démarrage (Ollama puis llama.cpp), "off" = repli procédural seul.
 const BACKENDS := ["auto", "ollama", "llamacpp", "off"]
 
@@ -29,12 +47,36 @@ const DEFAULTS := {
 	},
 	"narrator": {
 		"enabled": true,
-		## Délai minimal entre deux narrations automatiques (secondes réelles).
-		"min_interval_sec": 6.0,
+		## Délai minimal entre deux lignes du fil (secondes réelles) : un événement est raconté dès
+		## que ce délai est écoulé.
+		"min_interval_sec": 3.0,
+		## Les événements ordinaires du monde (importance < 0.9) ne passent qu'une fois par ce délai :
+		## le fil parle surtout de la parcelle. Les grands moments passent toujours aussitôt.
+		"world_min_interval_sec": 20.0,
 		## Nombre maximal d'événements résumés dans une seule narration.
 		"max_batch": 5,
 		## Importance minimale (0..1) pour qu'un événement de la simulation soit raconté.
 		"min_importance": 0.4,
+		## Chronique de la parcelle suivie (arrivées d'espèces, champs, ville, ruines, chaleur…).
+		"parcel_enabled": true,
+		## Délai minimal entre deux narrations de la parcelle (secondes réelles).
+		"parcel_min_interval_sec": 5.0,
+		## Importance minimale (0..1) d'un moment de parcelle pour être raconté.
+		"parcel_min_importance": 0.35,
+		## Dérive de température locale (°C) qui mérite d'être racontée.
+		"parcel_heat_drift_c": 4.0,
+		## Fil continu : une phrase d'ambiance quand rien ne s'est passé depuis un délai tiré entre
+		## ambient_min_sec et ambient_max_sec.
+		"ambient_enabled": true,
+		"ambient_min_sec": 8.0,
+		"ambient_max_sec": 15.0,
+		## Maître du jeu : dilemmes proposés à Dieu (au plus un toutes les dilemma_min_interval_sec).
+		"dilemma_enabled": true,
+		"dilemma_min_interval_sec": 180.0,
+		## Délai de réponse ; au-delà, « Ne rien faire ».
+		"dilemma_timeout_sec": 45.0,
+		## Délai avant de proposer (ou non) le météore de la fin du Crétacé.
+		"dilemma_first_delay_sec": 5.0,
 	},
 }
 
@@ -137,8 +179,16 @@ func _sanitize(section: String, key: String, value: Variant) -> Variant:
 			out = clampf(out, 0.0, 600.0)
 		"max_batch":
 			out = clampi(out, 1, 32)
-		"min_importance":
+		"min_importance", "parcel_min_importance":
 			out = clampf(out, 0.0, 1.0)
+		"parcel_min_interval_sec", "world_min_interval_sec":
+			out = clampf(out, 0.0, 600.0)
+		"ambient_min_sec", "ambient_max_sec":
+			out = clampf(out, 1.0, 600.0)
+		"dilemma_min_interval_sec", "dilemma_timeout_sec", "dilemma_first_delay_sec":
+			out = clampf(out, 1.0, 3600.0)
+		"parcel_heat_drift_c":
+			out = clampf(out, 0.5, 50.0)
 		"model", "ollama_url", "llamacpp_url", "keep_alive":
 			if String(out) == "":
 				out = def

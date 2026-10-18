@@ -3,18 +3,29 @@ extends RefCounted
 ## Fonctions statiques pures : testables sans réseau.
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
+const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
+const AiConfig := preload("res://src/ai/ai_config.gd")
 
-const PERSONA_CHRONIQUEUR := "Tu es le Chroniqueur des dieux, un scribe éternel qui s'adresse directement à Dieu (le joueur), en le tutoyant avec révérence (« Toi », « Seigneur »). Tu racontes l'histoire du monde que Dieu façonne, des dinosaures jusqu'au cyberpunk. Réponds TOUJOURS en français, en 1 à 3 phrases, sur un ton épique et poétique mais concret. N'invente pas de faits contraires au contexte. Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire."
+## Contraintes communes à tout ce que le narrateur écrit.
+const STYLE_RULES := "Réponds TOUJOURS en français correct. Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire, ne te présente pas."
 
 const PERSONA_ORACLE := "Tu es l'Oracle des dieux. Dieu (le joueur) t'interroge sur un futur possible ; tu as entrevu ce futur grâce à une simulation. Réponds en français, en 2 ou 3 phrases, sous forme de prophétie mystérieuse mais fidèle aux faits fournis. Tutoie Dieu avec révérence. Pas de liste, pas de titre."
 
 const PERSONA_PRIERE := "Tu écris la prière qu'un peuple adresse à son Dieu (le joueur). Écris en français, à la première personne du pluriel (« nous »), en 2 ou 3 phrases, dans le style et le vocabulaire de l'époque indiquée. La prière doit exprimer la détresse ou la gratitude du peuple et formuler une demande qui place Dieu devant un choix moral (aider ce peuple a un prix pour d'autres). Pas de liste, pas de titre."
 
+const PERSONA_INVENTION := "Tu inventes la culture d'un peuple imaginaire dans un jeu où Dieu (le joueur) façonne un monde qui a quitté l'histoire réelle de la Terre. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour, de la forme {\"coutumes\": [\"...\", \"...\"], \"croyance\": \"...\", \"fete\": \"...\"}, en français, chaque valeur en une proposition courte, sans majuscule initiale ni point final, cohérente avec les traits et la mémoire fournis."
+
 const PERSONA_DECISION := "Tu es le conseil dirigeant d'une civilisation dans un jeu de simulation. Tu choisis la prochaine grande décision. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour, de la forme {\"action\": \"war\"|\"expand\"|\"research\"|\"worship\", \"target\": \"...\", \"reason\": \"...\"}. La raison est une courte phrase en français."
 
 
+## Narration des événements du monde (persona de AiConfig).
 static func narration_system() -> String:
-	return PERSONA_CHRONIQUEUR
+	return "%s Tu racontes à Dieu l'histoire du monde qu'il façonne, des dinosaures jusqu'au cyberpunk, en 1 à 3 phrases, sur un ton vivant et concret. N'invente pas de faits contraires au contexte. %s" % [AiConfig.persona_text(), STYLE_RULES]
+
+
+## Narration de la parcelle suivie (un morceau de terrain grand comme l'écran).
+static func parcel_system() -> String:
+	return "%s Dieu regarde un seul morceau de terrain, grand comme l'écran, qu'il suit des dinosaures jusqu'à la fin des temps. Raconte-lui ce qui vient d'arriver sur CE terrain, à la deuxième personne (« tu », « ta parcelle »), en 1 ou 2 phrases courtes, concrètes et évocatrices, dans le vocabulaire de l'époque. N'invente aucun fait absent du contexte (pas d'espèce, de ville ni de catastrophe non mentionnées). %s" % [AiConfig.persona_text(), STYLE_RULES]
 
 
 ## context : {type, era, year, summary, species_name|species|species_id, events: Array, action: Dictionary}
@@ -40,6 +51,166 @@ static func build_narration_prompt(context: Dictionary) -> String:
 	lines.append("")
 	lines.append("Raconte ce moment à Dieu en 1 à 3 phrases.")
 	return "\n".join(lines)
+
+
+## Fil continu : une phrase d'ambiance quand rien de marquant n'arrive.
+static func ambient_system() -> String:
+	return "%s Tu tiens un fil continu, écrit, de l'histoire de la parcelle que Dieu regarde : une seule phrase courte (deux au plus), à la première personne (« je ») et en tutoyant Dieu. %s" % [AiConfig.persona_text(), STYLE_RULES]
+
+
+## line : sortie de Chronicle.ambient() ; ctx : contexte du fil (era, year, snapshot…).
+static func build_ambient_prompt(line: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	var era := str(ctx.get("era", ""))
+	if era != "":
+		lines.append("Époque : %s." % era)
+	if typeof(ctx.get("year")) in [TYPE_INT, TYPE_FLOAT]:
+		lines.append("Date : %s." % Procedural.format_year(float(ctx["year"])))
+	var snap: Dictionary = ctx.get("snapshot", {})
+	if not snap.is_empty():
+		lines.append("État de la parcelle :")
+		for l in ParcelNarrator.describe_snapshot(snap):
+			lines.append("- " + l)
+	lines.append("")
+	if str(line.get("kind", "")) == "fact":
+		lines.append("Fait historique VRAI à transmettre : " + str(line.get("text", "")))
+		lines.append("Reformule-le à ta manière, en conteur, sans changer ni ajouter aucune date, aucun chiffre, aucun nom, aucun fait. Une phrase, deux au plus.")
+	else:
+		lines.append("Observation à transmettre (vraie, n'ajoute aucun fait) : " + str(line.get("text", "")))
+		lines.append("Reformule-la à ta manière en une phrase, deux au plus.")
+	return "\n".join(lines)
+
+
+## Monde divergent : le LLM invente un détail à partir de l'état réel de la simulation et de la mémoire.
+static func build_invention_prompt(line: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	var p: Variant = line.get("profile", null)
+	if p is Dictionary:
+		var sp := {}
+		for s in ctx.get("species", []):
+			if int(s.get("id", -2)) == int(p.get("id", -1)):
+				sp = s
+		lines.append("Espèce (traits réels de la simulation, JSON) : " + JSON.stringify(_jsonable(sp)))
+		var memory := {}
+		for k in p:
+			if not str(k).begins_with("llm_requested"):
+				memory[k] = p[k]
+		lines.append("Ce qui a déjà été raconté sur elle (mémoire à respecter, ne rien contredire, réutiliser les noms) : " + JSON.stringify(_jsonable(memory)))
+	lines.append("")
+	lines.append("Proposition de base (tu peux la garder ou l'enrichir) : " + str(line.get("text", "")))
+	lines.append("Invente UN détail concret de mœurs, de culture ou de vie quotidienne, cohérent avec ces traits, ce climat, cet usage du sol, cette technologie et la mémoire. Tu avoues découvrir ce monde avec Dieu. Une phrase, deux au plus.")
+	return "\n".join(lines)
+
+
+## Demande d'enrichissement (JSON) d'un peuple inventé ; la réponse passe par Inventor.enrich_from_llm.
+static func build_enrich_prompt(profile: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	lines.append("Peuple (mémoire, JSON) : " + JSON.stringify(_jsonable(profile)))
+	lines.append("Propose 2 nouvelles coutumes, une croyance et une fête pour ce peuple, cohérentes avec sa mémoire. Réponds uniquement en JSON.")
+	return "\n".join(lines)
+
+
+## En-tête de contexte commun aux prompts d'invention : époque, mode du monde, parcelle, gestes divins.
+static func _world_header(ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	var mode: Dictionary = ctx.get("mode", {})
+	lines.append("Monde : %s%s." % [str(mode.get("label", "réel")),
+		(" (" + ", ".join(PackedStringArray(mode.get("reasons", []))) + ")") if not mode.get("reasons", []).is_empty() else ""])
+	if str(ctx.get("era", "")) != "":
+		lines.append("Ère atteinte : %s." % str(ctx["era"]))
+	if typeof(ctx.get("year")) in [TYPE_INT, TYPE_FLOAT]:
+		lines.append("Date : %s." % Procedural.format_year(float(ctx["year"])))
+	var snap: Dictionary = ctx.get("snapshot", {})
+	for l in ParcelNarrator.describe_snapshot(snap):
+		lines.append(l)
+	var acts := PackedStringArray()
+	for a in ctx.get("divine", []):
+		acts.append(str(a.get("type", "")) if a is Dictionary else str(a))
+	if not acts.is_empty():
+		lines.append("Gestes divins passés : %s." % ", ".join(acts))
+	return "\n".join(lines)
+
+
+## Maître du jeu : le LLM rédige un dilemme dont les options ont été fixées par les règles.
+static func dilemma_system() -> String:
+	return "%s Tu poses à Dieu un dilemme. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour : {\"title\": \"...\", \"text\": \"...\", \"options\": [{\"label\": \"...\", \"hint\": \"...\"}]}. Le titre fait quelques mots ; le texte fait 2 à 4 phrases de mise en scène, en tutoyant Dieu ; chaque option garde le sens de l'action indiquée, dans le même ordre ; le libellé « Ne rien faire » reste tel quel ; chaque indice est une conséquence pressentie, floue, jamais certaine. Tout en français correct." % AiConfig.persona_text()
+
+
+static func build_dilemma_prompt(d: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	lines.append("Déclencheur : %s." % str(d.get("trigger", "")))
+	var past: Array = ctx.get("choices", [])
+	if not past.is_empty():
+		var mem := PackedStringArray()
+		for c in past.slice(maxi(0, past.size() - 4)):
+			mem.append("%s (%s)" % [str(c.get("label", "")), str(c.get("era", ""))])
+		lines.append("Choix passés de Dieu, que tu peux lui rappeler : %s." % "; ".join(mem))
+	var draft := {"title": d.get("title", ""), "text": d.get("text", ""), "options": []}
+	for o in d.get("options", []):
+		draft["options"].append({"label": o["label"], "hint": o["hint"],
+			"action": str(o["action"].get("type", "rien")) if not o["action"].is_empty() else "rien"})
+	lines.append("Brouillon à réécrire à ta manière (même nombre d'options, même ordre, mêmes actions) : " + JSON.stringify(_jsonable(draft)))
+	return "\n".join(lines)
+
+
+## Fusionne la réponse JSON du LLM dans le dilemme ; garde le brouillon pour tout champ invalide.
+static func merge_dilemma_text(d: Dictionary, raw: String) -> Dictionary:
+	var out := d.duplicate(true)
+	var a := raw.find("{")
+	var b := raw.rfind("}")
+	if a < 0 or b <= a:
+		return out
+	var data: Variant = JSON.parse_string(raw.substr(a, b - a + 1))
+	if not (data is Dictionary):
+		return out
+	var title := sanitize_output(str(data.get("title", "")), 1, 80).trim_suffix(".")
+	if title != "" and not title.contains("{"):
+		out["title"] = title
+	var text := sanitize_output(str(data.get("text", "")), 4, 600)
+	var n := 0
+	for i in text.length():
+		if text[i] in [".", "!", "?", "…"] and (i + 1 == text.length() or text[i + 1] == " "):
+			n += 1
+	if n >= 2 and n <= 4 and not text.contains("{"):
+		out["text"] = text
+	var opts: Variant = data.get("options", [])
+	if opts is Array and (opts as Array).size() == (out["options"] as Array).size():
+		for i in opts.size():
+			if not (opts[i] is Dictionary):
+				continue
+			var o: Dictionary = out["options"][i]
+			var label := str(opts[i].get("label", "")).strip_edges()
+			var hint := str(opts[i].get("hint", "")).strip_edges()
+			if not (o["action"] as Dictionary).is_empty() and label != "" and label.length() <= 60 and not label.contains("{"):
+				o["label"] = label
+			if hint != "" and hint.length() <= 160 and not hint.contains("{"):
+				o["hint"] = hint
+	return out
+
+
+## Narration d'un moment de la parcelle (ParcelNarrator) : le fait, puis l'état du terrain.
+## context : {era, year}
+static func build_parcel_prompt(moment: Dictionary, context: Dictionary = {}) -> String:
+	var lines := PackedStringArray()
+	var era := str(context.get("era", ""))
+	if era != "":
+		lines.append("Époque : %s." % era)
+	var year: Variant = context.get("year", moment.get("snapshot", {}).get("year", null))
+	if typeof(year) in [TYPE_INT, TYPE_FLOAT]:
+		lines.append("Date : %s." % Procedural.format_year(float(year)))
+	lines.append("Ce qui vient d'arriver sur la parcelle : " + ParcelNarrator.describe_moment(moment))
+	var snap: Dictionary = moment.get("snapshot", {})
+	if not snap.is_empty():
+		lines.append("État actuel de la parcelle :")
+		for l in ParcelNarrator.describe_snapshot(snap):
+			lines.append("- " + l)
+	lines.append("")
+	lines.append("Raconte ce moment à Dieu en 1 ou 2 phrases, à la deuxième personne, centrées sur cette parcelle.")
+	return "
+".join(lines)
 
 
 static func build_oracle_prompt(question: String, projection: Dictionary) -> String:

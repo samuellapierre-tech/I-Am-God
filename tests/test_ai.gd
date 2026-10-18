@@ -7,6 +7,7 @@ const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const Prompts := preload("res://src/ai/prompt_builder.gd")
 const DecisionSchema := preload("res://src/ai/decision_schema.gd")
 const NarratorScript := preload("res://src/ai/narrator.gd")
+const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 
 const TEST_CFG := "user://test_ai_settings.cfg"
 
@@ -466,6 +467,389 @@ func test_importance_evenements() -> String:
 		return "migration trop importante"
 	if NarratorScript.event_importance({"type": "migration", "importance": 0.95}) != 0.95:
 		return "importance explicite ignorée"
+	return ""
+
+
+# --- Chronique de la parcelle (repli procédural uniquement) -------------------
+
+const PARCEL_EVENT_TYPES := ["parcel_land_use", "parcel_arrival", "parcel_departure", "parcel_extinction",
+	"parcel_heat", "parcel_cold", "parcel_inconnu"]
+
+
+func _snap(land_use := "wild", fauna: Array = [], temp := 22.0) -> Dictionary:
+	return {"year": -66_000_000.0, "biome": "Forêt tempérée", "land_use": land_use, "temperature_c": temp,
+		"global_temperature_c": 18.0, "fauna": fauna, "structures": {}}
+
+
+func _beast(id: int, name: String, role: String) -> Dictionary:
+	return {"species_id": id, "name": name, "role": role, "count": 8, "trend": 0}
+
+
+static func _sentences(t: String) -> int:
+	var n := 0
+	for i in t.length():
+		if t[i] in [".", "!", "?", "…"] and (i + 1 == t.length() or t[i + 1] == " "):
+			n += 1
+	return n
+
+
+## "" si le texte est une narration de parcelle correcte (1 ou 2 phrases, rien de non résolu).
+static func _check_parcel_text(t: String) -> String:
+	if t.strip_edges().length() < 15:
+		return "texte vide ou trop court : « %s »" % t
+	for bad in ["{", "}", "[", "]", " de les ", " à les ", " de le ", " que un ", " que une ", " de un ", " de des ", "  ", " ,", " ."]:
+		if t.contains(bad):
+			return "« %s » dans : %s" % [bad, t]
+	var first := t.substr(0, 1)
+	if first != first.to_upper() or first == first.to_lower():
+		return "pas de majuscule initiale : " + t
+	if not (t.ends_with(".") or t.ends_with("!")):
+		return "pas de point final : " + t
+	var n := _sentences(t)
+	if n < 1 or n > 2:
+		return "%d phrases au lieu de 1 ou 2 : %s" % [n, t]
+	return ""
+
+
+## Une suite d'événements de parcelle réaliste (dinosaures -> champs -> ville -> ruines), rejouée sur pn.
+func _parcel_story(pn: ParcelNarrator) -> PackedStringArray:
+	var out := PackedStringArray()
+	var herb := _beast(1, "Titanosaures", "herbivore")
+	var rex := _beast(2, "Tyrannosauridés", "carnivore")
+	var man := _beast(3, "Humains", "sapient")
+	pn.reset(_snap("wild", [herb]))
+	var steps := [
+		[{"type": "parcel_arrival", "species_id": 2, "summary": "Tyrannosauridés arrivent sur la parcelle."}, _snap("wild", [herb, rex]), "Mésozoïque"],
+		[{"type": "parcel_departure", "species_id": 1, "species_alive": false}, _snap("wild", [rex]), "Mésozoïque"],
+		[{}, _snap("wild", [rex], 28.0), "Cénozoïque"],
+		[{"type": "parcel_arrival", "species_id": 3, "species_name": "Humains"}, _snap("wild", [rex, man], 28.0), "Préhistoire"],
+		[{"type": "parcel_land_use", "summary": "La parcelle devient : camp."}, _snap("camp", [man], 28.0), "Préhistoire"],
+		[{"type": "parcel_land_use", "summary": "La parcelle devient : farmland."}, _snap("farmland", [man], 28.0), "Antiquité"],
+		[{}, _snap("village", [man], 28.0), "Moyen Âge"],
+		[{"type": "parcel_land_use", "land_use": "city"}, _snap("city", [man], 28.0), "Industriel"],
+		[{}, _snap("city", [man], 33.0), "Moderne"],
+		[{"type": "parcel_land_use", "land_use": "ruins"}, _snap("ruins", [], 33.0), "Cyberpunk"],
+		[{"type": "parcel_land_use", "land_use": "rewild"}, _snap("rewild", [herb], 20.0), "Post-singularité"],
+	]
+	for s in steps:
+		var moments: Array = []
+		if s[0].is_empty():
+			moments.append_array(pn.observe(s[1]))
+		else:
+			moments.append(pn.on_event(s[0], s[1]))
+		for m in moments:
+			if not m.is_empty():
+				out.append(pn.narrate(m, s[2], -1000.0))
+	return out
+
+
+func test_parcelle_chaque_evenement_non_vide() -> String:
+	var fauna := [_beast(1, "Titanosaures", "herbivore"), _beast(7, "Verpha moloum", "carnivore")]
+	for era in Procedural.ERAS + ["ère inconnue", ""]:
+		var pn := ParcelNarrator.new(3)
+		for etype in PARCEL_EVENT_TYPES:
+			for lu in ParcelNarrator.LAND_USES:
+				pn.reset(_snap("wild", []))
+				var ev := {"type": etype, "species_id": 7, "summary": "La parcelle devient : %s." % lu, "delta_c": 6.0}
+				var m := pn.on_event(ev, _snap(lu, fauna, 30.0))
+				if lu == "wild" and etype == "parcel_land_use":
+					if not m.is_empty():
+						return "usage inchangé raconté : %s" % str(m)
+					continue
+				if m.is_empty():
+					return "aucun moment pour %s (%s)" % [etype, lu]
+				for _i in 3:
+					var t := pn.narrate(m, era, -66_000_000.0)
+					var err := _check_parcel_text(t)
+					if err != "":
+						return "%s / %s / %s : %s" % [era, etype, lu, err]
+		var f := pn.focus(_snap("village", fauna))
+		var err2 := _check_parcel_text(pn.narrate(f, era))
+		if err2 != "":
+			return "focus (%s) : %s" % [era, err2]
+	return ""
+
+
+## Tous les passages d'usage (premier ou non, dégel, repousse, émersion, recul) dans toutes les ères.
+func test_parcelle_passages_usage_du_sol() -> String:
+	var pn := ParcelNarrator.new(8)
+	for era in Procedural.ERAS:
+		for to in ParcelNarrator.LAND_USES:
+			for prev in ParcelNarrator.LAND_USES:
+				for first in [true, false]:
+					var m := {"kind": "land_use", "type": "parcel_land_use", "land_use": to, "from": prev, "first": first,
+						"snapshot": _snap(to, [_beast(3, "Humains", "sapient")])}
+					var err := _check_parcel_text(pn.narrate(m, era, 1200.0))
+					if err != "":
+						return "%s -> %s (%s, premier=%s) : %s" % [prev, to, era, first, err]
+	var key := func(to: String, prev: String) -> Array: return ParcelNarrator.templates_for({"kind": "land_use", "land_use": to, "from": prev, "first": true})
+	if key.call("wild", "ice") != ParcelNarrator.LAND_USE_TEMPLATES["thaw"]:
+		return "dégel non reconnu"
+	if key.call("wild", "crater") != ParcelNarrator.LAND_USE_TEMPLATES["regrowth"]:
+		return "repousse non reconnue"
+	if key.call("village", "city") != ParcelNarrator.LAND_USE_TEMPLATES["shrink"]:
+		return "recul ville -> village non reconnu"
+	if key.call("village", "farmland") != ParcelNarrator.LAND_USE_FIRST_TEMPLATES["village"]:
+		return "premier village non reconnu"
+	var shrink := pn.render_template(ParcelNarrator.LAND_USE_TEMPLATES["shrink"][1],
+		{"kind": "land_use", "land_use": "farmland", "from": "city", "snapshot": _snap("farmland")}, "Moderne", 1950.0)
+	if not shrink.contains("d'une ville à des terres agricoles"):
+		return "élision manquante : " + shrink
+	return ""
+
+
+## Chaque gabarit, pour chaque nom réel : marques d'accord résolues dans le bon nombre.
+func test_parcelle_accords_tous_gabarits() -> String:
+	var pn := ParcelNarrator.new(5)
+	var re := RegEx.new()
+	re.compile("\\[(\\w+):([^|\\]]*)\\|([^\\]]*)\\]")
+	for tpl in ParcelNarrator.all_templates():
+		for n in PLURAL_NAMES + SINGULAR_NAMES:
+			var plural: bool = Procedural.species_phrase(n)["plural"]
+			var m := {"kind": "arrival", "species_id": 1, "species_name": n, "role": "sapient", "land_use": "village",
+				"from": "farmland", "delta_c": 5.0, "summary": "les champs brûlent",
+				"snapshot": _snap("village", [_beast(1, n, "sapient")])}
+			var t := pn.render_template(tpl, m, "Antiquité", -500.0)
+			var err := _check_parcel_text(t)
+			if err != "":
+				return "%s : %s" % [n, err]
+			for mt in re.search_all(tpl):
+				var want := mt.get_string(3) if plural else mt.get_string(2)
+				var wrong := mt.get_string(2) if plural else mt.get_string(3)
+				if not t.contains(want):
+					return "accord manquant « %s » (%s) : %s" % [want, n, t]
+				if wrong != want and t.contains(" " + wrong + " ") and not want.contains(wrong):
+					return "accord faux « %s » (%s) : %s" % [wrong, n, t]
+	var sing := pn.render_template(ParcelNarrator.DEPARTURE_TEMPLATES[2],
+		{"kind": "departure", "species_name": "Verpha moloum", "snapshot": _snap()}, "Mésozoïque")
+	if not sing.begins_with("L'espèce Verpha moloum s'en est allée"):
+		return "singulier féminin attendu : " + sing
+	var plur := pn.render_template(ParcelNarrator.DEPARTURE_TEMPLATES[2],
+		{"kind": "departure", "species_name": "Multituberculés", "snapshot": _snap()}, "Mésozoïque")
+	if not plur.begins_with("Les Multituberculés s'en sont allés"):
+		return "pluriel masculin attendu : " + plur
+	var ext := pn.render_template(ParcelNarrator.EXTINCTION_TEMPLATES[2],
+		{"kind": "extinction", "species_name": "Tyrannosauridés", "snapshot": _snap()}, "Mésozoïque")
+	if not ext.contains("Il ne reste des Tyrannosauridés"):
+		return "contraction « de les » attendue : " + ext
+	return ""
+
+
+func test_parcelle_determinisme() -> String:
+	var a := _parcel_story(ParcelNarrator.new(42))
+	var b := _parcel_story(ParcelNarrator.new(42))
+	if a.size() < 8:
+		return "histoire trop courte (%d narrations) : %s" % [a.size(), str(a)]
+	if a != b:
+		return "même graine, textes différents :\n%s\n%s" % [str(a), str(b)]
+	for t in a:
+		var err := _check_parcel_text(t)
+		if err != "":
+			return err
+	var differs := false
+	for s in [1, 7, 99, 1234]:
+		if _parcel_story(ParcelNarrator.new(s)) != a:
+			differs = true
+	return "" if differs else "la graine n'a aucun effet"
+
+
+## Suivi de l'état : doublons ignorés, retours, extinctions, premières fois, dérive de chaleur.
+func test_parcelle_suivi_des_changements() -> String:
+	var pn := ParcelNarrator.new(1)
+	var herb := _beast(3, "Sauropodes", "herbivore")
+	var rex := _beast(4, "Tyrannosauridés", "carnivore")
+	pn.reset(_snap("wild", [herb]))
+	if not pn.on_event({"type": "parcel_arrival", "species_id": 3}, _snap("wild", [herb])).is_empty():
+		return "arrivée d'une espèce déjà présente racontée"
+	var m := pn.on_event({"type": "parcel_arrival", "species_id": 4, "summary": "Tyrannosauridés arrivent sur la parcelle."}, _snap("wild", [herb, rex]))
+	if m.get("kind") != "arrival" or m.get("role") != "carnivore" or m.get("species_name") != "Tyrannosauridés" or m.get("returning"):
+		return "arrivée mal comprise : %s" % str(m)
+	if not pn.on_event({"type": "parcel_arrival", "species_id": 4}, _snap("wild", [herb, rex])).is_empty():
+		return "arrivée en double racontée"
+	m = pn.on_event({"type": "parcel_departure", "species_id": 4, "summary": "Tyrannosauridés ont disparu de la parcelle."}, _snap("wild", [herb]))
+	if m.get("kind") != "departure" or m.get("species_name") != "Tyrannosauridés":
+		return "départ mal compris : %s" % str(m)
+	if not pn.on_event({"type": "parcel_departure", "species_id": 4}, _snap("wild", [herb])).is_empty():
+		return "départ en double raconté"
+	m = pn.on_event({"type": "parcel_arrival", "species_id": 4}, _snap("wild", [herb, rex]))
+	if not m.get("returning", false) or ParcelNarrator.importance(m) >= ParcelNarrator.importance({"kind": "arrival", "role": "carnivore"}):
+		return "retour mal compris : %s" % str(m)
+	m = pn.on_event({"type": "parcel_departure", "species_id": 4, "species_alive": false}, _snap("wild", [herb]))
+	if m.get("kind") != "extinction":
+		return "extinction non reconnue : %s" % str(m)
+	m = pn.on_event({"type": "parcel_arrival", "species_id": 9, "summary": "Humains arrivent sur la parcelle."}, _snap("wild", [herb]))
+	if m.get("species_name") != "Humains":
+		return "nom non lu dans le résumé ParcelSim : %s" % str(m)
+	# Usage du sol : par événement (résumé ParcelSim), puis par observation, sans doublon.
+	m = pn.on_event({"type": "parcel_land_use", "summary": "La parcelle devient : farmland."}, _snap("farmland"))
+	if m.get("land_use") != "farmland" or m.get("from") != "wild" or not m.get("first"):
+		return "premiers champs mal compris : %s" % str(m)
+	if not pn.observe(_snap("farmland")).is_empty():
+		return "usage déjà raconté redétecté"
+	var obs := pn.observe(_snap("village"))
+	if obs.size() != 1 or obs[0].get("land_use") != "village" or not obs[0].get("first"):
+		return "premier village non observé : %s" % str(obs)
+	pn.observe(_snap("city"))
+	obs = pn.observe(_snap("village"))
+	if obs.size() != 1 or obs[0].get("first") or ParcelNarrator.templates_for(obs[0]) != ParcelNarrator.LAND_USE_TEMPLATES["shrink"]:
+		return "recul de la ville mal compris : %s" % str(obs)
+	if not pn.on_event({"type": "parcel_land_use", "land_use": "village"}, _snap("village")).is_empty():
+		return "usage inchangé raconté"
+	# Chaleur : seuil de dérive, puis nouvelle référence.
+	if not pn.observe(_snap("village", [], 25.0)).is_empty():
+		return "dérive de 3 °C racontée (seuil 4 °C)"
+	obs = pn.observe(_snap("village", [], 27.0))
+	if obs.size() != 1 or obs[0].get("kind") != "heat" or absf(float(obs[0].get("delta_c")) - 5.0) > 0.01:
+		return "réchauffement non détecté : %s" % str(obs)
+	if not pn.observe(_snap("village", [], 27.0)).is_empty():
+		return "réchauffement raconté deux fois"
+	obs = pn.observe(_snap("village", [], 20.0))
+	if obs.size() != 1 or obs[0].get("kind") != "cold":
+		return "refroidissement non détecté : %s" % str(obs)
+	var t := pn.narrate(obs[0], "Moyen Âge")
+	if (t.contains("degrés") or t.contains("°C")) == false:
+		return "chaleur sans chiffre : " + t
+	return ""
+
+
+## Rareté : les grands moments de la parcelle passent avant les petits.
+func test_parcelle_importance() -> String:
+	var imp := func(m: Dictionary) -> float: return ParcelNarrator.importance(m)
+	var crater: float = imp.call({"kind": "land_use", "land_use": "crater", "from": "wild"})
+	var first_village: float = imp.call({"kind": "land_use", "land_use": "village", "from": "farmland", "first": true})
+	var again_village: float = imp.call({"kind": "land_use", "land_use": "village", "from": "farmland", "first": false})
+	var pasture: float = imp.call({"kind": "land_use", "land_use": "pasture", "first": true})
+	if not (crater > first_village and first_village > again_village and first_village > pasture):
+		return "ordre des usages inattendu : %f %f %f %f" % [crater, first_village, again_village, pasture]
+	if imp.call({"kind": "extinction"}) <= imp.call({"kind": "departure"}):
+		return "extinction moins importante qu'un départ"
+	if imp.call({"kind": "arrival", "role": "sapient"}) <= imp.call({"kind": "arrival", "role": "herbivore"}):
+		return "arrivée d'une espèce intelligente pas assez importante"
+	if imp.call({"kind": "heat", "delta_c": 12.0}) <= imp.call({"kind": "heat", "delta_c": 4.0}):
+		return "forte dérive pas plus importante qu'une faible"
+	return ""
+
+
+## Anti-spam : annulations, seuil, un seul usage en attente, taille bornée, péremption, priorité au monde.
+func test_parcelle_file_anti_spam() -> String:
+	var q: Array[Dictionary] = []
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "departure", "species_id": 4, "importance": 0.45}, 0.0, 0.35)
+	if q.size() != 1:
+		return "départ non mis en file"
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "arrival", "species_id": 4, "importance": 0.3, "returning": true}, 1.0, 0.35)
+	if not q.is_empty():
+		return "aller-retour d'une espèce non annulé : %s" % str(q)
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "arrival", "species_id": 5, "importance": 0.3}, 2.0, 0.35)
+	if not q.is_empty():
+		return "moment sous le seuil mis en file"
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "land_use", "land_use": "crater", "importance": 0.95}, 3.0, 0.35)
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "land_use", "land_use": "wild", "importance": 0.6}, 4.0, 0.35)
+	if q.size() != 2 or q[0].get("land_use") != "crater":
+		return "le cratère devrait rester devant la repousse : %s" % str(q)
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "land_use", "land_use": "ice", "importance": 0.95}, 5.0, 0.35)
+	if q.size() != 1 or q[0].get("land_use") != "ice":
+		return "un usage plus récent et aussi rare devrait remplacer les anciens : %s" % str(q)
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "heat", "importance": 0.6}, 6.0, 0.35)
+	q = NarratorScript.queue_parcel_moment(q, {"kind": "cold", "importance": 0.6}, 7.0, 0.35)
+	var temps := q.filter(func(m: Dictionary) -> bool: return m["kind"] in ["heat", "cold"])
+	if temps.size() != 1 or temps[0]["kind"] != "cold":
+		return "chaleur puis froid : seul le dernier devrait rester : %s" % str(q)
+	for i in 20:
+		q = NarratorScript.queue_parcel_moment(q, {"kind": "arrival", "species_id": 100 + i, "importance": 0.5}, 8.0, 0.35)
+	if q.size() > NarratorScript.PARCEL_QUEUE_SIZE or q[0].get("land_use") != "ice":
+		return "file non bornée ou mal triée : %d" % q.size()
+	var old: Array[Dictionary] = [{"kind": "arrival", "importance": 0.5, "_t": 0.0}, {"kind": "land_use", "importance": 0.9, "_t": 0.0}]
+	var kept := NarratorScript.expire_parcel_moments(old, NarratorScript.PARCEL_MAX_AGE + 1.0)
+	if kept.size() != 1 or kept[0]["kind"] != "land_use":
+		return "péremption incorrecte : %s" % str(kept)
+	if not NarratorScript.expire_parcel_moments(old, NarratorScript.PARCEL_RARE_MAX_AGE + 1.0).is_empty():
+		return "un moment rare devrait finir par expirer"
+	var cases := [
+		[-1.0, 0.5, true, true], [0.9, 0.95, true, false], [1.1, 0.95, true, false], [0.5, 0.75, true, true],
+		[0.7, 0.5, true, false], [-1.0, 0.5, false, false], [-1.0, -1.0, true, false],
+	]
+	for c in cases:
+		if NarratorScript.parcel_goes_first(c[0], c[1], c[2]) != c[3]:
+			return "priorité monde/parcelle fausse pour %s" % str(c)
+	return ""
+
+
+func test_parcelle_prompt_llm() -> String:
+	var s := Prompts.parcel_system()
+	for needle in ["français", "1 ou 2 phrases", "deuxième personne", "Dieu"]:
+		if not s.contains(needle):
+			return "persona parcelle sans « %s »" % needle
+	var pn := ParcelNarrator.new(1)
+	pn.reset(_snap("farmland"))
+	var snap := _snap("village", [_beast(1, "Humains", "sapient"), _beast(2, "Aurochs", "herbivore")], 24.0)
+	snap["fauna"][0]["trend"] = 1
+	snap["structures"] = {"hut": 6, "field": 3}
+	var m := pn.on_event({"type": "parcel_land_use", "summary": "La parcelle devient : village."}, snap)
+	var p := Prompts.build_parcel_prompt(m, {"era": "Antiquité", "year": -800.0})
+	for needle in ["Antiquité", "avant notre ère", "un village", "des terres agricoles", "première fois",
+			"Forêt tempérée", "24 °C", "18 °C", "Humains", "intelligente", "en hausse", "Aurochs", "6 huttes", "3 champs",
+			"1 ou 2 phrases", "deuxième personne"]:
+		if not p.contains(needle):
+			return "prompt parcelle sans « %s » : %s" % [needle, p]
+	var arr := ParcelNarrator.describe_moment({"kind": "arrival", "species_name": "Tyrannosauridés", "role": "carnivore"})
+	if not arr.contains("Arrivée des Tyrannosauridés (prédateur)"):
+		return "fait d'arrivée mal formé : " + arr
+	var dep := ParcelNarrator.describe_moment({"kind": "departure", "species_name": "Tyrannosauridés"})
+	var dep1 := ParcelNarrator.describe_moment({"kind": "departure", "species_name": "Verpha moloum"})
+	if not (dep.contains("les Tyrannosauridés ne vivent plus") and dep1.contains("l'espèce Verpha moloum ne vit plus")):
+		return "accord des faits de départ : %s / %s" % [dep, dep1]
+	var empty := Prompts.build_parcel_prompt({"kind": "generic"})
+	return "" if empty.length() > 20 else "prompt parcelle vide"
+
+
+func test_parcelle_config() -> String:
+	_cleanup()
+	var cfg := AiConfig.new(TEST_CFG)
+	if cfg.get_value("narrator", "parcel_enabled") != true or cfg.get_value("narrator", "parcel_min_interval_sec") != 5.0:
+		return "défauts de parcelle inattendus"
+	cfg.set_value("narrator", "parcel_min_importance", 3.0)
+	cfg.set_value("narrator", "parcel_heat_drift_c", -2)
+	if cfg.get_value("narrator", "parcel_min_importance") != 1.0 or cfg.get_value("narrator", "parcel_heat_drift_c") != 0.5:
+		return "bornes de parcelle non appliquées"
+	return ""
+
+
+## Intégration : vraie WorldSim + ParcelSim, météore sur la parcelle, puis des millions d'années.
+func test_parcelle_simulation_reelle() -> String:
+	var WorldSim: GDScript = load("res://src/sim/world_sim.gd")
+	var ParcelSim: GDScript = load("res://src/sim/parcel_sim.gd")
+	var sim: RefCounted = WorldSim.new(1234)
+	var parcel: RefCounted = ParcelSim.new(sim, Vector2i(70, 40))
+	var pn := ParcelNarrator.new(5)
+	pn.reset(ParcelNarrator.snapshot(parcel))
+	var told := PackedStringArray()
+	var action := {"type": "meteor", "region": parcel.cell, "species_id": -1, "radius": 6}
+	var world_events: Array = sim.apply_divine_action(action)
+	world_events.append({"type": "meteor", "region": parcel.cell})  # comme GameState.apply_divine_action
+	for frame in 60:
+		if frame > 0:
+			world_events = sim.step(sim.ideal_step_years() * sim.max_substeps)
+		var moments: Array = []
+		for ev in parcel.update(world_events):
+			if not str(ev.get("type", "")).begins_with("parcel_"):
+				return "événement de parcelle sans préfixe : %s" % str(ev)
+			var e: Dictionary = ev.duplicate()
+			var sid := int(e.get("species_id", -1))
+			if sid >= 0 and sim.species.has(sid):
+				e["species_name"] = sim.species[sid].name
+				e["species_alive"] = bool(sim.species[sid].get("alive", true))
+			moments.append(pn.on_event(e, ParcelNarrator.snapshot(parcel)))
+		moments.append_array(pn.observe(ParcelNarrator.snapshot(parcel)))
+		for m in moments:
+			if m.is_empty():
+				continue
+			var t := pn.narrate(m, sim.current_era(), sim.year)
+			var err := _check_parcel_text(t)
+			if err != "":
+				return "%s : %s" % [m.get("type"), err]
+			told.append(t)
+	if told.is_empty():
+		return "le météore sur la parcelle n'a rien fait raconter"
 	return ""
 
 
