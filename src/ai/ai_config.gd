@@ -35,6 +35,14 @@ const DEFAULTS := {
 		"max_batch": 5,
 		## Importance minimale (0..1) pour qu'un événement de la simulation soit raconté.
 		"min_importance": 0.4,
+		## Chronique de la parcelle suivie (arrivées d'espèces, champs, ville, ruines, chaleur…).
+		"parcel_enabled": true,
+		## Délai minimal entre deux narrations de la parcelle (secondes réelles).
+		"parcel_min_interval_sec": 15.0,
+		## Importance minimale (0..1) d'un moment de parcelle pour être raconté.
+		"parcel_min_importance": 0.35,
+		## Dérive de température locale (°C) qui mérite d'être racontée.
+		"parcel_heat_drift_c": 4.0,
 	},
 }
 
@@ -137,8 +145,12 @@ func _sanitize(section: String, key: String, value: Variant) -> Variant:
 			out = clampf(out, 0.0, 600.0)
 		"max_batch":
 			out = clampi(out, 1, 32)
-		"min_importance":
+		"min_importance", "parcel_min_importance":
 			out = clampf(out, 0.0, 1.0)
+		"parcel_min_interval_sec":
+			out = clampf(out, 0.0, 600.0)
+		"parcel_heat_drift_c":
+			out = clampf(out, 0.5, 50.0)
 		"model", "ollama_url", "llamacpp_url", "keep_alive":
 			if String(out) == "":
 				out = def

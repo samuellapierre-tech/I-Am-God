@@ -3,8 +3,11 @@ extends RefCounted
 ## Fonctions statiques pures : testables sans réseau.
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
+const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 
 const PERSONA_CHRONIQUEUR := "Tu es le Chroniqueur des dieux, un scribe éternel qui s'adresse directement à Dieu (le joueur), en le tutoyant avec révérence (« Toi », « Seigneur »). Tu racontes l'histoire du monde que Dieu façonne, des dinosaures jusqu'au cyberpunk. Réponds TOUJOURS en français, en 1 à 3 phrases, sur un ton épique et poétique mais concret. N'invente pas de faits contraires au contexte. Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire."
+
+const PERSONA_PARCELLE := "Tu es le Chroniqueur des dieux. Dieu (le joueur) regarde un seul morceau de terrain, grand comme l'écran, qu'il suit des dinosaures jusqu'à la fin des temps. Tu lui racontes ce qui vient d'arriver sur CE terrain, en t'adressant à lui à la deuxième personne (« Tu », « Ta parcelle », « sous Tes yeux »). Réponds TOUJOURS en français correct, en 1 ou 2 phrases courtes, concrètes et évocatrices, dans le vocabulaire de l'époque. N'invente aucun fait absent du contexte (pas d'espèce, de ville ni de catastrophe non mentionnées). Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire."
 
 const PERSONA_ORACLE := "Tu es l'Oracle des dieux. Dieu (le joueur) t'interroge sur un futur possible ; tu as entrevu ce futur grâce à une simulation. Réponds en français, en 2 ou 3 phrases, sous forme de prophétie mystérieuse mais fidèle aux faits fournis. Tutoie Dieu avec révérence. Pas de liste, pas de titre."
 
@@ -40,6 +43,28 @@ static func build_narration_prompt(context: Dictionary) -> String:
 	lines.append("")
 	lines.append("Raconte ce moment à Dieu en 1 à 3 phrases.")
 	return "\n".join(lines)
+
+
+## Narration d'un moment de la parcelle (ParcelNarrator) : le fait, puis l'état du terrain.
+## context : {era, year}
+static func build_parcel_prompt(moment: Dictionary, context: Dictionary = {}) -> String:
+	var lines := PackedStringArray()
+	var era := str(context.get("era", ""))
+	if era != "":
+		lines.append("Époque : %s." % era)
+	var year: Variant = context.get("year", moment.get("snapshot", {}).get("year", null))
+	if typeof(year) in [TYPE_INT, TYPE_FLOAT]:
+		lines.append("Date : %s." % Procedural.format_year(float(year)))
+	lines.append("Ce qui vient d'arriver sur la parcelle : " + ParcelNarrator.describe_moment(moment))
+	var snap: Dictionary = moment.get("snapshot", {})
+	if not snap.is_empty():
+		lines.append("État actuel de la parcelle :")
+		for l in ParcelNarrator.describe_snapshot(snap):
+			lines.append("- " + l)
+	lines.append("")
+	lines.append("Raconte ce moment à Dieu en 1 ou 2 phrases, à la deuxième personne, centrées sur cette parcelle.")
+	return "
+".join(lines)
 
 
 static func build_oracle_prompt(question: String, projection: Dictionary) -> String:

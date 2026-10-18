@@ -661,6 +661,11 @@ static func _fill(tpl: String, slots: Dictionary) -> String:
 	return tpl.format(slots)
 
 
+## Version publique de _polish (partagée avec la chronique de la parcelle).
+static func polish(text: String) -> String:
+	return _polish(text)
+
+
 ## Nettoie espaces et majuscules en début de phrase.
 static func _polish(text: String) -> String:
 	var t := text.strip_edges()

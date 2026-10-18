@@ -7,6 +7,9 @@ extends Node
 ## - Utilise un LLM local (Ollama / llama.cpp, accéléré GPU) s'il est disponible,
 ##   sinon un narrateur procédural : le jeu reste entièrement jouable sans IA.
 ## - Oracle (ask_oracle), Prières (generate_prayer) et décisions de civilisation (suggest_civilization_decision).
+## - Chronique de la parcelle suivie (parcel_narrator.gd) : événements « parcel_* » et changements
+##   marquants de GameState.parcel, au plus une fois toutes les parcel_min_interval_sec secondes ;
+##   les grands moments mondiaux (importance >= WORLD_PRIORITY, gestes divins) passent avant.
 
 signal narration_ready(text: String)
 signal oracle_answered(text: String)
@@ -14,12 +17,16 @@ signal prayer_received(species_id: int, text: String)
 signal decision_ready(species_id: int, decision: Dictionary)
 ## "ollama", "llamacpp" ou "none" (repli procédural).
 signal backend_changed(backend: String)
+## Émis EN PLUS de narration_ready pour une narration de la parcelle (l'UI peut la styler à part ;
+## moment : {kind, type, importance, land_use, species_name…}). Ne pas afficher les deux.
+signal parcel_narration_ready(text: String, moment: Dictionary)
 
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const LlmClient := preload("res://src/ai/llm_client.gd")
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const Prompts := preload("res://src/ai/prompt_builder.gd")
 const DecisionSchema := preload("res://src/ai/decision_schema.gd")
+const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -30,12 +37,23 @@ const EVENT_IMPORTANCE := {
 }
 ## Délai minimal après un geste divin avant de le raconter (laisse arriver ses conséquences).
 const DIVINE_DELAY := 0.4
+## Un événement mondial au moins aussi important passe toujours avant la parcelle.
+const WORLD_PRIORITY := 0.8
+## Un moment de parcelle ordinaire non raconté au bout de ce délai (s) est oublié ; un moment rare
+## (importance >= PARCEL_RARE) attend jusqu'à PARCEL_RARE_MAX_AGE.
+const PARCEL_MAX_AGE := 40.0
+const PARCEL_RARE := 0.75
+const PARCEL_RARE_MAX_AGE := 120.0
+const PARCEL_QUEUE_SIZE := 8
 
 var config: AiConfig
 var client: LlmClient
 var procedural: Procedural
+var parcel_narrator: ParcelNarrator
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
+## Chronique automatique de la parcelle (désactivable séparément).
+var auto_narrate_parcel := true
 
 var _pending: Array[Dictionary] = []
 var _absorbed_ids := {}
@@ -43,19 +61,24 @@ var _cooldown := 0.0
 var _auto_in_flight := false
 var _last_era := ""
 var _game_state: Node
+## Moments de parcelle en attente (avec "_t", leur heure d'arrivée en secondes).
+var _parcel_pending: Array[Dictionary] = []
+var _parcel_cooldown := 0.0
+var _clock := 0.0
 
 
 func _ready() -> void:
 	config = AiConfig.new()
 	config.load_or_create()
 	procedural = Procedural.new()
+	parcel_narrator = ParcelNarrator.new()
 	client = LlmClient.new()
 	client.name = "LlmClient"
 	add_child(client)
 	client.setup(config)
 	client.backend_changed.connect(func(b: String) -> void: backend_changed.emit(b))
 	client.detect_backend()
-	auto_narrate = config.get_value("narrator", "enabled")
+	_apply_narrator_config()
 	_connect_game_state.call_deferred()
 
 
@@ -78,6 +101,21 @@ func narrate(context: Dictionary) -> void:
 		if name != "":
 			ctx["species_name"] = name
 	_request_narration(ctx, false)
+
+
+## Raconte tout de suite (sans file ni délai) un événement « parcel_* » ou l'état de la parcelle.
+## event : format WorldSim ({type: "parcel_land_use"|"parcel_arrival"|…, species_id, summary}) ;
+## {} = décrire la parcelle telle qu'elle est (moment « focus »). Émet narration_ready puis
+## parcel_narration_ready, toujours de façon asynchrone. Rien n'est émis si l'événement est redondant.
+func narrate_parcel(event: Dictionary = {}) -> void:
+	var snap := ParcelNarrator.snapshot(_parcel())
+	var moment: Dictionary
+	if event.is_empty():
+		moment = parcel_narrator.focus(snap)
+	else:
+		moment = parcel_narrator.on_event(_enrich_parcel_event(event), snap)
+	if not moment.is_empty():
+		_request_parcel_narration(moment, false)
 
 
 ## Oracle « et si ? » : transforme le résumé de WorldSim.project_future() en prophétie. Émet oracle_answered.
@@ -136,8 +174,14 @@ func reload_config() -> void:
 	config.load_config()
 	client.cancel_all()
 	client.setup(config)
-	auto_narrate = config.get_value("narrator", "enabled")
+	_apply_narrator_config()
 	client.detect_backend()
+
+
+func _apply_narrator_config() -> void:
+	auto_narrate = config.get_value("narrator", "enabled")
+	auto_narrate_parcel = config.get_value("narrator", "parcel_enabled")
+	parcel_narrator.heat_drift_c = config.get_value("narrator", "parcel_heat_drift_c")
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +196,8 @@ func _connect_game_state() -> void:
 		"event_occurred": _on_event_occurred,
 		"era_changed": _on_era_changed,
 		"divine_action_applied": _on_divine_action_applied,
+		"parcel_updated": _on_parcel_updated,
+		"parcel_changed": _on_parcel_changed,
 	}
 	for sig in links:
 		if _game_state.has_signal(sig) and not _game_state.is_connected(sig, links[sig]):
@@ -160,9 +206,14 @@ func _connect_game_state() -> void:
 	var era := _current_era()
 	if era != "":
 		_on_era_changed(era)
+	# La parcelle de départ sert de référence : on ne raconte que ce qui change ensuite.
+	parcel_narrator.reset(ParcelNarrator.snapshot(_parcel()))
 
 
 func _on_event_occurred(event: Dictionary) -> void:
+	if str(event.get("type", "")).begins_with("parcel_"):
+		_on_parcel_event(event)
+		return
 	if not auto_narrate:
 		return
 	if event.has("id") and _absorbed_ids.has(event["id"]):
@@ -209,6 +260,145 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 		_absorbed_ids.clear()
 
 
+# ---------------------------------------------------------------------------
+# Chronique de la parcelle
+# ---------------------------------------------------------------------------
+
+func _on_parcel_event(event: Dictionary) -> void:
+	# Même sans narration, le suivi reste à jour : rien ne déferle d'un coup à la réactivation.
+	var moment := parcel_narrator.on_event(_enrich_parcel_event(event), ParcelNarrator.snapshot(_parcel()))
+	if auto_narrate and auto_narrate_parcel:
+		_push_parcel(moment)
+
+
+func _on_parcel_updated() -> void:
+	for moment in parcel_narrator.observe(ParcelNarrator.snapshot(_parcel())):
+		if auto_narrate and auto_narrate_parcel:
+			_push_parcel(moment)
+
+
+func _on_parcel_changed(_cell: Vector2i) -> void:
+	var snap := ParcelNarrator.snapshot(_parcel())
+	# Ce qui se passait sur l'ancienne parcelle n'a plus d'intérêt.
+	_parcel_pending.clear()
+	if not parcel_narrator.is_ready():
+		parcel_narrator.reset(snap)
+		return
+	var moment := parcel_narrator.focus(snap)
+	if auto_narrate and auto_narrate_parcel:
+		_push_parcel(moment)
+
+
+## Joint à un événement de parcelle le nom de l'espèce et sa survie dans le monde.
+func _enrich_parcel_event(event: Dictionary) -> Dictionary:
+	var e := event.duplicate()
+	var sid: Variant = e.get("species_id", -1)
+	if not e.has("species_name"):
+		var name := _species_name_for(sid)
+		if name != "":
+			e["species_name"] = name
+	if typeof(sid) in [TYPE_INT, TYPE_FLOAT] and int(sid) >= 0 and not e.has("species_alive"):
+		var sp: Variant = _species_info(int(sid))
+		if sp is Dictionary and sp.has("alive"):
+			e["species_alive"] = bool(sp["alive"])
+	return e
+
+
+## File des moments de parcelle : seuil d'importance, annulations (arrivée puis départ de la même
+## espèce), un seul état en attente par genre (usage du sol, chaleur…), taille bornée.
+func _push_parcel(moment: Dictionary) -> void:
+	if moment.is_empty():
+		return
+	_parcel_pending = queue_parcel_moment(_parcel_pending, moment, _clock,
+		float(config.get_value("narrator", "parcel_min_importance")))
+
+
+## Insère un moment dans une file de parcelle triée (fonction pure, testée sans GameState).
+## Les annulations s'appliquent même si le moment est sous min_importance (un simple retour d'espèce
+## annule le départ encore en attente), mais seul un moment assez important entre dans la file.
+static func queue_parcel_moment(queue: Array[Dictionary], moment: Dictionary, now: float, min_importance := 0.0) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	out.assign(queue)
+	var kind := str(moment.get("kind", ""))
+	var group := "temperature" if kind in ["heat", "cold"] else kind
+	var sid := int(moment.get("species_id", -1))
+	var importance := float(moment.get("importance", 0.0))
+	for i in range(out.size() - 1, -1, -1):
+		var p: Dictionary = out[i]
+		var pk := str(p.get("kind", ""))
+		var pgroup := "temperature" if pk in ["heat", "cold"] else pk
+		if sid >= 0 and int(p.get("species_id", -1)) == sid and pk in ["arrival", "departure"] and kind in ["arrival", "departure"]:
+			out.remove_at(i)
+			if pk != kind:
+				# L'espèce est venue puis repartie (ou l'inverse) avant d'être racontée : rien à dire.
+				return out
+		elif pgroup == group and group in ["land_use", "temperature", "focus"]:
+			# Seul l'état le plus récent compte, sauf si l'ancien était plus rare (le cratère avant la repousse).
+			if importance >= float(p.get("importance", 0.0)):
+				out.remove_at(i)
+	if importance < min_importance:
+		return out
+	var m := moment.duplicate()
+	m["importance"] = importance
+	m["_t"] = now
+	out.append(m)
+	# Le plus important d'abord ; à égalité, le plus récent.
+	out.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return float(a["importance"]) > float(b["importance"]) or (float(a["importance"]) == float(b["importance"]) and float(a["_t"]) > float(b["_t"])))
+	if out.size() > PARCEL_QUEUE_SIZE:
+		out.resize(PARCEL_QUEUE_SIZE)
+	return out
+
+
+## Oublie les moments trop anciens (les rares attendent plus longtemps).
+static func expire_parcel_moments(queue: Array[Dictionary], now: float) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for m in queue:
+		var max_age := PARCEL_RARE_MAX_AGE if float(m.get("importance", 0.0)) >= PARCEL_RARE else PARCEL_MAX_AGE
+		if now - float(m.get("_t", now)) <= max_age:
+			out.append(m)
+	return out
+
+
+## Faut-il raconter la parcelle maintenant plutôt que le monde ? Les grands moments mondiaux
+## (importance >= WORLD_PRIORITY) passent avant ; sinon le plus rare des deux l'emporte.
+## world_top / parcel_top : importance du premier de chaque file, -1 si elle est vide.
+static func parcel_goes_first(world_top: float, parcel_top: float, parcel_ready: bool) -> bool:
+	if parcel_top < 0.0 or not parcel_ready:
+		return false
+	if world_top < 0.0:
+		return true
+	return world_top < WORLD_PRIORITY and parcel_top > world_top
+
+
+func _flush_parcel() -> void:
+	var moment: Dictionary = _parcel_pending.pop_front()
+	moment.erase("_t")
+	_request_parcel_narration(moment, true)
+
+
+func _request_parcel_narration(moment: Dictionary, automatic: bool) -> void:
+	if automatic:
+		_auto_in_flight = true
+		_cooldown = float(config.get_value("narrator", "min_interval_sec"))
+		_parcel_cooldown = float(config.get_value("narrator", "parcel_min_interval_sec"))
+	var era := _current_era()
+	var year: Variant = _current_year()
+	var on_text := func(text: String) -> void:
+		if automatic:
+			_auto_in_flight = false
+		narration_ready.emit(text)
+		parcel_narration_ready.emit(text, moment)
+	_ask(
+		Prompts.PERSONA_PARCELLE, Prompts.build_parcel_prompt(moment, {"era": era, "year": year}),
+		func() -> String: return parcel_narrator.narrate(moment, era, year), on_text, 2, not automatic)
+
+
+func _parcel() -> Object:
+	if _game_state != null and "parcel" in _game_state:
+		return _game_state.parcel
+	return null
+
+
 static func event_importance(event: Dictionary) -> float:
 	var v: Variant = event.get("importance", null)
 	if typeof(v) in [TYPE_INT, TYPE_FLOAT]:
@@ -232,10 +422,21 @@ func _push(event: Dictionary, importance: float) -> void:
 
 
 func _process(delta: float) -> void:
+	_clock += delta
 	_cooldown = maxf(_cooldown - delta, 0.0)
-	if _pending.is_empty() or _auto_in_flight or _cooldown > 0.0:
+	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
+	if _auto_in_flight or _cooldown > 0.0:
 		return
-	_flush()
+	if not _parcel_pending.is_empty():
+		_parcel_pending = expire_parcel_moments(_parcel_pending, _clock)
+	var world_top := -1.0
+	for e in _pending:
+		world_top = maxf(world_top, float(e["_importance"]))
+	var parcel_top := float(_parcel_pending[0]["importance"]) if not _parcel_pending.is_empty() else -1.0
+	if parcel_goes_first(world_top, parcel_top, _parcel_cooldown <= 0.0):
+		_flush_parcel()
+	elif not _pending.is_empty():
+		_flush()
 
 
 func _flush() -> void:
@@ -268,10 +469,14 @@ func _current_era() -> String:
 func _species_name_for(id: Variant) -> String:
 	if not (typeof(id) in [TYPE_INT, TYPE_FLOAT]) or int(id) < 0:
 		return ""
-	if _game_state == null or not ("sim" in _game_state) or _game_state.sim == null or not ("species" in _game_state.sim):
-		return ""
-	var sp: Variant = _game_state.sim.species.get(int(id), null)
+	var sp: Variant = _species_info(int(id))
 	return str(sp.get("name", "")) if sp is Dictionary else ""
+
+
+func _species_info(id: int) -> Variant:
+	if _game_state == null or not ("sim" in _game_state) or _game_state.sim == null or not ("species" in _game_state.sim):
+		return null
+	return _game_state.sim.species.get(id, null)
 
 
 func _current_year() -> Variant:
