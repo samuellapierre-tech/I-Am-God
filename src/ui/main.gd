@@ -7,7 +7,9 @@ extends Node
 const PARCEL_SCENE := "res://scenes/parcel_view.tscn"
 const STATS_SCENE := "res://scenes/stats_panel.tscn"
 ## Interface du narrateur maître du jeu (Ézéchiel) : fil de narration et dilemmes.
-const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn", "res://scenes/dilemma_panel.tscn"]
+## Couche stratégique : menaces, pistes, actions, écrans de lancement et de fin.
+const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn", "res://scenes/dilemma_panel.tscn",
+	"res://scenes/strategy_hud.tscn"]
 const ParcelPowers := preload("res://src/ui/parcel_powers.gd")
 
 var parcel_view: Node

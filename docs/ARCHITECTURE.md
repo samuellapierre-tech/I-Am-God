@@ -124,6 +124,15 @@ Carte de menace : `{id, kind, title, target: {region: Vector2i, species_id: int}
 Signaux relayés par `GameState` : `round_started(round)`, `threat_revealed(threat)`,
 `threat_resolved(threat, countered: bool)`, `tracks_changed(tracks)`, `game_over(victory: bool, reason: String)`.
 
+Ajouts (implémentation) : `round` porte aussi `act`, `act_name`, `steps`, `recap` (bilan de la manche
+précédente) ; une carte porte aussi `state` (`pending`/`countered`/`struck`/`fizzled`), `revealed`,
+`target_name`, `cataclysm`, `returning`. `ends_year` et `strikes_year` sont réestimés au rythme courant
+(la manche se mesure en pas idéaux de la simulation). `strategy.seal_work(id)`, `works_ready`,
+`visible_next_threats()` (Prophète), signal `action_refused(kind)` sur l'instance.
+`GameState.configure_strategy(aspect, difficulty)` (écran de lancement). Argument
+`-- --strategy-autostart` : pas d'écran de lancement. La racine causale d'une frappe est de type
+`threat_<kind>` (et non `divine_*`) : ce n'est pas un geste du joueur.
+
 Tout pouvoir lancé par le joueur passe par `strategy.spend_action()` (refusé si le budget est épuisé).
 Les menaces frappent via `WorldSim.apply_divine_action` ou des perturbations de la simulation : la
 chaîne causale reste la seule source de vérité.
