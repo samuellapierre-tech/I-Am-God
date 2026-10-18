@@ -54,7 +54,7 @@ func _ready() -> void:
 	if narrator and narrator.has_signal("dilemma_ready"):
 		narrator.connect("dilemma_ready", show_dilemma)
 	elif narrator:
-		push_warning("DilemmaPanel : Narrator.dilemma_ready absent, panneau inactif.")
+		print_verbose("DilemmaPanel : Narrator.dilemma_ready absent (branche narrateur non fusionnée), panneau inactif.")
 
 
 ## Affiche un dilemme (ou le met en file d'attente). Renvoie false s'il est invalide.
