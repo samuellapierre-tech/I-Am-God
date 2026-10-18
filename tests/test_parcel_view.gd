@@ -180,21 +180,6 @@ func test_creature_appearance() -> String:
 	return ""
 
 
-func test_choose_species() -> String:
-	var fauna := [{species_id = 4, count = 3}, {species_id = 9, count = 12}]
-	var smite := {id = "plague", needs_species = true}
-	var cases := [
-		[smite, 4, 7, 4], [smite, -1, 7, 7], [smite, -1, -1, 9],
-		[{id = "meteor", needs_species = false}, 4, 7, -1],
-		[{id = "spawn_species", needs_species = false}, 4, 7, 7],
-	]
-	for c in cases:
-		var err := _expect(ParcelLogic.choose_species(c[0], c[1], c[2], fauna), c[3], "choose_species(%s)" % c[0].id)
-		if err != "":
-			return err
-	return _expect(ParcelLogic.choose_species(smite, -1, -1, []), -1, "parcelle vide")
-
-
 func test_camera_limits() -> String:
 	var parcel := Vector2(1920, 1080)
 	var err := _expect(ParcelLogic.cover_zoom(Vector2(1920, 1080), parcel), 1.0, "zoom de couverture")
@@ -202,11 +187,11 @@ func test_camera_limits() -> String:
 		return err
 	if ParcelLogic.cover_zoom(Vector2(1920, 1200), parcel) < 1200.0 / 1080.0:
 		return "la parcelle doit couvrir tout l'écran"
-	err = _expect(ParcelLogic.wheel_out(1.0, 1.0, 1.15), {zoom = 1.0, exit = true}, "molette au minimum")
+	err = _expect(ParcelLogic.wheel_out(1.0, 1.0, 1.15), 1.0, "molette au minimum : on reste sur la parcelle")
 	if err != "":
 		return err
-	if ParcelLogic.wheel_out(2.0, 1.0, 1.15).exit:
-		return "pas de sortie avant le zoom minimal"
+	if not is_equal_approx(ParcelLogic.wheel_out(2.3, 1.0, 1.15), 2.0):
+		return "dézoom d'un cran attendu"
 	err = _expect(ParcelLogic.clamp_camera(Vector2(0, 0), 2.0, Vector2(1920, 1080), parcel), Vector2(480, 270), "coin haut-gauche")
 	if err != "":
 		return err

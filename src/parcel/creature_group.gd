@@ -109,15 +109,6 @@ func is_empty() -> bool:
 	return pos.is_empty()
 
 
-## Espèce touchée par un clic en `world_pos` ?
-func hit(world_pos: Vector2) -> bool:
-	var r2 := (length * 0.5 + 6.0) ** 2
-	for i in pos.size():
-		if leaving[i] == 0 and pos[i].distance_squared_to(world_pos) <= r2:
-			return true
-	return false
-
-
 func _spawn() -> void:
 	var p: Vector2
 	if role == "carnivore":

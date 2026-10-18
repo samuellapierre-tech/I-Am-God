@@ -1,9 +1,6 @@
 extends Camera2D
 ## Petite caméra de la parcelle : zoom fluide vers le curseur (molette), panoramique (glisser clic
-## droit/milieu, flèches), toujours dans les limites de la parcelle. Molette arrière au zoom
-## minimal -> exit_requested (la vue parcelle passe alors au globe).
-
-signal exit_requested
+## droit/milieu, flèches), toujours dans les limites de la parcelle (le jeu ne montre qu'elle).
 
 const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
 
@@ -54,13 +51,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_anchor = mb.position
 				get_viewport().set_input_as_handled()
 			elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-				var r := ParcelLogic.wheel_out(target_zoom, min_zoom(), zoom_step)
-				target_zoom = r.zoom
+				target_zoom = ParcelLogic.wheel_out(target_zoom, min_zoom(), zoom_step)
 				_anchor = mb.position
 				get_viewport().set_input_as_handled()
-				# On ne quitte que si la caméra est réellement arrivée au zoom minimal.
-				if r.exit and zoom.x <= min_zoom() * 1.01:
-					exit_requested.emit()
 	elif event is InputEventMouseMotion and _dragging:
 		position -= (event as InputEventMouseMotion).relative / zoom.x
 

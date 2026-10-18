@@ -53,17 +53,6 @@ func clear() -> void:
 	_groups.clear()
 
 
-## Espèce sous le point (monde), -1 si aucune. Les plus gros d'abord (dessinés au-dessus).
-func species_at(world_pos: Vector2) -> int:
-	var best := -1
-	var best_len := -1.0
-	for g: CreatureGroup in _groups.values():
-		if g.length > best_len and g.hit(world_pos):
-			best = g.species_id
-			best_len = g.length
-	return best
-
-
 func _process(delta: float) -> void:
 	if _groups.is_empty():
 		return

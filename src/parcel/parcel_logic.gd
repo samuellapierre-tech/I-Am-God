@@ -114,26 +114,6 @@ static func species_color(role: String, species_id: int) -> Color:
 		clampf(base.v - absf(h) * 0.25, 0.0, 1.0))
 
 
-## Espèce visée par un pouvoir cliqué sur la parcelle. Priorité : la créature cliquée,
-## puis la cible choisie dans le HUD, puis l'espèce la plus nombreuse de la parcelle.
-static func choose_species(power: Dictionary, clicked: int, target: int, fauna: Array) -> int:
-	if String(power.get("id", "")) == "spawn_species":
-		return target
-	if not bool(power.get("needs_species", false)):
-		return -1
-	if clicked >= 0:
-		return clicked
-	if target >= 0:
-		return target
-	var best := -1
-	var best_count := 0
-	for f in fauna:
-		if int(f.get("count", 0)) > best_count:
-			best_count = int(f.count)
-			best = int(f.get("species_id", -1))
-	return best
-
-
 # --- Assets ---
 
 ## Nom de fichier normalisé : minuscules, sans accents, espaces et tirets -> « _ ».
@@ -196,11 +176,9 @@ static func cover_zoom(viewport: Vector2, parcel: Vector2) -> float:
 	return maxf(viewport.x / parcel.x, viewport.y / parcel.y)
 
 
-## Molette vers l'arrière : {zoom, exit}. exit = déjà au zoom minimal -> passer au globe.
-static func wheel_out(target_zoom: float, min_zoom: float, step: float) -> Dictionary:
-	if target_zoom <= min_zoom * 1.0001:
-		return {zoom = min_zoom, exit = true}
-	return {zoom = maxf(target_zoom / step, min_zoom), exit = false}
+## Molette vers l'arrière : zoom suivant, jamais en dessous du zoom de couverture.
+static func wheel_out(target_zoom: float, min_zoom: float, step: float) -> float:
+	return maxf(target_zoom / step, min_zoom)
 
 
 ## Centre de caméra gardant la vue à l'intérieur de la parcelle.
@@ -215,7 +193,7 @@ static func clamp_camera(center: Vector2, zoom: float, viewport: Vector2, parcel
 	return out
 
 
-## Une action divine lancée depuis le globe touche-t-elle la parcelle suivie ? (bouclage en x)
+## Une action divine (région + rayon) touche-t-elle la parcelle suivie ? (bouclage en x)
 static func region_hits_parcel(region: Vector2i, radius: int, cell: Vector2i, width: int) -> bool:
 	var dx := absi(region.x - cell.x)
 	if width > 0:

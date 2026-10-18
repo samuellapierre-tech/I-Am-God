@@ -13,7 +13,7 @@ var preview_radius := 0.0
 var _effects: Array = []
 
 
-## radius : rayon de l'effet en unités monde (grand pour une action venue du globe).
+## radius : rayon de l'effet en unités monde (plus grand pour une action qui englobe la parcelle).
 func spawn(power_id: String, at: Vector2, radius: float) -> void:
 	var p := Powers.get_power(power_id)
 	var big := power_id in ["meteor", "ice_age", "flood"]
