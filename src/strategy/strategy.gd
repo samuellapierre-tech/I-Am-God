@@ -126,6 +126,10 @@ var _challenge_counters := 0
 var _challenge_powers := 0
 var _challenge_new_species := false
 var _deck_size := 0
+## Époque vue à la dernière purge (ère, quart de niveau technologique) et époque courante.
+var _epoch_key := ""
+var _era_now := 0
+var _lead_now := -1.0
 var _deck_cats := 0
 
 
@@ -164,6 +168,7 @@ func start(world: RefCounted, parcel: RefCounted) -> void:
 	_round_era = world.era_index()
 	_last_year = world.year
 	_note_fauna(parcel, true)
+	_purge_epoch(world, parcel)
 	_refresh_tracks(world, parcel)
 	_hand = _draw_hand(world, parcel)
 	_commit(world, parcel)
@@ -180,6 +185,7 @@ func update(world: RefCounted, parcel: RefCounted, events: Array = []) -> Array[
 		return out
 	_note_fauna(parcel, false)
 	_detect_chains(world, events)
+	_purge_epoch(world, parcel)
 	# Avancée de la manche, en pas idéaux : le rythme de la simulation change (éveil d'un peuple),
 	# la durée ressentie d'une manche non.
 	var ideal: float = maxf(world.ideal_step_years(), 1e-6)
@@ -447,7 +453,9 @@ func _cataclysm() -> void:
 		back[i] = back[j]
 		back[j] = tmp
 	for c in back:
-		_deck.append({cataclysm = false, kind = c.kind,
+		# Une menace passée qui n'a plus cours à cette époque revient comme une carte neuve.
+		var kind := String(c.kind) if Rules.epoch_ok(String(c.kind), _era_now, _lead_now) else ""
+		_deck.append({cataclysm = false, kind = kind,
 			severity = minf(Rules.MAX_SEVERITY, float(c.severity) + Rules.RETURN_SEVERITY)})
 
 
@@ -496,9 +504,7 @@ func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
 		if t.cataclysm:
 			_cataclysm()
 		if not Rules.epoch_ok(t.kind, era, lead):
-			var fresh := _make_threat({cataclysm = false, kind = "", severity = t.severity}, world, parcel)
-			for key in ["kind", "title", "text", "target", "target_name", "counters", "action", "act"]:
-				t[key] = fresh[key]
+			_legalize(t, world, parcel)
 			t.samael = {reason_code = "fallback", score = 0.0}
 		if t.target.species_id >= 0 and not _alive(world, t.target.species_id):
 			_retarget(t, world, parcel)
@@ -520,6 +526,44 @@ func _start_round(world: RefCounted, parcel: RefCounted, recap: String) -> void:
 		threat_revealed.emit(t)
 		samael_move.emit({kind = "reveal", threat = t, reason_code = String(t.get("samael", {}).get("reason_code", "random"))})
 	actions_changed.emit(actions_left)
+
+
+## Zéro anachronisme (§9) quand l'époque change (ère, ou seuil technologique dans une ère) : les cartes
+## déjà en circulation qui n'ont plus cours sont remplacées (main de Samaël, menaces engagées) ou
+## redeviennent des cartes neuves (pioche, défausse). Les menaces de la manche en cours se dissiperont
+## à leur frappe si elles sont devenues anachroniques.
+func _purge_epoch(world: RefCounted, parcel: RefCounted) -> void:
+	_era_now = world.era_index()
+	_lead_now = _leading_tech(world)
+	var key := "%d:%d" % [_era_now, int(floorf(_lead_now * 4.0))]
+	if key == _epoch_key:
+		return
+	_epoch_key = key
+	var hand_changed := false
+	for list in [_hand, next_threats]:
+		for t in list:
+			if not Rules.epoch_ok(t.kind, _era_now, _lead_now):
+				_legalize(t, world, parcel)
+				hand_changed = hand_changed or list == _hand
+	for list in [_deck, _discard]:
+		for c in list:
+			if String(c.kind) != "" and not Rules.epoch_ok(String(c.kind), _era_now, _lead_now):
+				c.kind = ""
+	# Une main corrigée est reconsidérée par l'Oracle (Apocalypse).
+	if hand_changed and not _committed:
+		samael.plan(_hand.filter(func(t): return not t.cataclysm), world, _cell(parcel),
+			Samael.ORACLE_ROUNDS * float(round.get("steps", Rules.ROUND_STEPS_WILD)) * world.ideal_step_years())
+
+
+## Remplace le contenu d'une carte devenue anachronique par une carte légale de même gravité
+## (même identifiant ; un Cataclysme reste un Cataclysme).
+func _legalize(t: Dictionary, world: RefCounted, parcel: RefCounted) -> void:
+	var fresh := _make_threat({cataclysm = t.cataclysm, kind = "", severity = t.severity}, world, parcel)
+	_next_id -= 1  # la carte garde son identifiant
+	for key in ["kind", "title", "text", "target", "target_name", "counters", "action", "act"]:
+		t[key] = fresh[key]
+	if t.has("samael"):
+		t.samael = {reason_code = "fallback", score = 0.0}
 
 
 ## Samaël choisit dans sa main les cartes de la manche suivante ; les autres retournent sous la pioche.

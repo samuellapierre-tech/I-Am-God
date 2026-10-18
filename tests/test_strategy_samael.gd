@@ -248,3 +248,52 @@ func test_apocalypse_time_budget() -> String:
 	if d.st.samael.max_think_usec > 200 or d.st.samael.oracle_pending() > 0:
 		return "Samaël Divin consulte l'Oracle"
 	return ""
+
+
+## Passage prologue → Mésozoïque avec des Cataclysmes : les cartes déjà en circulation (pioche,
+## défausse remélangée, main de Samaël, menaces engagées) ne survivent pas à leur époque.
+func test_epoch_change_purges_cards_in_circulation() -> String:
+	var g := _setup(4242, "eveil")
+	var st: RefCounted = g.st
+	var player := Base.new()
+	# Cartes du prologue en circulation, et des Cataclysmes pour remélanger souvent la défausse.
+	for i in 8:
+		st._discard.append({kind = "oxidation", severity = 0.5})
+		st._deck.insert(st._deck.size() - 1 - i * 3, {cataclysm = i % 2 == 0, kind = "oxidation" if i % 2 else "", severity = 0.75})
+	var bad := []
+	var seen := {}
+	var check_all := func():
+		var era: int = g.sim.era_index()
+		var lead: float = Strategy._leading_tech(g.sim)
+		var cards := []
+		for t in st._hand + st.next_threats:
+			cards.append(["main", t.kind])
+		for c in st._deck + st._discard:
+			if String(c.kind) != "":
+				cards.append(["pioche", c.kind])
+		for c in cards:
+			if not Rules.epoch_ok(c[1], era, lead):
+				bad.append("%s %s (ère %s)" % [c[0], c[1], g.sim.current_era()])
+	var on_reveal := func(t):
+		if not Rules.epoch_ok(t.kind, g.sim.era_index(), Strategy._leading_tech(g.sim)):
+			bad.append("révélée %s (ère %s)" % [t.kind, g.sim.current_era()])
+	st.threat_revealed.connect(on_reveal)
+	var mesozoic_frames := 0
+	for i in 2500:
+		_frame(g)
+		player._auto_play(st)
+		check_all.call()
+		seen[g.sim.era_index()] = true
+		if g.sim.era_index() >= Eras.MESOZOIC:
+			mesozoic_frames += 1
+		if mesozoic_frames > 150 or st.over or not bad.is_empty():
+			break
+	st.threat_revealed.disconnect(on_reveal)
+	print("  ères traversées : %s, cataclysmes %d" % [seen.keys(), st.cataclysms])
+	if not bad.is_empty():
+		return "cartes anachroniques en circulation : %s" % ", ".join(bad.slice(0, 5))
+	if mesozoic_frames == 0:
+		return "le Mésozoïque n'a pas été atteint (%s)" % [seen.keys()]
+	if st.cataclysms < 2:
+		return "trop peu de Cataclysmes pour éprouver le remélange (%d)" % st.cataclysms
+	return ""
