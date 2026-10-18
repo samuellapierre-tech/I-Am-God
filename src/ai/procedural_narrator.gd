@@ -20,21 +20,28 @@ const ERA_ARTICLES := {
 const EVENT_TYPES := [
 	"meteor", "extinct", "save", "bless", "plague", "uplift", "flood", "ice_age", "spawn_species",
 	"extinction", "speciation", "migration", "war", "discovery", "civilization", "disaster",
-	"climate", "era_change", "generic",
+	"climate", "era_change", "sapience", "golden_age", "decline", "lazarus", "generic",
 ]
 
-## Synonymes probables produits par la simulation -> type canonique.
+## Types produits par la simulation (src/sim/world_sim.gd) ou synonymes -> type canonique.
+## Les événements racines d'action divine sont préfixés « divine_ » (préfixe retiré avant la recherche).
 const EVENT_ALIASES := {
+	"impact": "meteor", "asteroid": "meteor", "deluge": "flood", "blessing": "bless", "spawn": "spawn_species",
+	"protection": "save", "collapse": "disaster", "volcanism": "disaster", "ice_age_end": "climate",
+	"land_bridge": "migration", "invasion": "migration", "radiation": "speciation",
 	"new_species": "speciation", "evolution": "speciation", "mutation": "speciation",
 	"species_extinct": "extinction", "die_off": "extinction",
-	"battle": "war", "conquest": "war", "invasion": "war",
+	"battle": "war", "conquest": "war",
 	"invention": "discovery", "tech": "discovery", "research": "discovery", "breakthrough": "discovery",
 	"city": "civilization", "empire": "civilization", "founding": "civilization", "expand": "civilization",
 	"earthquake": "disaster", "volcano": "disaster", "famine": "disaster", "tsunami": "disaster",
 	"drought": "climate", "warming": "climate", "cooling": "climate",
-	"epidemic": "plague", "pandemic": "plague", "asteroid": "meteor", "blessing": "bless",
-	"era": "era_change", "worship": "civilization",
+	"epidemic": "plague", "pandemic": "plague", "worship": "civilization",
+	"era": "era_change", "awakening": "sapience", "prosperity": "golden_age", "resurrection": "lazarus",
 }
+
+## Types dont les gabarits inventeraient des faits : si la simulation fournit un résumé, on raconte ce résumé.
+const SUMMARY_TYPES := ["discovery", "war", "civilization", "generic"]
 
 ## Lexique par ère : décor, acteurs anonymes, nature du savoir, du conflit, et ton de la conclusion.
 const ERA_LEXICON := {
@@ -122,42 +129,46 @@ const OUVERTURES := [
 	"Sache-le, Très-Haut :", "",
 ]
 
-## Gabarits par type d'événement. Emplacements : {ouverture} {lieu} {acteurs} {espece} {date} {savoir} {conflit} {fin} {ere}.
+## Gabarits par type d'événement. Emplacements : {ouverture} {lieu} {acteurs} {espece} {date} {savoir}
+## {conflit} {fin} {ere} {resume}.
+## Accord en nombre : [espece:singulier|pluriel] et [lieu:singulier|pluriel] sont choisis selon que
+## l'espèce (ou le lieu) est au singulier ou au pluriel. Une espèce au singulier est toujours
+## « l'espèce X » (féminin) ; au pluriel, « les X » (masculin par défaut). {acteurs} est toujours pluriel.
 const EVENT_TEMPLATES := {
 	"meteor": [
 		"{ouverture} Ton feu est tombé du ciel sur {lieu}. {fin}",
 		"{date}, une pierre céleste frappe {lieu} ; {acteurs} ne verront pas l'aube. {fin}",
-		"{ouverture} le ciel s'est ouvert, et {lieu} ne sont plus que cendres. {fin}",
+		"{ouverture} le ciel s'est ouvert, et {lieu} [lieu:n'est plus que cendres|ne sont plus que cendres]. {fin}",
 	],
 	"extinct": [
 		"{ouverture} d'un mot, Tu as effacé {espece} du livre de la vie. {fin}",
-		"{date}, {espece} s'éteint par Ta volonté ; {lieu} se taisent. {fin}",
+		"{date}, {espece} [espece:s'éteint|s'éteignent] par Ta volonté ; {lieu} [lieu:se tait|se taisent]. {fin}",
 		"Il ne reste de {espece} que des os et du silence. {fin}",
 	],
 	"extinction": [
-		"{date}, {espece} disparaît à jamais de {lieu}. {fin}",
-		"{ouverture} {espece} n'a pas survécu ; le monde a un vide de plus. {fin}",
+		"{date}, {espece} [espece:disparaît|disparaissent] à jamais de {lieu}. {fin}",
+		"{ouverture} {espece} n'[espece:a|ont] pas survécu ; le monde compte un vide de plus. {fin}",
 		"Le dernier représentant de {espece} s'est couché dans {lieu}. {fin}",
 	],
 	"save": [
 		"{ouverture} Ta main a retenu {espece} au bord de l'abîme. {fin}",
-		"{date}, {espece} échappe à la fin, protégée par Ta grâce. {fin}",
-		"Là où tout devait finir, {espece} respire encore. {fin}",
+		"{date}, {espece} [espece:échappe|échappent] à la fin, [espece:protégée|protégés] par Ta grâce. {fin}",
+		"Là où tout devait finir, {espece} [espece:respire|respirent] encore. {fin}",
 	],
 	"bless": [
 		"{ouverture} Ta bénédiction se répand sur {lieu}, et {acteurs} prospèrent. {fin}",
-		"{date}, {espece} reçoit Ta faveur ; ses enfants seront nombreux. {fin}",
+		"{date}, {espece} [espece:reçoit|reçoivent] Ta faveur ; [espece:ses|leurs] enfants seront nombreux. {fin}",
 		"Une lumière douce baigne {lieu}. {fin}",
 	],
 	"plague": [
 		"{ouverture} un mal invisible ravage {lieu}. {fin}",
 		"{date}, la peste frappe {espece} ; les survivants Te maudissent ou Te prient. {fin}",
-		"La fièvre court parmi {acteurs}, et nul remède ne l'arrête. {fin}",
+		"La fièvre court chez {espece}, et nul remède ne l'arrête. {fin}",
 	],
 	"uplift": [
 		"{ouverture} Tu as allumé l'étincelle de l'esprit chez {espece}. {fin}",
-		"{date}, {espece} lève les yeux et, pour la première fois, se demande pourquoi. {fin}",
-		"Une pensée neuve naît dans {lieu} : {espece} vient de s'éveiller. {fin}",
+		"{date}, {espece} [espece:lève|lèvent] les yeux et, pour la première fois, [espece:se demande|se demandent] pourquoi. {fin}",
+		"Une pensée neuve naît dans {lieu} : {espece} [espece:vient|viennent] de s'éveiller. {fin}",
 	],
 	"flood": [
 		"{ouverture} les eaux montent et engloutissent {lieu}. {fin}",
@@ -165,24 +176,24 @@ const EVENT_TEMPLATES := {
 		"La mer reprend {lieu}, comme Tu l'as voulu. {fin}",
 	],
 	"ice_age": [
-		"{ouverture} le froid descend sur le monde, et {lieu} blanchissent. {fin}",
+		"{ouverture} le froid descend sur le monde, et {lieu} [lieu:blanchit|blanchissent]. {fin}",
 		"{date}, les glaces avancent ; {acteurs} doivent s'adapter ou périr. {fin}",
 		"Un long hiver commence, que Toi seul as décidé. {fin}",
 	],
 	"spawn_species": [
-		"{ouverture} une créature nouvelle, {espece}, foule pour la première fois {lieu}. {fin}",
+		"{ouverture} {espece} [espece:foule|foulent] pour la première fois {lieu}. {fin}",
 		"{date}, Tu as façonné {espece} de Tes mains. {fin}",
-		"Le monde compte un habitant de plus : {espece}. {fin}",
+		"Le monde compte de nouveaux habitants : {espece}. {fin}",
 	],
 	"speciation": [
-		"{date}, une lignée nouvelle, {espece}, se détache des autres dans {lieu}. {fin}",
-		"{ouverture} la vie bifurque : {espece} apparaît. {fin}",
-		"Dans {lieu}, l'évolution a tranché, et {espece} est née. {fin}",
+		"{date}, une lignée nouvelle se détache des autres dans {lieu} : {espece}. {fin}",
+		"{ouverture} la vie bifurque : {espece} [espece:apparaît|apparaissent]. {fin}",
+		"Dans {lieu}, l'évolution a tranché, et {espece} [espece:est née|sont nés]. {fin}",
 	],
 	"migration": [
 		"{date}, {acteurs} quittent {lieu} en quête de terres nouvelles. {fin}",
-		"{ouverture} {espece} traverse le monde, poussée par la faim et l'espoir. {fin}",
-		"Une grande migration s'ébranle ; {lieu} se vident. {fin}",
+		"{ouverture} {espece} [espece:traverse|traversent] le monde, [espece:poussée|poussés] par la faim et l'espoir. {fin}",
+		"Une grande migration s'ébranle ; {lieu} [lieu:se vide|se vident]. {fin}",
 	],
 	"war": [
 		"{date}, {conflit} embrase {lieu}. {fin}",
@@ -196,16 +207,16 @@ const EVENT_TEMPLATES := {
 	],
 	"civilization": [
 		"{date}, {acteurs} fondent un ordre nouveau dans {lieu}. {fin}",
-		"{ouverture} {espece} bâtit, compte et se souvient : une civilisation est née. {fin}",
+		"{ouverture} {espece} [espece:bâtit, compte et se souvient|bâtissent, comptent et se souviennent] : une civilisation est née. {fin}",
 		"Des murs s'élèvent dans {lieu} ; {acteurs} se croient éternels. {fin}",
 	],
 	"disaster": [
-		"{date}, la terre gronde et {lieu} s'effondrent. {fin}",
+		"{date}, la terre gronde et {lieu} [lieu:s'effondre|s'effondrent]. {fin}",
 		"{ouverture} la catastrophe frappe {lieu} ; {acteurs} pleurent leurs morts. {fin}",
 		"Le monde tremble sous {lieu}. {fin}",
 	],
 	"climate": [
-		"{date}, le climat bascule et {lieu} changent de visage. {fin}",
+		"{date}, le climat bascule et {lieu} [lieu:change|changent] de visage. {fin}",
 		"{ouverture} les saisons se dérèglent ; {acteurs} doivent s'adapter. {fin}",
 		"L'air lui-même change sur {lieu}. {fin}",
 	],
@@ -214,12 +225,40 @@ const EVENT_TEMPLATES := {
 		"{date}, le monde entre dans {ere}. {fin}",
 		"Les chroniques tournent une page : {ere} commence. {fin}",
 	],
+	"sapience": [
+		"{ouverture} {espece} [espece:prend|prennent] conscience d'[espece:elle-même|eux-mêmes] ; une pensée est née dans {lieu}. {fin}",
+		"{date}, {espece} [espece:lève|lèvent] les yeux vers le ciel et Te [espece:devine|devinent]. {fin}",
+		"Pour la première fois, au sein de {espece}, quelqu'un se demande qui Tu es. {fin}",
+	],
+	"golden_age": [
+		"{date}, {espece} [espece:connaît|connaissent] un âge d'or dans {lieu}. {fin}",
+		"{ouverture} la prospérité sourit à {espece}. {fin}",
+		"Les greniers débordent et les arts fleurissent chez {espece}. {fin}",
+	],
+	"decline": [
+		"{date}, la grandeur de {espece} s'effrite. {fin}",
+		"{ouverture} {espece} [espece:oublie|oublient] peu à peu [espece:sa|leur] gloire passée. {fin}",
+		"Les monuments de {espece} se lézardent sous Ton regard. {fin}",
+	],
+	"lazarus": [
+		"{ouverture} {espece}, que l'on [espece:croyait perdue|croyait perdus], [espece:revient|reviennent] d'entre les morts. {fin}",
+		"{date}, Ta main ramène {espece} du néant. {fin}",
+		"Ce qui était éteint renaît : {espece} [espece:foule|foulent] de nouveau {lieu}. {fin}",
+	],
 	"generic": [
 		"{date}, quelque chose change dans {lieu}. {fin}",
 		"{ouverture} {acteurs} poursuivent leur route sous Ton regard. {fin}",
 		"Le monde suit son cours, mais Ton ombre plane sur {lieu}. {fin}",
 	],
 }
+
+## Gabarits utilisés quand la simulation fournit un résumé factuel ({resume}).
+const SUMMARY_TEMPLATES := [
+	"{date}, {resume}. {fin}",
+	"{ouverture} {resume}. {fin}",
+	"Les chroniques retiennent ceci : {resume}. {fin}",
+]
+
 
 ## Situations de prière reconnues.
 const PRAYER_SITUATIONS := ["famine", "war", "plague", "disaster", "cold", "flood", "decline", "prosperity", "generic"]
@@ -327,7 +366,7 @@ static func era_with_article(era: Variant) -> String:
 
 ## Ramène un type d'événement à un type canonique ("generic" si inconnu).
 static func event_key(event_type: Variant) -> String:
-	var s := str(event_type).strip_edges().to_lower()
+	var s := str(event_type).strip_edges().to_lower().trim_prefix("divine_")
 	if s in EVENT_TYPES:
 		return s
 	return EVENT_ALIASES.get(s, "generic")
@@ -360,6 +399,64 @@ static func species_name(context: Dictionary, default_name: String = "") -> Stri
 	if typeof(sid) in [TYPE_INT, TYPE_FLOAT] and int(sid) >= 0:
 		return "l'espèce n°%d" % int(sid)
 	return ""
+
+
+## Groupe nominal accordable pour un nom d'espèce : {text, plural}.
+## - déjà muni d'un article (« les premiers primates », « la lignée ») : conservé tel quel ;
+## - nom de groupe dont le premier mot finit par -s/-x (« Multituberculés », « Euthériens insectivores »,
+##   « Humains Mivel ») : pluriel, « les X » — sauf si une épithète en minuscule ne finit pas par -s/-x
+##   (binôme hérité d'un genre au pluriel, ex. « Squamates nuloa ») ;
+## - sinon (binôme latin « Verpha moloum », nom unique) : singulier, « l'espèce X ».
+static func species_phrase(name: String) -> Dictionary:
+	var n := name.strip_edges()
+	if n == "":
+		return {"text": "", "plural": false}
+	var low := n.to_lower()
+	for art in ["les ", "des ", "ces ", "leurs ", "nos "]:
+		if low.begins_with(art):
+			return {"text": art + n.substr(art.length()), "plural": true}
+	for art in ["le ", "la ", "l'", "l’", "un ", "une ", "cette ", "ce "]:
+		if low.begins_with(art):
+			return {"text": art + n.substr(art.length()), "plural": false}
+	var words := n.split(" ", false)
+	var plural: bool = words[0].length() > 2 and words[0].right(1).to_lower() in ["s", "x"]
+	for w in words.slice(1):
+		var first := w.substr(0, 1)
+		if first == first.to_lower() and first != first.to_upper() and not (w.right(1) in ["s", "x"]):
+			plural = false
+	if plural:
+		return {"text": "les " + n, "plural": true}
+	return {"text": "l'espèce " + n, "plural": false}
+
+
+## Le lieu (« les marais », « la toundra ») est-il au pluriel ?
+static func is_plural_phrase(phrase: String) -> bool:
+	var low := phrase.strip_edges().to_lower()
+	return low.begins_with("les ") or low.begins_with("des ")
+
+
+## Résout les marques d'accord [cle:singulier|pluriel] selon plurals[cle] (pluriel si la clé est inconnue).
+static func apply_agreement(tpl: String, plurals: Dictionary) -> String:
+	var re := RegEx.new()
+	re.compile("\\[(\\w+):([^|\\]]*)\\|([^\\]]*)\\]")
+	var out := tpl
+	for m in re.search_all(tpl):
+		var plural: bool = plurals.get(m.get_string(1), true)
+		out = out.replace(m.get_string(0), m.get_string(3) if plural else m.get_string(2))
+	return out
+
+
+## Résumé de la simulation rendu narrable : sans préfixe court (« Guerre : », « Dieu : »), sans point final,
+## article initial en minuscule (« Les Humains... » -> « les Humains... »).
+static func clean_summary(summary: String) -> String:
+	var t := summary.strip_edges().trim_suffix(".").strip_edges()
+	var colon := t.find(" : ")
+	if colon > 0 and t.substr(0, colon).split(" ").size() <= 3 and t.length() > colon + 3:
+		t = t.substr(colon + 3).strip_edges()
+	var first := t.split(" ")[0]
+	if first in ["Les", "Le", "La", "Un", "Une", "Des", "Une", "Nouvelle", "Nouveau"] or t.begins_with("L'"):
+		t = t.substr(0, 1).to_lower() + t.substr(1)
+	return t
 
 
 # ---------------------------------------------------------------------------
@@ -396,17 +493,32 @@ func _narrate_batch(context: Dictionary, events: Array) -> String:
 func _narrate_one(context: Dictionary) -> String:
 	var era := era_key(context.get("era", ""))
 	var etype := event_key(context.get("type", "generic"))
-	var templates: Array = EVENT_TEMPLATES[etype]
-	var tpl: String = templates[rng.randi() % templates.size()]
 	var lex: Dictionary = ERA_LEXICON[era]
 	var slots := _era_slots(lex, context)
 	slots["ere"] = era_with_article(era)
-	var text := _fill(tpl, slots)
-	# Le résumé de la simulation, s'il existe, ajoute un fait concret.
-	var summary := str(context.get("summary", "")).strip_edges()
-	if summary != "" and etype == "generic":
-		text = summary.trim_suffix(".") + ". " + text
-	return _polish(text)
+	# Pour les types où un gabarit inventerait des faits, le résumé de la simulation fait foi.
+	var resume := clean_summary(str(context.get("summary", "")))
+	var templates: Array = EVENT_TEMPLATES[etype]
+	if resume != "" and etype in SUMMARY_TYPES:
+		templates = SUMMARY_TEMPLATES
+		slots["resume"] = resume
+	return _render(templates[rng.randi() % templates.size()], slots)
+
+
+## Rend un gabarit précis pour un contexte (utilisé par les tests pour couvrir chaque gabarit).
+func render(tpl: String, context: Dictionary) -> String:
+	var era := era_key(context.get("era", ""))
+	var slots := _era_slots(ERA_LEXICON[era], context)
+	slots["ere"] = era_with_article(era)
+	slots["resume"] = clean_summary(str(context.get("summary", "")))
+	if context.has("lieu"):
+		slots["lieu"] = context["lieu"]
+	return _render(tpl, slots)
+
+
+func _render(tpl: String, slots: Dictionary) -> String:
+	var t := apply_agreement(tpl, {"espece": slots["_espece_pl"], "lieu": is_plural_phrase(slots["lieu"]), "acteurs": true})
+	return _polish(_fill(t, slots))
 
 
 ## Prière d'une espèce sapiente. species : {id, name, ...} ; situation : {type, enemy, ...}
@@ -482,34 +594,39 @@ func prophecy(question: String, projection: Dictionary) -> String:
 static func projection_visions(projection: Dictionary) -> Array:
 	var out := []
 	var years: Variant = projection.get("years", projection.get("horizon", null))
+	if years == null and typeof(projection.get("to_year")) in [TYPE_INT, TYPE_FLOAT] and typeof(projection.get("from_year")) in [TYPE_INT, TYPE_FLOAT]:
+		years = float(projection["to_year"]) - float(projection["from_year"])
 	var prefix := ""
 	if typeof(years) in [TYPE_INT, TYPE_FLOAT] and float(years) > 0.0:
 		prefix = "dans %s, " % _duration(float(years))
 	if projection.get("summary", "") is String and projection.get("summary", "") != "":
-		out.append(prefix + str(projection["summary"]).strip_edges().trim_suffix(".").to_lower())
+		out.append(prefix + clean_summary(str(projection["summary"])))
 		prefix = ""
-	var era: Variant = projection.get("era", projection.get("final_era", null))
+	var era: Variant = projection.get("era", projection.get("era_reached", projection.get("final_era", null)))
 	if era is String and era != "":
 		out.append(prefix + "le monde entré dans %s" % era_with_article(era))
 		prefix = ""
 	for key in ["extinctions", "extinct_species", "extinct"]:
 		var ex: Variant = projection.get(key, null)
 		if ex is Array and not ex.is_empty():
-			out.append("%s la fin de %s" % [prefix, ", ".join(ex.slice(0, 3).map(func(e): return _label(e)))])
-			prefix = ""
+			var names: Array = ex.slice(0, 3).map(func(e): return _label(e)).filter(func(l): return l != "")
+			if not names.is_empty():
+				out.append("%sla fin de %s" % [prefix, ", de ".join(names)])
+				prefix = ""
 			break
 	var dom: Variant = projection.get("dominant_species", projection.get("dominant", null))
-	if dom != null and str(dom) != "" and str(dom) != "-1":
-		out.append("%s%s régnant sur le monde" % [prefix, _label(dom)])
+	var dom_label := _label(dom) if dom != null else ""
+	if dom_label != "":
+		out.append("%s%s régnant sur le monde" % [prefix, dom_label])
 		prefix = ""
-	var evs: Variant = projection.get("events", null)
+	var evs: Variant = projection.get("key_events", projection.get("events", null))
 	if evs is Array:
 		for e in evs.slice(0, 3):
-			var s := str(e.get("summary", "")) if e is Dictionary else str(e)
-			if s.strip_edges() != "":
-				out.append(prefix + s.strip_edges().trim_suffix(".").to_lower())
+			var s := clean_summary(str(e.get("summary", "")) if e is Dictionary else str(e))
+			if s != "":
+				out.append(prefix + s)
 				prefix = ""
-	return out.map(func(v): return String(v).strip_edges())
+	return out.map(func(v): return contract(String(v).strip_edges()))
 
 
 # ---------------------------------------------------------------------------
@@ -519,13 +636,15 @@ static func projection_visions(projection: Dictionary) -> Array:
 func _era_slots(lex: Dictionary, context: Dictionary) -> Dictionary:
 	var acteurs := _pick(lex["acteurs"])
 	var savoir := _pick(lex["savoir"])
-	var esp := species_name(context, acteurs)
+	# Espèce inconnue : les acteurs de l'ère (toujours au pluriel) en tiennent lieu.
+	var esp := species_phrase(species_name(context, acteurs))
 	var date := format_year(float(context["year"])) if typeof(context.get("year")) in [TYPE_INT, TYPE_FLOAT] else "En ce jour"
 	return {
 		"ouverture": _pick(OUVERTURES),
 		"lieu": _pick(lex["lieu"]),
 		"acteurs": acteurs,
-		"espece": esp,
+		"espece": esp["text"],
+		"_espece_pl": esp["plural"],
 		"date": date,
 		"savoir": savoir,
 		"savoir_maj": savoir.substr(0, 1).to_upper() + savoir.substr(1),
@@ -547,12 +666,8 @@ static func _polish(text: String) -> String:
 	var t := text.strip_edges()
 	while t.contains("  "):
 		t = t.replace("  ", " ")
-	t = t.replace(" .", ".").replace(" ,", ",")
-	# Contractions françaises produites par l'assemblage des gabarits (« de les » -> « des »...).
-	for pair in [[" de les ", " des "], [" de le ", " du "], [" à les ", " aux "], [" à le ", " au "]]:
-		t = t.replace(pair[0], pair[1])
-	if t.begins_with("De les "):
-		t = "Des " + t.substr(7)
+	t = t.replace(" .", ".").replace(" ,", ",").replace("..", ".")
+	t = contract(t)
 	if t.length() > 0:
 		t = t.substr(0, 1).to_upper() + t.substr(1)
 	# Majuscule après chaque fin de phrase.
@@ -565,6 +680,18 @@ static func _polish(text: String) -> String:
 	return t
 
 
+## Contractions françaises produites par l'assemblage des gabarits (« de les » -> « des »...).
+static func contract(text: String) -> String:
+	var t := text
+	for pair in [[" de les ", " des "], [" de le ", " du "], [" à les ", " aux "], [" à le ", " au "]]:
+		t = t.replace(pair[0], pair[1])
+	if t.begins_with("De les "):
+		t = "Des " + t.substr(7)
+	elif t.begins_with("de les "):
+		t = "des " + t.substr(7)
+	return t
+
+
 static func _fold(s: String) -> String:
 	var t := s.to_lower()
 	for pair in [["é", "e"], ["è", "e"], ["ê", "e"], ["ë", "e"], ["â", "a"], ["à", "a"], ["ï", "i"], ["î", "i"], ["ô", "o"], ["ö", "o"], ["ù", "u"], ["û", "u"], ["ü", "u"], ["ç", "c"], ["-", " "], ["_", " "]]:
@@ -572,12 +699,18 @@ static func _fold(s: String) -> String:
 	return t.strip_edges()
 
 
+## Groupe nominal d'une espèce donnée par son nom, son dictionnaire {id, name} ou son id ("" si inconnue).
 static func _label(v: Variant) -> String:
 	if v is Dictionary:
-		return str(v.get("name", v.get("id", "?")))
+		var name := str(v.get("name", "")).strip_edges()
+		if name != "":
+			return species_phrase(name)["text"]
+		v = v.get("id", -1)
 	if typeof(v) in [TYPE_INT, TYPE_FLOAT]:
-		return "l'espèce n°%d" % int(v)
-	return str(v)
+		return "l'espèce n°%d" % int(v) if int(v) >= 0 else ""
+	if str(v).is_valid_int():
+		return _label(int(str(v)))
+	return species_phrase(str(v))["text"]
 
 
 static func _duration(n: float) -> String:
