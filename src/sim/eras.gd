@@ -19,16 +19,17 @@ const IDEAL_DT: Array[float] = [50000.0, 50000.0, 500.0, 10.0, 5.0, 2.0, 1.0, 0.
 ## avec une population pleinement étendue et sans modificateurs.
 const LEVEL_YEARS: Array[float] = [250000.0, 4000.0, 1000.0, 300.0, 150.0, 70.0, 50.0, 60.0]
 
-## Jalons franchis à 25 %, 50 % et 75 % de chaque niveau (texte : « <espèce> <jalon> »).
+## Jalons franchis à 25 %, 50 % et 75 % de chaque niveau (texte : « Les <espèce> <jalon> »,
+## d'où les verbes au pluriel).
 const MILESTONES := [
-	["maîtrise le feu", "développe un langage articulé", "invente l'agriculture"],
-	["invente l'écriture", "forge le bronze", "fonde les premières cités-États"],
-	["érige des forteresses", "invente le moulin", "fonde des universités"],
-	["invente l'imprimerie", "cartographie le globe", "formule la méthode scientifique"],
-	["dompte la vapeur", "électrifie ses villes", "invente le moteur à explosion"],
-	["fissionne l'atome", "envoie un satellite en orbite", "met en réseau ses ordinateurs"],
-	["greffe des implants neuronaux", "bâtit des mégapoles verticales", "éveille une IA générale"],
-	["fusionne esprit et machine", "colonise le système stellaire", "transcende la matière"],
+	["maîtrisent le feu", "développent un langage articulé", "inventent l'agriculture"],
+	["inventent l'écriture", "forgent le bronze", "fondent les premières cités-États"],
+	["érigent des forteresses", "inventent le moulin", "fondent des universités"],
+	["inventent l'imprimerie", "cartographient le globe", "formulent la méthode scientifique"],
+	["domptent la vapeur", "électrifient leurs villes", "inventent le moteur à explosion"],
+	["fissionnent l'atome", "envoient un satellite en orbite", "mettent en réseau leurs ordinateurs"],
+	["greffent des implants neuronaux", "bâtissent des mégapoles verticales", "éveillent une IA générale"],
+	["fusionnent esprit et machine", "colonisent le système stellaire", "transcendent la matière"],
 ]
 
 
