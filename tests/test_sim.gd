@@ -1,8 +1,10 @@
 extends RefCounted
 ## Tests de la simulation (src/sim/) : déterminisme, effet papillon, chaîne causale,
+## (scénario court « cretaceous », départ à -66 Ma ; le prologue est testé dans test_sim_prologue.gd)
 ## timelines, émergence de la sapience, robustesse et performance.
 
 const WorldSim := preload("res://src/sim/world_sim.gd")
+const Eras := preload("res://src/sim/eras.gd")
 
 const FRAME_YEARS := 1_000_000.0 / 60.0
 const YUCATAN := Vector2i(60, 50)
@@ -45,9 +47,9 @@ func _alive_clade(sim: RefCounted, clade: String) -> bool:
 
 
 func test_world_generation_is_deterministic() -> String:
-	var a := WorldSim.new(1234)
-	var b := WorldSim.new(1234)
-	var c := WorldSim.new(4321)
+	var a := WorldSim.new(1234, true, WorldSim.SCENARIO_CRETACEOUS)
+	var b := WorldSim.new(1234, true, WorldSim.SCENARIO_CRETACEOUS)
+	var c := WorldSim.new(4321, true, WorldSim.SCENARIO_CRETACEOUS)
 	if a.elevation != b.elevation or a.temperature != b.temperature or a.biome != b.biome:
 		return "même graine, planètes différentes"
 	if a.elevation == c.elevation:
@@ -65,8 +67,8 @@ func test_world_generation_is_deterministic() -> String:
 
 
 func test_simulation_is_deterministic() -> String:
-	var a := WorldSim.new(99)
-	var b := WorldSim.new(99)
+	var a := WorldSim.new(99, true, WorldSim.SCENARIO_CRETACEOUS)
+	var b := WorldSim.new(99, true, WorldSim.SCENARIO_CRETACEOUS)
 	var ev_a := []
 	var ev_b := []
 	for sim in [a, b]:
@@ -87,7 +89,7 @@ func test_simulation_is_deterministic() -> String:
 
 
 func test_meteor_changes_history() -> String:
-	var base := WorldSim.new(7)
+	var base := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	var with_meteor: RefCounted = base.fork()
 	var without: RefCounted = base.fork()
 	_meteor(with_meteor)
@@ -109,7 +111,7 @@ func test_meteor_changes_history() -> String:
 
 
 func test_causal_chain_reaches_divine_action() -> String:
-	var sim := WorldSim.new(3)
+	var sim := WorldSim.new(3, true, WorldSim.SCENARIO_CRETACEOUS)
 	var cons := _meteor(sim)
 	var root: Dictionary = cons[0]
 	if root.type != "divine_meteor" or root.cause_id != -1:
@@ -142,7 +144,7 @@ func test_causal_chain_reaches_divine_action() -> String:
 
 
 func test_all_divine_actions() -> String:
-	var base := WorldSim.new(11)
+	var base := WorldSim.new(11, true, WorldSim.SCENARIO_CRETACEOUS)
 	_run(base, 1_000_000.0)
 	var dom: int = base.get_dominant_species()
 	var cell := Vector2i(-1, -1)
@@ -178,7 +180,7 @@ func test_all_divine_actions() -> String:
 
 
 func test_fork_is_independent() -> String:
-	var sim := WorldSim.new(21)
+	var sim := WorldSim.new(21, true, WorldSim.SCENARIO_CRETACEOUS)
 	_run(sim, 500_000.0)
 	var before := _fingerprint(sim)
 	var f: RefCounted = sim.fork()
@@ -199,7 +201,7 @@ func test_fork_is_independent() -> String:
 
 
 func test_project_future_previews_without_side_effects() -> String:
-	var sim := WorldSim.new(5)
+	var sim := WorldSim.new(5, true, WorldSim.SCENARIO_CRETACEOUS)
 	var before := _fingerprint(sim)
 	var preview := sim.project_future(5_000_000.0)
 	if _fingerprint(sim) != before:
@@ -219,7 +221,7 @@ func test_project_future_previews_without_side_effects() -> String:
 
 
 func test_huge_steps_are_robust() -> String:
-	var sim := WorldSim.new(8)
+	var sim := WorldSim.new(8, true, WorldSim.SCENARIO_CRETACEOUS)
 	var y0 := sim.year
 	sim.step(70_000_000.0)
 	if absf(sim.year - (y0 + 70_000_000.0)) > 1.0:
@@ -241,15 +243,15 @@ func test_huge_steps_are_robust() -> String:
 
 
 func test_sapience_emerges_and_eras_advance() -> String:
-	var mammals := WorldSim.new(7)
+	var mammals := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
 	_meteor(mammals)
-	var events := _run(mammals, 70_000_000.0, 3)
+	var events := _run(mammals, 70_000_000.0, Eras.FIRST_SAPIENT_ERA + 1)
 	var sapient_ev := {}
 	for ev in events:
 		if ev.type == "sapience":
 			sapient_ev = ev
 			break
-	if sapient_ev.is_empty() or mammals.era_index() < 3:
+	if sapient_ev.is_empty() or mammals.era_index() < Eras.FIRST_SAPIENT_ERA + 1:
 		return "aucune civilisation après le météore (ère : %s)" % mammals.current_era()
 	var sid: int = sapient_ev.species_id
 	print("  avec météore : %s (%s) conscients en %d, %s en %d" % [
@@ -260,8 +262,8 @@ func test_sapience_emerges_and_eras_advance() -> String:
 	if chain[-1].type != "divine_meteor":
 		return "la sapience devrait remonter causalement jusqu'au météore"
 	# Sans météore : la sapience n'est pas réservée aux primates.
-	var saurians := WorldSim.new(7)
-	var ev2 := _run(saurians, 70_000_000.0, 2)
+	var saurians := WorldSim.new(7, true, WorldSim.SCENARIO_CRETACEOUS)
+	var ev2 := _run(saurians, 70_000_000.0, Eras.FIRST_SAPIENT_ERA)
 	for ev in ev2:
 		if ev.type == "sapience":
 			print("  sans météore : %s (%s) conscients en %d" % [saurians.species[ev.species_id].name, _clade(saurians, ev.species_id), ev.year])
@@ -272,13 +274,13 @@ func test_sapience_emerges_and_eras_advance() -> String:
 
 
 func test_performance_benchmark() -> String:
-	var sim := WorldSim.new(42)
+	var sim := WorldSim.new(42, true, WorldSim.SCENARIO_CRETACEOUS)
 	_run(sim, 2_000_000.0)
 	var mt: float = sim.benchmark(120, FRAME_YEARS, true)
 	var st: float = sim.benchmark(30, FRAME_YEARS, false)
-	var late := WorldSim.new(42)
+	var late := WorldSim.new(42, true, WorldSim.SCENARIO_CRETACEOUS)
 	_meteor(late)
-	_run(late, 70_000_000.0, 6)
+	_run(late, 70_000_000.0, Eras.FIRST_SAPIENT_ERA + 4)
 	var mt_late: float = late.benchmark(60, late.ideal_step_years(), true)
 	print("  perf : %.2f ms/pas (%d coeurs, WorkerThreadPool) | %.2f ms/pas (1 coeur) | ère %s : %.2f ms/pas" % [
 		mt, OS.get_processor_count(), st, late.current_era(), mt_late])
