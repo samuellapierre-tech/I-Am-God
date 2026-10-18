@@ -16,6 +16,12 @@ souffler une idée à des pieuvres — se propage à travers les âges et rééc
 ne lit pas la réponse : il la provoque, la regarde se dérouler, puis partage l'arbre causal qui
 l'explique.
 
+**Le météore est un choix, jamais un script.** La partie commence à la limite Crétacé-Paléogène et
+rien n'arrive tout seul : c'est au joueur de décider s'il lance l'impact de Chicxulub. Sans lui,
+les dinosaures continuent de régner et une civilisation saurienne peut naître ; avec lui,
+l'histoire des mammifères — la nôtre, ou une autre — devient possible. C'est le premier grand
+choix du jeu et le cœur de sa promesse.
+
 ### Piliers (ordre de priorité en cas d'arbitrage)
 
 | # | Pilier | Ce que ça veut dire concrètement | Ce qu'on refuse |
