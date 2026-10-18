@@ -136,11 +136,16 @@ func test_era_index() -> String:
 	return err
 
 
-func test_base_rate_slows_down_through_history() -> String:
-	var years := [-66_000_000.0, -500_000.0, -5000.0, 800.0, 1700.0, 2000.0]
-	for i in years.size() - 1:
-		if MapMath.base_years_per_second(years[i]) <= MapMath.base_years_per_second(years[i + 1]):
-			return "le temps devrait ralentir entre %s et %s" % [years[i], years[i + 1]]
+func test_base_rate_follows_sim_pacing() -> String:
+	# Le rythme vient du pas idéal de la simulation (ère / technologie), pas de l'année.
+	var steps := [50_000.0, 500.0, 10.0, 0.5]
+	for i in steps.size() - 1:
+		if MapMath.base_years_per_second(steps[i]) <= MapMath.base_years_per_second(steps[i + 1]):
+			return "le temps devrait ralentir quand le pas idéal diminue (%s -> %s)" % [steps[i], steps[i + 1]]
+	var sim := preload("res://src/sim/world_sim.gd").new(1)
+	var rate := MapMath.base_years_per_second(sim.ideal_step_years())
+	if absf(rate - sim.pacing_years_per_second()) > 1e-6 or rate < 100_000.0:
+		return "rythme initial incohérent avec la simulation : %f" % rate
 	return ""
 
 
