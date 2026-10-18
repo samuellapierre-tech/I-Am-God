@@ -47,6 +47,7 @@ func _ready() -> void:
 	structures.assets = assets
 	creatures.assets = assets
 	creatures.trail = trail
+	structures.trail = trail
 	GameState.parcel_updated.connect(_on_parcel_updated)
 	GameState.divine_action_applied.connect(_on_divine_action)
 	atmosphere.lightning_struck.connect(func(_at: Vector2) -> void: camera.shake(5.0))

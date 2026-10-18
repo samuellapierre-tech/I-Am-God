@@ -1,19 +1,27 @@
 extends Node2D
 ## Constructions de la parcelle (parcel.structures) : champs, huttes, routes, bâtiments, tours,
 ## ruines, à leurs positions `pos` (0..1) stables. Image assets/parcel/structures/<kind>.png si
-## elle existe, sinon dessin de remplacement. Apparitions / disparitions en fondu.
+## elle existe, sinon dessin de remplacement. Les nouvelles constructions sortent d'un chantier
+## (échafaudage -> bâti), les disparues s'effondrent (secousse, gravats, poussière).
 
 const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
 const ParcelAssets := preload("res://src/parcel/parcel_assets.gd")
+const TrailLayer := preload("res://src/parcel/trail_layer.gd")
 
-const FADE_TIME := 2.0
+const FADE_TIME := 0.6
+const BUILD_TIME := 5.0
+const COLLAPSE_TIME := 2.5
+## Ce qui ne se « construit » pas : apparaît simplement (les ruines, elles, restent).
+const NO_SCAFFOLD := ["ruin"]
 ## Ordre de dessin : le sol construit d'abord, les volumes ensuite.
 const LAYER := {"road": 0, "field": 1, "ruin": 2, "hut": 3, "building": 3, "tower": 4}
 ## Usages où les structures sont éclairées au néon.
 const NEON_USES := ["megacity", "arcology"]
 
 var assets: ParcelAssets
+## Poussière des chantiers et des effondrements (optionnel).
+var trail: TrailLayer
 var parcel_size := ParcelLogic.PARCEL_SIZE
 ## Repères permanents (ParcelLogic.landmarks) : les constructions s'écartent de la rivière et du
 ## rocher ; les routes les franchissent par des ponts.
@@ -23,7 +31,7 @@ var landmarks := {}:
 		_centers.clear()
 		queue_redraw()
 
-var _items := {} ## key -> {data, alpha, present}
+var _items := {} ## key -> {data, alpha, present, build 0..1, collapse 0..1}
 var _land_use := ""
 var _animating := false
 var _time := 0.0
@@ -37,6 +45,8 @@ func _ready() -> void:
 
 func apply_parcel(p: ParcelSim) -> void:
 	_land_use = p.land_use
+	# Première image d'une parcelle : tout est déjà bâti (pas de chantier général au chargement).
+	var first := _items.is_empty()
 	for item in _items.values():
 		item.present = false
 	for s in p.structures:
@@ -45,7 +55,8 @@ func apply_parcel(p: ParcelSim) -> void:
 			_items[key].present = true
 			_items[key].data = s
 		else:
-			_items[key] = {data = s, alpha = 0.0, present = true}
+			var instant := first or String(s.get("kind", "")) in NO_SCAFFOLD
+			_items[key] = {data = s, alpha = 0.0, present = true, build = 1.0 if instant else 0.0, collapse = 0.0}
 	_animating = true
 	queue_redraw()
 
@@ -92,12 +103,26 @@ func _process(delta: float) -> void:
 	var still := false
 	for key in _items.keys():
 		var item: Dictionary = _items[key]
-		var target := 1.0 if item.present else 0.0
-		item.alpha = move_toward(item.alpha, target, delta / FADE_TIME)
-		if item.alpha != target:
-			still = true
-		elif not item.present:
-			_items.erase(key)
+		if item.present:
+			item.collapse = 0.0
+			item.alpha = move_toward(item.alpha, 1.0, delta / FADE_TIME)
+			var was: float = item.build
+			item.build = move_toward(was, 1.0, delta / BUILD_TIME)
+			if was < 1.0 and trail and randf() < delta * 1.5:
+				trail.emit(TrailLayer.Kind.DUST, _center(item.data) + Vector2(randf_range(-20, 20), randf_range(-20, 20)), 0.0, 40.0)
+			still = still or item.alpha < 1.0 or item.build < 1.0
+		else:
+			if item.collapse == 0.0 and trail and item.build >= 1.0:
+				var c := _center(item.data)
+				var side := float(item.data.get("size", 0.05)) * parcel_size.y
+				for k in 4:
+					trail.emit(TrailLayer.Kind.DUST, c + Vector2.from_angle(k * TAU / 4.0 + 0.4) * side * 0.4, 0.0, side * 1.2, 2.5)
+			item.collapse = move_toward(item.collapse, 1.0, delta / COLLAPSE_TIME)
+			item.alpha = 1.0 - smoothstep(0.55, 1.0, item.collapse)
+			if item.collapse >= 1.0:
+				_items.erase(key)
+			else:
+				still = true
 	_animating = still
 	queue_redraw()
 
@@ -107,7 +132,7 @@ func _draw() -> void:
 	list.sort_custom(_draw_order)
 	for item in list:
 		if item.alpha > 0.0:
-			_draw_structure(item.data, item.alpha)
+			_draw_structure(item.data, item.alpha, item.build, item.collapse)
 
 
 func _draw_order(a: Dictionary, b: Dictionary) -> bool:
@@ -130,7 +155,7 @@ func _center(s: Dictionary) -> Vector2:
 	return c
 
 
-func _draw_structure(s: Dictionary, a: float) -> void:
+func _draw_structure(s: Dictionary, a: float, build: float, collapse: float) -> void:
 	var kind := String(s.get("kind", ""))
 	var center := _center(s)
 	var side := float(s.get("size", 0.05)) * parcel_size.y
@@ -138,9 +163,24 @@ func _draw_structure(s: Dictionary, a: float) -> void:
 	var angle := 0.0 if kind == "road" else (float(h % 4) * PI * 0.5 + (float(h % 100) / 100.0 - 0.5) * 0.25)
 	var tex := assets.structure_texture(kind, _land_use)
 	if kind == "road":
-		_draw_road(center, side, tex, a)
+		_draw_road(center, side * build, tex, a, build)
 		return
-	draw_set_transform(center, angle)
+	var grow := 1.0
+	if collapse > 0.0:
+		# Effondrement : secousse, affaissement, puis gravats.
+		center += Vector2(sin(_time * 40.0 + h), cos(_time * 37.0)) * 3.0 * (1.0 - collapse)
+		angle += collapse * 0.12 * (1.0 if h % 2 else -1.0)
+		grow = 1.0 - 0.3 * collapse
+	elif build < 1.0:
+		# Chantier : l'échafaudage monte, puis le bâti apparaît dedans.
+		draw_set_transform(center, angle)
+		_draw_scaffold(side, build, a * (1.0 - smoothstep(0.75, 1.0, build)))
+		a *= smoothstep(0.35, 0.9, build)
+		grow = lerpf(0.8, 1.0, smoothstep(0.35, 1.0, build))
+	if a <= 0.0:
+		draw_set_transform(Vector2.ZERO)
+		return
+	draw_set_transform(center, angle, Vector2.ONE * grow)
 	if tex:
 		var r := Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side))
 		draw_texture_rect(tex, r.grow(side * 0.05), false, Color(1, 1, 1, a))
@@ -152,7 +192,39 @@ func _draw_structure(s: Dictionary, a: float) -> void:
 			"tower": _draw_tower(side, h, a)
 			"ruin": _draw_ruin(side, h, a)
 			_: draw_rect(Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side)), Color(0.4, 0.4, 0.4, a))
+	if collapse > 0.0:
+		_draw_rubble(side, h, collapse)
 	draw_set_transform(Vector2.ZERO)
+
+
+## Échafaudage vu de dessus : poteaux d'angle, puis bords et croisillons qui se complètent.
+func _draw_scaffold(side: float, build: float, a: float) -> void:
+	if a <= 0.0:
+		return
+	var wood := Color(0.55, 0.4, 0.22, a)
+	var r := side * 0.5
+	var corners := [Vector2(-r, -r), Vector2(r, -r), Vector2(r, r), Vector2(-r, r)]
+	var p := clampf(build / 0.6, 0.0, 1.0)
+	for k in 4:
+		draw_rect(Rect2(corners[k] - Vector2(2.5, 2.5), Vector2(5, 5)), wood)
+		var edge := clampf(p * 4.0 - k, 0.0, 1.0)
+		if edge > 0.0:
+			draw_line(corners[k], corners[k].lerp(corners[(k + 1) % 4], edge), wood, 2.0)
+	if p >= 1.0:
+		draw_line(corners[0], corners[2], Color(wood, a * 0.7), 1.5)
+		draw_line(corners[1], corners[3], Color(wood, a * 0.7), 1.5)
+	# Planches et matériaux posés à côté.
+	draw_rect(Rect2(Vector2(r + 4.0, -r * 0.6), Vector2(side * 0.18, side * 0.5)), Color(0.62, 0.5, 0.32, a * 0.9))
+
+
+## Gravats qui s'étalent pendant l'effondrement.
+func _draw_rubble(side: float, h: int, collapse: float) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = h + 17
+	var spread := side * (0.4 + 0.5 * collapse)
+	for k in 14:
+		var p := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * spread
+		draw_circle(p, rng.randf_range(2.0, side * 0.09), Color(0.42, 0.39, 0.35, minf(1.0, collapse * 2.0)))
 
 
 # --- Placeholders (vus de haut) ---
@@ -235,10 +307,11 @@ func _draw_ruin(side: float, h: int, a: float) -> void:
 
 
 ## Routes : deux axes qui se croisent en `center`, sur `side` (size * hauteur de la parcelle).
-func _draw_road(center: Vector2, side: float, tex: Texture2D, a: float) -> void:
+## Routes : elles poussent depuis le croisement pendant le chantier (build).
+func _draw_road(center: Vector2, side: float, tex: Texture2D, a: float, build := 1.0) -> void:
 	var paved := not _land_use in ["village", "camp", "pasture", "farmland"]
 	var width := 30.0 if paved else 16.0
-	var half := maxf(side, parcel_size.x) * 0.5
+	var half := maxf(side, parcel_size.x * build) * 0.5
 	var rects := [
 		Rect2(center.x - half, center.y - width * 0.5, half * 2.0, width),
 		Rect2(center.x - width * 0.5, center.y - half, width, half * 2.0),

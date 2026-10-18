@@ -6,9 +6,16 @@ extends Node2D
 const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
 
+const ParcelParticles := preload("res://src/parcel/parcel_particles.gd")
+
 const TRANSITION_TIME := 4.0
-## Constante de temps (s) du lissage des valeurs continues.
+## Constante de temps (s) du lissage des valeurs continues ; la végétation repousse lentement.
 const SMOOTHING := 1.5
+const REGROW_SMOOTHING := 7.0
+## Une chute brutale de végétation (par mise à jour) déclenche un incendie visible.
+const FIRE_DROP := 0.1
+const FIRE_TIME := 10.0
+const SCORCH_TIME := 60.0
 
 var parcel_size := ParcelLogic.PARCEL_SIZE
 
@@ -22,6 +29,10 @@ var _land_use := "wild"
 var _river := Vector4(1, 0, 0, 0)
 var _river_target := Vector4(1, 0, 0, 0)
 var _mat: ShaderMaterial
+var _burn := 0.0
+var _burn_density := 0.0
+var _scorch := 0.0
+var _smoke: GPUParticles2D
 
 
 func _ready() -> void:
@@ -31,7 +42,20 @@ func _ready() -> void:
 		_mat.shader = load("res://shaders/parcel_terrain.gdshader")
 		material = _mat
 	_mat.set_shader_parameter("parcel_size", parcel_size)
+	_smoke = ParcelParticles.make_smoke(parcel_size * 0.5, 140)
+	_smoke.position = parcel_size * 0.5
+	_smoke.emitting = false
+	_smoke.z_index = 6
+	add_child(_smoke)
 	_push()
+
+
+## Incendie : la couverture `from_vegetation` part en fumée (front de braises, puis brûlis).
+func ignite(from_vegetation: float) -> void:
+	_burn_density = maxf(from_vegetation, _burn_density if _burn > 0.0 else 0.0)
+	_burn = 1.0
+	_scorch = 1.0
+	_smoke.emitting = true
 
 
 ## snap : nouvelle parcelle, pas de fondu depuis l'ancienne.
@@ -48,6 +72,8 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 		_state_a = tr[0]
 		_state_b = tr[1]
 		_blend = tr[2]
+	if not snap and (p.vegetation < _targets.vegetation - FIRE_DROP or (p.land_use == "crater" and _land_use != "crater")):
+		ignite(_values.vegetation)
 	_land_use = p.land_use
 	_targets = {vegetation = p.vegetation, water = p.water, temperature_c = p.temperature_c, tech = p.tech}
 	if snap:
@@ -78,7 +104,14 @@ func _process(delta: float) -> void:
 	_blend = minf(1.0, _blend + delta / TRANSITION_TIME)
 	var k := 1.0 - exp(-delta / SMOOTHING)
 	for key in _values:
-		_values[key] = lerpf(_values[key], _targets[key], k)
+		var kk := k
+		if key == "vegetation" and _targets[key] > _values[key]:
+			kk = 1.0 - exp(-delta / REGROW_SMOOTHING)
+		_values[key] = lerpf(_values[key], _targets[key], kk)
+	_burn = maxf(0.0, _burn - delta / FIRE_TIME)
+	_scorch = maxf(0.0, _scorch - delta / SCORCH_TIME)
+	if _smoke.emitting and _burn < 0.25:
+		_smoke.emitting = false
 	_river = _river.lerp(_river_target, 1.0 - exp(-delta / TRANSITION_TIME))
 	_push()
 
@@ -98,5 +131,9 @@ func _push() -> void:
 	_mat.set_shader_parameter("veg_b", _state_b.z)
 	_mat.set_shader_parameter("blend", _blend)
 	_mat.set_shader_parameter("river_state", _river)
+	_mat.set_shader_parameter("burn", _burn)
+	_mat.set_shader_parameter("burn_density", _burn_density)
+	_mat.set_shader_parameter("scorch", _scorch)
+	_mat.set_shader_parameter("grow", clampf((_targets.vegetation - _values.vegetation) * 6.0, 0.0, 1.0))
 	for key in _values:
 		_mat.set_shader_parameter(key, _values[key])

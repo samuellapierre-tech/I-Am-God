@@ -22,6 +22,13 @@ uniform float tech : hint_range(0.0, 1.0) = 0.0;
 uniform float snow_cover : hint_range(0.0, 1.0) = 0.0;
 uniform float autumn : hint_range(0.0, 1.0) = 0.0;
 
+// Transitions d'ère : incendie (front de feu sur l'ancienne couverture), brûlis persistant,
+// repousse (jeunes pousses claires en lisière).
+uniform float burn : hint_range(0.0, 1.0) = 0.0;
+uniform float burn_density : hint_range(0.0, 1.0) = 0.0;
+uniform float scorch : hint_range(0.0, 1.0) = 0.0;
+uniform float grow : hint_range(0.0, 1.0) = 0.0;
+
 // Repères permanents (règle de continuité) : rivière en S et gros rocher plat clair.
 uniform vec2 river_pts[24];
 uniform float river_width = 44.0;
@@ -289,7 +296,8 @@ void fragment() {
 
 	// Végétation : couronnes d'arbres dont la couverture suit parcel.vegetation.
 	float near_landmark = smoothstep(0.0, 1.0, (river_d - river_width * 0.5 - 6.0) / 14.0);
-	float density = clamp(vegetation * mix(veg_a, veg_b, t), 0.0, 1.0) * (1.0 - pond) * (1.0 - rock_mask) * mix(1.0, near_landmark, river_state.x);
+	float veg_mask = (1.0 - pond) * (1.0 - rock_mask) * mix(1.0, near_landmark, river_state.x);
+	float density = clamp(vegetation * mix(veg_a, veg_b, t), 0.0, 1.0) * veg_mask;
 	vec2 sway = vec2(sin(TIME * 0.8 + p.y * 0.01), cos(TIME * 0.6 + p.x * 0.01)) * 1.2;
 	float canopy = fbm(sp * 0.021 + sway * 0.021 + 5.0);
 	float thr = mix(0.92, 0.3, density);
@@ -300,8 +308,22 @@ void fragment() {
 	vec3 fall_col = mix(vec3(0.85, 0.45, 0.1), vec3(0.7, 0.18, 0.08), vnoise(sp * 0.03 + 3.0));
 	leaves = mix(leaves, fall_col, fall * smoothstep(0.3, 0.6, vnoise(sp * 0.015 + 9.0) + autumn * 0.4));
 	leaves *= 0.8 + 0.6 * clamp((canopy - thr) * 5.0, 0.0, 1.0);
+	// Repousse : lisière vert tendre.
+	leaves = mix(leaves, vec3(0.42, 0.68, 0.24), grow * (1.0 - clamp((canopy - thr) * 14.0, 0.0, 1.0)));
 	col = mix(col, col * 0.6, shadow * 0.7 * step(0.001, density));
 	col = mix(col, leaves, tree * step(0.001, density));
+
+	// Incendie : là où la forêt d'avant a disparu, charbon et braises, puis sol brûlé.
+	float burn_fire = max(burn, scorch);
+	if (burn_fire > 0.001) {
+		float old_density = clamp(burn_density * mix(veg_a, veg_b, t), 0.0, 1.0) * veg_mask;
+		float thr_old = mix(0.92, 0.3, old_density);
+		float burnt = smoothstep(thr_old, thr_old + 0.05, canopy) * (1.0 - tree) * step(0.001, old_density);
+		col = mix(col, vec3(0.08, 0.07, 0.06) + 0.05 * n1, burnt * burn_fire * 0.85);
+		float flick = 0.6 + 0.4 * sin(TIME * 11.0 + canopy * 47.0);
+		float embers = smoothstep(0.62, 0.8, vnoise(sp * 0.07 + vec2(0.0, -TIME * 0.6)));
+		col += vec3(1.0, 0.38, 0.06) * burnt * burn * embers * flick;
+	}
 
 	// Neige saisonnière (sol puis cimes) ; mares gelées.
 	float snow = snow_cover * (1.0 - liquid) * (1.0 - river_mask);
