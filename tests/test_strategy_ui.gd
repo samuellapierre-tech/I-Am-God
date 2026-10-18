@@ -35,8 +35,15 @@ func test_format() -> String:
 	if not Fmt.threat_title({title = "Impact cosmique", cataclysm = true}).begins_with("Cataclysme"):
 		return "titre de Cataclysme"
 	for id in Rules.DIFFICULTY_ORDER:
-		if not Fmt.difficulty_text(id).contains(str(Rules.DIFFICULTIES[id].actions)):
+		if not Fmt.difficulty_text(id).contains(str(Rules.DIFFICULTIES[id].actions)) 				or not Fmt.difficulty_text(id).contains("Samaël"):
 			return "texte de difficulté %s" % id
+	if Fmt.samael_reason("targets_work_mind") != "vise ton Grand Œuvre Conscience":
+		return "raison de Samaël : %s" % Fmt.samael_reason("targets_work_mind")
+	if not Fmt.samael_reason("exploits_habit_flood").contains("Déluge"):
+		return "raison d'habitude : %s" % Fmt.samael_reason("exploits_habit_flood")
+	for code in ["random", "max_damage", "chain_risk", "budget_exhausted", "oracle_foresees", "cataclysm"]:
+		if Fmt.samael_reason(code) == "":
+			return "raison sans texte : %s" % code
 	return ""
 
 
@@ -44,8 +51,10 @@ func test_game_state_wiring() -> String:
 	var gs: Node = GameStateScript.new()
 	var started := []
 	var revealed := []
+	var moves := []
 	gs.round_started.connect(func(r): started.append(r.index))
 	gs.threat_revealed.connect(func(t): revealed.append(t.id))
+	gs.samael_move.connect(func(m): moves.append(m.kind))
 	gs.new_world(7)
 	if gs.strategy == null:
 		gs.free()
@@ -53,6 +62,9 @@ func test_game_state_wiring() -> String:
 	if started != [1] or revealed.is_empty():
 		gs.free()
 		return "signaux de début de manche non relayés : %s / %s" % [started, revealed]
+	if not "taunt_hook" in moves or not "reveal" in moves:
+		gs.free()
+		return "coups de Samaël non relayés : %s" % [moves]
 	gs.configure_strategy("prophet", "apocalypse")
 	if gs.strategy.aspect != "prophet" or gs.strategy.actions_per_round != 3:
 		gs.free()

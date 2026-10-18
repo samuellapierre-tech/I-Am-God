@@ -9,6 +9,8 @@ const SAFE := Color(0.55, 0.95, 0.62)
 const DIM := Color(0.62, 0.66, 0.75)
 const TEXT := Color(0.92, 0.93, 0.96)
 
+const SAMAEL := Color(0.86, 0.5, 0.95)
+
 ## Libellés courts des Grands Œuvres pour la bande des pistes.
 const WORK_SHORT := {life = "Vie", land = "Terres", mind = "Esprit", legacy = "Cité"}
 
@@ -81,5 +83,31 @@ static func round_title(r: Dictionary) -> String:
 
 static func difficulty_text(id: String) -> String:
 	var d := Rules.difficulty(id)
-	return "%d actions par manche · %d Cataclysmes · défaite à %d effondrements" % [
-		d.actions, d.cataclysms, d.collapse_limit]
+	return "%d actions par manche · %d Cataclysmes · défaite à %d effondrements
+%s" % [
+		d.actions, d.cataclysms, d.collapse_limit, d.samael]
+
+
+## Raison de Samaël en clair (reason_code stable, voir samael.gd) ; "" si la carte n'est pas de lui.
+static func samael_reason(code: String) -> String:
+	if code.begins_with("targets_work_"):
+		var w := code.trim_prefix("targets_work_")
+		return "vise ton Grand Œuvre %s" % String(Rules.WORKS.get(w, {}).get("label", w))
+	if code.begins_with("exploits_habit_"):
+		return "tu contres toujours par %s : il l'esquive" % Rules.power_label(code.trim_prefix("exploits_habit_"))
+	match code:
+		"random":
+			return "tirée au hasard"
+		"max_damage":
+			return "ce qui te fera le plus mal"
+		"chain_risk":
+			return "frappe une espèce déjà en chute"
+		"budget_exhausted":
+			return "tu n'auras plus d'action pour la contrer"
+		"oracle_foresees":
+			return "il a lu ce futur dans l'Oracle"
+		"cataclysm":
+			return "imposée par la pioche"
+		"fallback":
+			return "carte remplacée (époque)"
+	return ""
