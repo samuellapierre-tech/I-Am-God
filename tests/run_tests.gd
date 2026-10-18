@@ -11,7 +11,9 @@ func _init() -> void:
 		for m in suite.get_method_list():
 			if not m.name.begins_with("test_"):
 				continue
-			var err: String = suite.call(m.name)
+			# Un test qui plante renvoie null : il doit compter comme un échec.
+			var res: Variant = suite.call(m.name)
+			var err := "" if typeof(res) == TYPE_STRING and res == "" else str(res if typeof(res) == TYPE_STRING else "plantage ou valeur de retour invalide")
 			if err == "":
 				print("PASS ", file, "::", m.name)
 			else:
