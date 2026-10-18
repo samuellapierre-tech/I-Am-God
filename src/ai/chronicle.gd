@@ -19,6 +19,8 @@ const Inventor := preload("res://src/ai/inventor.gd")
 const GameMaster := preload("res://src/ai/game_master.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 
+## Part des phrases d'ambiance consacrées aux visions des âges inventés (monde divergent, futur sans fin).
+const VISION_SHARE := 0.3
 ## Part des phrases d'ambiance qui rappellent un choix passé de Dieu (quand il y en a).
 const MEMORY_SHARE := 0.12
 
@@ -78,6 +80,9 @@ var _seed := 0
 var _count := 0
 var _recent_texts: Array[String] = []
 var _recent_facts: Array[String] = []
+## Mémoire anti-répétition partagée (variety.gd), posée par le narrateur ; null = sans. Avec elle,
+## une phrase déjà dite récemment n'est jamais redite : on essaie une autre sorte de phrase, sinon on se tait.
+var variety: RefCounted = null
 ## Époque effective de la phrase en cours (epoch.gd) : rien d'anachronique.
 var _epoch := Epoch.LAST
 var _parcel: ParcelNarrator
@@ -101,20 +106,52 @@ func ambient(ctx: Dictionary) -> Dictionary:
 	rng.seed = hash([_seed, _count])
 	_epoch = Epoch.current(ctx)
 	var mode: Dictionary = ctx.get("mode", {})
-	var line := {}
+	inventor.variety = variety
+	var real := bool(mode.get("real", true))
 	var past: Array = ctx.get("choices", [])
+	# Sortes de phrases à essayer, la préférée d'abord, puis les autres en repli.
+	var kinds := []
 	if bool(mode.get("just_diverged", false)):
-		line = inventor.line(ctx)
-	elif not past.is_empty() and rng.randf() < MEMORY_SHARE:
-		var c: Dictionary = past[rng.randi() % past.size()]
-		line = {"text": GameMaster.memory_line(c), "kind": "memory", "source": "ambient", "species_id": int(c.get("species_id", -1))}
-	elif not bool(mode.get("real", true)):
-		if rng.randf() < INVENTION_SHARE:
-			line = inventor.line(ctx)
-	elif rng.randf() < FACT_SHARE:
-		line = fact(ctx)
+		kinds = ["divergence"]
+	else:
+		if not past.is_empty() and rng.randf() < MEMORY_SHARE:
+			kinds.append("memory")
+		if not real:
+			if rng.randf() < VISION_SHARE:
+				kinds.append("vision")
+			if rng.randf() < INVENTION_SHARE:
+				kinds.append("invention")
+		elif rng.randf() < FACT_SHARE:
+			kinds.append("fact")
+		kinds.append("scene")
+		if variety != null:
+			# Repli : toutes les autres sortes, plutôt qu'une redite.
+			for k in (["vision", "invention"] if not real else ["fact"]) + ["memory", "scene"]:
+				if not k in kinds:
+					kinds.append(k)
+	var line := {}
+	for k in kinds:
+		match k:
+			"divergence", "invention":
+				line = inventor.line(ctx)
+			"vision":
+				line = inventor.vision(ctx)
+			"memory":
+				if not past.is_empty():
+					var c: Dictionary = past[rng.randi() % past.size()]
+					line = {"text": GameMaster.memory_line(c), "kind": "memory", "source": "ambient", "species_id": int(c.get("species_id", -1))}
+			"fact":
+				line = fact(ctx)
+			"scene":
+				line = scene(ctx)
+		var text := str(line.get("text", ""))
+		if text != "" and (variety == null or not variety.seen(text)):
+			break
+		line = {}
 	if line.is_empty():
-		line = scene(ctx)
+		return {}
+	if variety != null:
+		variety.remember(str(line["text"]))
 	line["world_mode"] = str(mode.get("label", "réel"))
 	return _remember(line)
 
@@ -122,12 +159,18 @@ func ambient(ctx: Dictionary) -> Dictionary:
 ## Un fait réel de l'époque, vrai à cette date et si possible lié à ce qu'on voit ; {} s'il n'y en a pas.
 func fact(ctx: Dictionary) -> Dictionary:
 	var era := FactBase.stage_for(ctx.get("era", ""), ctx.get("year", null))
+	# Avec une mémoire de variété, un fait dit récemment (même il y a longtemps dans la partie) attend son tour.
+	var seen_ids := []
+	if variety != null:
+		for f in FactBase.candidates(era, ctx.get("year", null)):
+			if variety.seen(str(f["t"])):
+				seen_ids.append(f["id"])
 	# On ne répète aucun des derniers faits ; s'il y en a peu de vrais à cette date, la mémoire se
 	# réduit d'autant, sans jamais redire le tout dernier.
 	var available := FactBase.candidates(era, ctx.get("year", null)).size()
 	var keep := maxi(1, mini(FACT_MEMORY, available - 1))
 	var recent := _recent_facts.slice(maxi(0, _recent_facts.size() - keep))
-	var f := FactBase.pick(era, ctx.get("year", null), situation(ctx), recent, rng)
+	var f := FactBase.pick(era, ctx.get("year", null), situation(ctx), recent + seen_ids, rng)
 	if f.is_empty():
 		return {}
 	_recent_facts.append(str(f["id"]))
@@ -172,6 +215,8 @@ func scene(ctx: Dictionary) -> Dictionary:
 		"nombre": str(int(subject.get("count", 0))),
 		"global": _compare_global(snap),
 	})
+	if text == "":
+		return {}
 	return {"text": text, "kind": "scene", "scene": kind, "source": "ambient", "species_id": m["species_id"]}
 
 
@@ -179,16 +224,26 @@ func scene(ctx: Dictionary) -> Dictionary:
 func _render_avoiding_repeat(templates: Array, m: Dictionary, ctx: Dictionary, extra: Dictionary) -> String:
 	var text := ""
 	var fallback := ""
-	for _attempt in 10:
+	var family := "scene:%d:%s" % [templates.size(), str(templates[0]).substr(0, 24)]
+	var order: Array = variety.order(family, templates.size(), rng) if variety != null else []
+	for attempt in (templates.size() * 4 if variety != null else 10):
 		var slots := _parcel.slots_for(ctx.get("era", ""), m, m.get("snapshot", {}), ctx.get("year", null))
 		slots.merge(extra, true)
 		slots["narrateur"] = AiConfig.NARRATOR_NAME
-		text = ParcelNarrator.render(templates[rng.randi() % templates.size()], slots)
+		var i: int = order[attempt % order.size()] if variety != null else rng.randi() % templates.size()
+		text = ParcelNarrator.render(templates[i], slots)
 		if not Epoch.is_clean(text, _epoch):
 			continue
+		if variety != null:
+			if variety.seen(text):
+				continue
+			variety.used(family, i)
+			return text
 		fallback = text
 		if not text in _recent_texts:
 			return text
+	if variety != null:
+		return ""
 	return fallback if fallback != "" else ParcelNarrator.render(ParcelNarrator.SAFE_TEMPLATE, _parcel.slots_for(ctx.get("era", ""), m, m.get("snapshot", {}), ctx.get("year", null)))
 
 
