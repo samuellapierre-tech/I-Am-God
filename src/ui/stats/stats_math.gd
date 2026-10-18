@@ -33,6 +33,11 @@ const LAND_USE_LABELS := {
 	arcology = "Arcologie",
 	ruins = "Ruines",
 	rewild = "Retour à la nature",
+	seabed = "Fonds marins",
+	microbial_mat = "Tapis microbiens",
+	reef = "Récif",
+	barren = "Terres nues",
+	swamp_forest = "Forêt marécageuse",
 }
 ## Usages du sol façonnés par une espèce intelligente (teinte dorée dans l'en-tête).
 const CIVILIZED_USES := ["camp", "pasture", "farmland", "village", "town", "city", "megacity", "arcology"]
