@@ -1,6 +1,6 @@
 # Architecture — I AM GOD
 
-Moteur : **Godot 4.3** (GDScript, rendu Forward+). Cible : **Steam, Windows + Linux (Steam Deck)**.
+Moteur : **Godot 4.7** (GDScript, rendu Forward+). Cible : **Steam, Windows + Linux (Steam Deck)**.
 
 ## Modules et propriétaires (une branche par module)
 
