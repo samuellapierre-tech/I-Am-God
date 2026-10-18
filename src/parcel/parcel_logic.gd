@@ -196,7 +196,7 @@ static func season_offset_c(year_t: float, base_c: float) -> float:
 
 ## Couverture neigeuse 0..1 selon la température ressentie et l'humidité (pas de neige au désert).
 static func snow_cover(effective_c: float, water: float) -> float:
-	return smoothstep(2.0, -6.0, effective_c) * clampf(0.2 + water * 1.6, 0.0, 1.0)
+	return (1.0 - smoothstep(-6.0, 2.0, effective_c)) * clampf(0.2 + water * 1.6, 0.0, 1.0)
 
 
 ## Feuillage d'automne 0..1 (zones tempérées, après l'été).
