@@ -1,0 +1,54 @@
+# La parcelle — vision (octobre 2026)
+
+> Complète [`GAME_DESIGN.md`](GAME_DESIGN.md). En cas de conflit, ce document l'emporte sur la
+> présentation (vues, caméra, HUD) ; les piliers et la simulation causale ne changent pas.
+
+## L'idée
+
+On suit **un seul morceau de terrain, grand comme l'écran**, de -66 millions d'années jusqu'à la fin
+de l'histoire. Au départ, des dinosaures y passent, broutent, chassent. Des millions d'années plus
+tard, ce même sol est peut-être une prairie à mammouths, puis un campement, des champs, un village,
+une ville, une mégapole cyberpunk… ou un cratère, une banquise, des ruines envahies par la forêt.
+
+Le joueur **voit le monde évoluer sous ses yeux, au même endroit**. C'est ce qui rend chaque choix
+lisible : si on laisse vivre les dinosaures, ce sont eux qu'on verra construire sur cette parcelle.
+
+## Deux vues
+
+| Vue | Rôle | Contrôles |
+|---|---|---|
+| **Parcelle** (par défaut) | Le terrain suivi, plein écran, vu de haut. Créatures animées, végétation, constructions, météo. | Clic : pouvoir sur la parcelle. Molette au minimum → passe au globe. |
+| **Globe** | La Terre entière en 3D. Voir l'état du monde, choisir/changer de parcelle, pouvoirs à grande échelle (météore, glaciation). | Glisser : tourner. Molette : zoomer. Zoom maximal sur un point → entre dans la parcelle. |
+
+**Tab** bascule d'une vue à l'autre. La simulation ne s'arrête jamais en changeant de vue.
+
+## Statistiques à l'écran
+
+Toujours visibles (mais discrètes) dans les deux vues :
+
+- **Chaleur** : température locale et moyenne mondiale en °C, avec courbe et tendance.
+- **Populations** : pour chaque espèce présente sur la parcelle, effectif avec flèche ▲ montante /
+  ▼ descendante, couleur par rôle (herbivore, prédateur, omnivore, espèce intelligente).
+- **Courbes** : historique température + population totale sur la fenêtre récente.
+- Année, ère, usage du sol (« Forêt sauvage », « Terres agricoles », « Mégapole »…).
+
+## Les choix à long terme
+
+Le jeu doit **pousser** le joueur à décider, pas seulement l'occuper :
+
+1. **Le météore** (début de partie) : le lancer ou non. C'est le premier grand choix.
+2. **Les crises** : quand une espèce de la parcelle s'effondre (▼ rouge prolongé), quand la chaleur
+   dérive, quand une civilisation prie — le temps ralentit et le jeu propose d'agir.
+3. **Pas de retour arrière** : l'Oracle montre un futur possible, jamais une certitude.
+
+## Fins
+
+La parcelle finit dans un état : ville florissante, ruines, désert, glace, retour à la nature, ou
+**extinction** totale. La Chronique raconte comment ce bout de terre en est arrivé là.
+
+## Terre réelle
+
+Le joueur veut une **planète Terre**. Étape 1 (maintenant) : la planète procédurale de la simulation,
+affichée sur un globe 3D. Étape 2 : relief réel de la Terre (cartes du domaine public, p. ex. NASA /
+NOAA ETOPO) et continents de la fin du Crétacé qui dérivent vers ceux d'aujourd'hui. Demande un
+téléchargement de données à valider.
