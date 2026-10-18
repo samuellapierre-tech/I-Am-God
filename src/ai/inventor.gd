@@ -92,17 +92,17 @@ const PEOPLE_TEMPLATES := [
 ## Gabarits des lignes inventées (bêtes). Emplacements : {espece} {comportement} {terre} {ciel} {aveu} {raison}.
 const BEAST_TEMPLATES := [
 	"Sur {terre}, {espece} [espece:a appris|ont appris] à {comportement}. {aveu}",
-	"Je surprends {espece} à {comportement} ; aucun livre ne m'y avait préparé.",
+	"Je surprends {espece} à {comportement} ; aucune de mes visions ne m'y avait préparé.",
 	"Dans ce monde où {raison}, {espece} [espece:passe|passent] [espece:ses|leurs] journées à {comportement}.",
 ]
 ## Bascule vers l'invention, dite une fois.
 const DIVERGENCE_TEMPLATES := [
-	"À partir d'ici, ton monde quitte l'histoire que je connais : {raison}. Je vais devoir inventer avec toi.",
-	"Mes livres s'arrêtent là, car {raison}. Ce qui suit, je le découvre en même temps que toi.",
+	"À partir d'ici, ton monde quitte l'histoire que j'ai vue : {raison}. Je vais devoir inventer avec toi.",
+	"Mes visions se troublent, car {raison}. Ce qui suit, je le découvre en même temps que toi.",
 ]
 const AVEUX := [
-	"Je ne l'avais lu nulle part : je le découvre avec toi.", "Aucune chronique n'en parlait avant moi.",
-	"Je l'écris, mais j'avoue que ça me surprend.", "",
+	"Je ne l'avais vu dans aucune vision : je le découvre avec toi.", "Ma vision se brouille, mais c'est bien ce que je vois.",
+	"Je l'écris, mais j'avoue que ça me surprend.", "Les images me viennent troubles, comme à travers l'eau.", "",
 ]
 
 var rng := RandomNumberGenerator.new()

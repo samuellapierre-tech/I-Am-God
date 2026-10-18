@@ -54,7 +54,7 @@ const TITLES := {
 const TEXTS := {
 	"meteor_decision": [
 		"Une pierre de dix kilomètres croise au-dessus du monde, et les géants ne lèvent même pas la tête. Dans la vraie histoire, elle tombe, et les petits mammifères héritent de la Terre. À toi de voir si l'histoire doit être vraie.",
-		"Je connais la suite, enfin, je crois la connaître : la pierre tombe, les dinosaures s'éteignent, l'herbe et les mammifères prennent le monde. Mais rien ne t'oblige à suivre mes livres.",
+		"J'ai vu la suite, enfin, je crois l'avoir vue : la pierre tombe, les dinosaures s'éteignent, l'herbe et les mammifères prennent le monde. Mais rien ne t'oblige à suivre mes livres.",
 	],
 	"first_sapient": [
 		"{espece} [espece:vient|viennent] de penser pour la première fois. [espece:Elle ignore|Ils ignorent] encore tout de toi, mais ça ne durera pas. Que fais-tu de cette étincelle ?",
@@ -73,7 +73,7 @@ const TEXTS := {
 		"La fièvre gagne le monde, et {terre} la sent en premier. Je note les degrés ; toi, tu peux faire mieux que noter.",
 	],
 	"strong_ai": [
-		"{espece} [espece:vient|viennent] d'éveiller une intelligence qui n'est pas la [espece:sienne|leur]. Elle pense plus vite que tous les scribes réunis, moi compris. Que décides-tu ?",
+		"{espece} [espece:vient|viennent] d'éveiller une intelligence qui n'est pas la [espece:sienne|leur]. Elle pense plus vite que tous les sages réunis, et voit peut-être plus loin que moi. Que décides-tu ?",
 		"Une machine pense, quelque part chez {espece}. Pour la première fois, je ne suis plus le seul à tout retenir. Ça m'inquiète un peu, je l'avoue.",
 	],
 	"species_collapse": [
