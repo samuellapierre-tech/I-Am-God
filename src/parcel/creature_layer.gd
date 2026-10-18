@@ -7,23 +7,31 @@ const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
 const ParcelAssets := preload("res://src/parcel/parcel_assets.gd")
 const CreatureGroup := preload("res://src/parcel/creature_group.gd")
+const TrailLayer := preload("res://src/parcel/trail_layer.gd")
 const CREATURE_SHADER := preload("res://shaders/parcel_creature.gdshader")
 
 const THREAD_MIN_AGENTS := 96
+## Probabilité qu'une proie attrapée s'échappe d'un bond au dernier moment.
+const ESCAPE_CHANCE := 0.45
 
 var assets: ParcelAssets
 ## Positions (monde) des structures habitables : destinations des espèces intelligentes.
 var spots := PackedVector2Array()
+## Marques au sol (empreintes, poussière) : TrailLayer, optionnel.
+var trail: TrailLayer
+## 0 (jour) .. 1 (nuit) : les animaux dorment plus la nuit.
+var night := 0.0
 
 var _groups := {} ## species_id -> CreatureGroup
 var _list: Array = []
 var _ctx := {}
 var _delta := 0.0
 var _quad: ArrayMesh
+var _rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
-	_quad = _make_quad()
+	_quad = ParcelLogic.unit_quad()
 	if assets == null:
 		assets = ParcelAssets.new()
 
@@ -70,6 +78,7 @@ func _process(delta: float) -> void:
 			_step_group(i)
 	for g: CreatureGroup in _list:
 		g.flush()
+		_handle_emits(g)
 		if g.is_empty() and g.active_count() == 0:
 			if g.mmi:
 				g.mmi.queue_free()
@@ -84,17 +93,51 @@ func _step_group(i: int) -> void:
 ## Instantané en lecture seule partagé par les tâches : proies, chasseurs en action, destinations.
 func _build_context() -> void:
 	var prey := PackedVector2Array()
+	var prey_len := PackedFloat32Array()
 	var hunters := PackedVector2Array()
 	for g: CreatureGroup in _groups.values():
-		var is_prey := g.role == "herbivore" or g.role == "omnivore"
+		var is_prey := g.is_prey()
 		for i in g.pos.size():
 			if g.leaving[i] == 1 or g.alpha[i] < 0.3:
 				continue
-			if is_prey:
+			var st := g.state[i]
+			if is_prey and st != CreatureGroup.DOWN:
 				prey.append(g.pos[i])
-			elif g.role == "carnivore" and g.state[i] == CreatureGroup.RUN:
+				prey_len.append(g.length)
+			elif g.role == "carnivore" and (st == CreatureGroup.RUN or st == CreatureGroup.POUNCE):
 				hunters.append(g.pos[i])
-	_ctx = {prey = prey, hunters = hunters, spots = spots}
+	_ctx = {prey = prey, prey_len = prey_len, hunters = hunters, spots = spots, night = night}
+
+
+## Thread principal : traces au sol et proies attrapées (qui touchent d'autres groupes).
+func _handle_emits(g: CreatureGroup) -> void:
+	var e := g.emits
+	var k := 0
+	while k + CreatureGroup.EMIT_STRIDE <= e.size():
+		var kind := int(e[k])
+		var p := Vector2(e[k + 1], e[k + 2])
+		match kind:
+			CreatureGroup.EMIT_FOOTPRINT:
+				if trail:
+					trail.emit(TrailLayer.Kind.FOOTPRINT, p, e[k + 3], e[k + 4])
+			CreatureGroup.EMIT_DUST:
+				if trail:
+					trail.emit(TrailLayer.Kind.DUST, p, e[k + 3], e[k + 4])
+			CreatureGroup.EMIT_CATCH:
+				_resolve_catch(p)
+		k += CreatureGroup.EMIT_STRIDE
+
+
+func _resolve_catch(p: Vector2) -> void:
+	for g: CreatureGroup in _groups.values():
+		if not g.is_prey():
+			continue
+		var i := g.nearest_agent(p, g.length * 0.6 + 30.0)
+		if i >= 0:
+			g.strike(i, p, _rng.randf() < ESCAPE_CHANCE)
+			if trail:
+				trail.emit(TrailLayer.Kind.DUST, g.pos[i], 0.0, g.length * 0.8)
+			return
 
 
 func _refresh_look(g: CreatureGroup) -> void:
@@ -132,17 +175,3 @@ func _length_of(node: Node) -> float:
 		if g.mmi == node:
 			return g.length
 	return 0.0
-
-
-## Quadrilatère unité centré, UV explicites (image tête vers +x, non retournée).
-static func _make_quad() -> ArrayMesh:
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = PackedVector2Array([
-		Vector2(-0.5, -0.5), Vector2(0.5, -0.5), Vector2(0.5, 0.5), Vector2(-0.5, 0.5)])
-	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array([
-		Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)])
-	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 0, 2, 3])
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh

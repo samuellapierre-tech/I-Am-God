@@ -39,7 +39,7 @@ func test_reconcile_counts() -> String:
 func test_group_tracks_count_exactly() -> String:
 	var g := CreatureGroup.new(4, Vector2i(10, 20))
 	g.set_species({role = "herbivore", clade = "dinosaure", size = 0.8})
-	var ctx := {prey = PackedVector2Array(), hunters = PackedVector2Array(), spots = PackedVector2Array()}
+	var ctx := {prey = PackedVector2Array(), prey_len = PackedFloat32Array(), hunters = PackedVector2Array(), spots = PackedVector2Array()}
 	for target in [12, 30, 7, 7, 0, 18, 40, 3]:
 		g.set_target(target)
 		if g.active_count() != target:
@@ -56,7 +56,7 @@ func test_group_tracks_count_exactly() -> String:
 func test_group_fades_instead_of_jumping() -> String:
 	var g := CreatureGroup.new(1, Vector2i.ZERO)
 	g.set_species({role = "carnivore", clade = "dinosaure", size = 0.9})
-	var ctx := {prey = PackedVector2Array([Vector2(500, 500)]), hunters = PackedVector2Array(), spots = PackedVector2Array()}
+	var ctx := {prey = PackedVector2Array([Vector2(500, 500)]), prey_len = PackedFloat32Array([40.0]), hunters = PackedVector2Array(), spots = PackedVector2Array()}
 	g.set_target(4)
 	for a in g.alpha:
 		if a != 0.0:
@@ -75,7 +75,7 @@ func test_group_buffer_layout() -> String:
 	var g := CreatureGroup.new(2, Vector2i.ZERO)
 	g.set_species({role = "sapient", clade = "primate", size = 0.1})
 	g.set_target(5)
-	g.step(0.1, {prey = PackedVector2Array(), hunters = PackedVector2Array(), spots = PackedVector2Array([Vector2(300, 300)])})
+	g.step(0.1, {prey = PackedVector2Array(), prey_len = PackedFloat32Array(), hunters = PackedVector2Array(), spots = PackedVector2Array([Vector2(300, 300)])})
 	if g.buffer.size() != g.capacity * CreatureGroup.STRIDE or g.capacity < 5:
 		return "tampon MultiMesh mal dimensionné : %d pour %d" % [g.buffer.size(), g.capacity]
 	for i in 5:
@@ -218,4 +218,64 @@ func test_structure_key_stable() -> String:
 		return "la clé ne doit dépendre que du type et de la position"
 	if ParcelLogic.structure_key(a) == ParcelLogic.structure_key(c):
 		return "types différents, clés identiques"
+	return ""
+
+
+func test_fallen_prey_leave_first() -> String:
+	var g := CreatureGroup.new(5, Vector2i(3, 3))
+	g.set_species({role = "herbivore", clade = "dinosaure", size = 0.5})
+	g.set_target(5)
+	g.strike(2, g.pos[2] + Vector2(10, 0), false)
+	if g.state[2] != CreatureGroup.DOWN:
+		return "la proie attrapée doit être à terre"
+	g.set_target(4)
+	if g.leaving[2] != 1:
+		return "la baisse d'effectif doit d'abord emporter la proie à terre"
+	if g.active_count() != 4:
+		return "4 actifs attendus, %d" % g.active_count()
+	g.strike(0, g.pos[0] + Vector2(10, 0), true)
+	return _expect(g.state[0], CreatureGroup.RUN, "proie qui s'échappe")
+
+
+func test_footprints_emitted() -> String:
+	var g := CreatureGroup.new(6, Vector2i(1, 2))
+	g.set_species({role = "carnivore", clade = "dinosaure", size = 0.95})
+	g.set_target(1)
+	g.alpha[0] = 1.0
+	g.state[0] = CreatureGroup.WANDER
+	g.timer[0] = 30.0
+	g.pos[0] = Vector2(300, 500)
+	g.goal[0] = Vector2(1500, 500)
+	var ctx := {prey = PackedVector2Array(), prey_len = PackedFloat32Array(), hunters = PackedVector2Array(), spots = PackedVector2Array()}
+	var prints := 0
+	var dust := 0
+	for i in 100:
+		g.step(0.1, ctx)
+		for k in range(0, g.emits.size(), CreatureGroup.EMIT_STRIDE):
+			match int(g.emits[k]):
+				CreatureGroup.EMIT_FOOTPRINT: prints += 1
+				CreatureGroup.EMIT_DUST: dust += 1
+	if prints < 4:
+		return "un gros dinosaure qui marche doit laisser des empreintes (%d)" % prints
+	if dust == 0:
+		return "un gros dinosaure qui marche doit soulever de la poussière"
+	return ""
+
+
+func test_ambient_and_states() -> String:
+	var none := ParcelLogic.ambient_counts("crater", 0.0, 0.0, 10.0, true)
+	if none.flocks != 0 or none.swarms != 0 or none.gliders != 0:
+		return "rien ne vole au-dessus d'un cratère : %s" % str(none)
+	var lush := ParcelLogic.ambient_counts("wild", 0.9, 0.8, 25.0, true)
+	if lush.flocks < 2 or lush.swarms < 5 or lush.gliders == 0:
+		return "forêt humide : trop peu de vie d'ambiance %s" % str(lush)
+	if ParcelLogic.ambient_counts("wild", 0.9, 0.8, -10.0, false).swarms != 0:
+		return "pas d'insectes dans le grand froid"
+	var a := ParcelLogic.swarm_centers(Vector2i(7, 9), 8, PackedVector2Array())
+	if a != ParcelLogic.swarm_centers(Vector2i(7, 9), 8, PackedVector2Array()) or a.size() != 8:
+		return "centres d'essaims non déterministes"
+	for st in [[CreatureGroup.POUNCE, 3.0], [CreatureGroup.DOWN, 4.0], [CreatureGroup.EAT, 1.0], [CreatureGroup.VISIT, 0.0]]:
+		var err := _expect(ParcelLogic.visual_state(st[0]), st[1], "visual_state(%d)" % st[0])
+		if err != "":
+			return err
 	return ""

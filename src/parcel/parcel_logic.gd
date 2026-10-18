@@ -106,12 +106,58 @@ static func shape_for(clade: String, role: String, size: float) -> int:
 	return Shape.QUADRUPED
 
 
+## État affiché par shaders/parcel_creature.gdshader (0 marche, 1 broute, 2 dort, 3 court,
+## 4 à terre) pour un état de CreatureGroup (WANDER 0, GRAZE 1, SLEEP 2, RUN 3, EAT 4, VISIT 5,
+## POUNCE 6, DOWN 7).
+static func visual_state(group_state: int) -> float:
+	match group_state:
+		1, 4:
+			return 1.0
+		2:
+			return 2.0
+		3, 6:
+			return 3.0
+		7:
+			return 4.0
+	return 0.0
+
+
 ## Couleur de remplacement : teinte du rôle, légèrement décalée par espèce pour les distinguer.
 static func species_color(role: String, species_id: int) -> Color:
 	var base: Color = ROLE_COLORS.get(role, Color(0.8, 0.8, 0.8))
 	var h := posmod(hash(species_id), 1000) / 1000.0 - 0.5
 	return Color.from_hsv(fposmod(base.h + h * 0.08, 1.0), clampf(base.s + h * 0.2, 0.0, 1.0),
 		clampf(base.v - absf(h) * 0.25, 0.0, 1.0))
+
+
+## Vie d'ambiance (purement décorative) : nombre de vols d'oiseaux, d'essaims, d'ombres de
+## ptérosaures. Rien dans un cratère, peu en ville, pas d'insectes dans le froid.
+static func ambient_counts(land_use: String, vegetation: float, water: float, temperature_c: float,
+		pterosaurs: bool) -> Dictionary:
+	var hostile := land_use in ["ocean", "crater", "ice"] or temperature_c < -5.0
+	var flocks := 0
+	if land_use != "crater":
+		flocks = clampi(roundi(vegetation * 3.0) + (1 if water > 0.5 else 0), 0 if hostile else 1, 3)
+	var swarms := 0
+	if not hostile and temperature_c >= 4.0:
+		swarms = clampi(roundi((vegetation * 0.6 + water * 0.4) * 8.0), 0, 8)
+		if land_use in ["city", "megacity", "arcology"]:
+			swarms = mini(swarms, 2)
+	return {flocks = flocks, swarms = swarms, gliders = 3 if pterosaurs and land_use != "crater" else 0}
+
+
+## Centres des essaims d'insectes : stables pour une parcelle, de préférence au bord de l'eau
+## (`water_pts` : points de la rivière, peut être vide).
+static func swarm_centers(cell: Vector2i, count: int, water_pts: PackedVector2Array) -> PackedVector2Array:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([cell, "swarms"])
+	var out := PackedVector2Array()
+	for k in count:
+		var p := Vector2(rng.randf_range(0.1, 0.9), rng.randf_range(0.1, 0.9)) * PARCEL_SIZE
+		if not water_pts.is_empty() and k % 2 == 0:
+			p = water_pts[rng.randi() % water_pts.size()] + Vector2.from_angle(rng.randf() * TAU) * rng.randf_range(50.0, 90.0)
+		out.append(p.clamp(Vector2(40, 40), PARCEL_SIZE - Vector2(40, 40)))
+	return out
 
 
 # --- Assets ---
@@ -200,3 +246,19 @@ static func region_hits_parcel(region: Vector2i, radius: int, cell: Vector2i, wi
 		dx = mini(dx, width - dx)
 	var dy := region.y - cell.y
 	return dx * dx + dy * dy <= radius * radius
+
+
+# --- Rendu ---
+
+## Quadrilatère unité centré, UV explicites (image tête vers +x, non retournée), pour les MultiMesh.
+static func unit_quad() -> ArrayMesh:
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = PackedVector2Array([
+		Vector2(-0.5, -0.5), Vector2(0.5, -0.5), Vector2(0.5, 0.5), Vector2(-0.5, 0.5)])
+	arrays[Mesh.ARRAY_TEX_UV] = PackedVector2Array([
+		Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 1)])
+	arrays[Mesh.ARRAY_INDEX] = PackedInt32Array([0, 1, 2, 0, 2, 3])
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh

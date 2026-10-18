@@ -2,7 +2,8 @@ shader_type canvas_item;
 // Créatures de la parcelle (une MultiMeshInstance2D par espèce), vues de haut, tête vers +x.
 // Sans texture : silhouette procédurale par forme (ParcelLogic.Shape). Avec texture
 // (assets/parcel/creatures/<clade>.png) : l'image, animée par léger balancement.
-// INSTANCE_CUSTOM : x = phase de marche (0..1), y = état (0 marche, 1 broute, 2 dort, 3 court),
+// INSTANCE_CUSTOM : x = phase de marche (0..1), y = état (0 marche, 1 broute, 2 dort, 3 court,
+//                   4 à terre),
 //                   z = vitesse normalisée (0..1).
 // Couleur d'instance : teinte de l'espèce, alpha = fondu d'apparition / disparition.
 
@@ -54,6 +55,15 @@ float body_sdf(vec2 p, float phase, float state, float speed) {
 		d = min(d, capsule(p, vec2(0.05, 0.0), vec2(-0.12, span), 0.12, 0.04));
 		d = min(d, capsule(p, vec2(0.05, 0.0), vec2(-0.12, -span), 0.12, 0.04));
 		d = min(d, capsule(p, vec2(-0.3, 0.0), vec2(-0.6, 0.0), 0.08, 0.12));
+		return d;
+	}
+	if (state > 3.5 && shape != BIRD) {
+		// À terre, couché sur le flanc : pattes raides d'un côté.
+		d = ellipse(p, vec2(0.0, -0.05), vec2(0.42, 0.26));
+		d = min(d, ellipse(p, vec2(0.5, -0.15), vec2(0.14, 0.11)));
+		d = min(d, capsule(p, vec2(-0.35, -0.05), vec2(-0.85, -0.2), 0.08, 0.02));
+		d = min(d, capsule(p, vec2(0.22, 0.15), vec2(0.3, 0.5), 0.05, 0.04));
+		d = min(d, capsule(p, vec2(-0.2, 0.15), vec2(-0.15, 0.5), 0.05, 0.04));
 		return d;
 	}
 	if (sleeping > 0.5) {
@@ -119,6 +129,8 @@ void fragment() {
 		col.a = max(tex.a, sh);
 		if (state > 1.5 && state < 2.5) {
 			col.rgb *= 0.8;
+		} else if (state > 3.5) {
+			col.rgb *= 0.6;
 		}
 	} else {
 		vec2 p = UV * 2.0 - 1.0;
@@ -134,6 +146,8 @@ void fragment() {
 		c = mix(c * 0.45, c, smoothstep(0.0, 0.05, -d));
 		if (state > 1.5 && state < 2.5) {
 			c *= 0.8;
+		} else if (state > 3.5) {
+			c = mix(c * 0.6, vec3(0.35, 0.3, 0.28), 0.3);
 		}
 		col = vec4(c, max(inside, sh));
 		col.rgb = mix(vec3(0.0), col.rgb, inside / max(col.a, 1e-4));
