@@ -193,6 +193,7 @@ func _build_banner(root: Control) -> void:
 
 func _build_launch(root: Control) -> void:
 	_launch = _modal(root)
+	_launch.add_to_group(&"modal")  # un seul écran modal à la fois (voir DilemmaMath.MODAL_GROUP)
 	var box := _modal_box(_launch, Vector2(860, 600))
 	box.add_child(_title_label("Quel dieu seras-tu ?"))
 	box.add_child(_label("Le monde joue contre toi : menaces, Cataclysmes, effondrements. Scelle les quatre Grands Œuvres avant que le sablier ne se vide.", 16, Fmt.DIM, true))
@@ -238,6 +239,7 @@ func _build_launch(root: Control) -> void:
 
 func _build_end(root: Control) -> void:
 	_end = _modal(root)
+	_end.add_to_group(&"modal")
 	_end.visible = false
 	var box := _modal_box(_end, Vector2(720, 380))
 	_end_title = _title_label("")

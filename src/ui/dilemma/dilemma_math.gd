@@ -14,6 +14,10 @@ extends RefCounted
 const DEFAULT_SPEAKER := "Ézéchiel"
 const AI_CONFIG_PATH := "res://src/ai/ai_config.gd"
 
+## Groupe partagé des écrans modaux (écran de lancement et de fin de la stratégie, dilemme…).
+## Règle : un seul écran modal à la fois. Un écran modal ouvert = un membre du groupe visible.
+const MODAL_GROUP := &"modal"
+
 const MIN_OPTIONS := 2
 const MAX_OPTIONS := 4
 const DEFAULT_TITLE := "Un choix s'impose"
@@ -119,6 +123,27 @@ static func load_config_constants() -> Dictionary:
 		var constants := script.get_script_constant_map()
 		for k in constants:
 			out[str(k)] = constants[k]  # clés en String (la carte peut contenir des StringName)
+	return out
+
+
+## Vrai si l'un des nœuds (membres du groupe MODAL_GROUP) est un écran modal ouvert, `except` mis à part.
+## Un nœud hors de l'arbre compte selon sa propriété `visible` (utile aux tests).
+static func modal_open(nodes: Array, except: Object = null) -> bool:
+	for n in nodes:
+		if n == except or not n is CanvasItem or not is_instance_valid(n):
+			continue
+		var ci := n as CanvasItem
+		if ci.is_visible_in_tree() if ci.is_inside_tree() else ci.visible:
+			return true
+	return false
+
+
+## Retire de la file le dilemme `id` (tranché ailleurs, p. ex. délai écoulé côté Narrateur).
+static func drop_from_queue(queue: Array, id: Variant) -> Array:
+	var out := []
+	for d in queue:
+		if d is Dictionary and str(d.get("id")) != str(id):
+			out.append(d)
 	return out
 
 
