@@ -29,6 +29,9 @@ var assets := ParcelAssets.new()
 var _cell := Vector2i(-999, -999)
 ## Repères permanents de la parcelle (rivière en S, rocher) : fixés pour toute la partie.
 var _landmarks := {}
+## Pas plus d'un focus automatique de la caméra toutes les FOCUS_COOLDOWN secondes.
+const FOCUS_COOLDOWN := 12.0
+var _focus_cooldown := 0.0
 
 @onready var terrain: Terrain = $Terrain
 @onready var trail: TrailLayer = $Trail
@@ -52,6 +55,7 @@ func _ready() -> void:
 	GameState.parcel_updated.connect(_on_parcel_updated)
 	GameState.divine_action_applied.connect(_on_divine_action)
 	fx.impact.connect(_on_impact)
+	GameState.event_occurred.connect(_on_event)
 	atmosphere.lightning_struck.connect(func(_at: Vector2) -> void: camera.shake(5.0))
 	_on_parcel_updated()
 
@@ -82,7 +86,8 @@ func _on_parcel_updated() -> void:
 	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, _landmarks.river))
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_focus_cooldown = maxf(0.0, _focus_cooldown - delta)
 	# Le temps qui passe : lumière, saisons, sommeil des animaux, lumières de la nuit.
 	var night := 1.0 - atmosphere.daylight
 	daylight.color = atmosphere.sky
@@ -122,6 +127,8 @@ func _on_divine_action(action: Dictionary, _consequences: Array) -> void:
 
 ## Le pouvoir touche le sol (après la traînée pour le météore) : conséquences visuelles durables.
 func _on_impact(power: String, at: Vector2, radius: float) -> void:
+	if power in ["meteor", "flood", "extinct", "uplift", "spawn_species"]:
+		_focus_on(at, 1.5 if power == "meteor" else 1.35, true)
 	match power:
 		"meteor":
 			camera.shake(30.0)
@@ -142,6 +149,25 @@ func _on_impact(power: String, at: Vector2, radius: float) -> void:
 		"extinct":
 			camera.shake(8.0)
 			trail.emit(TrailLayer.Kind.SCORCH, at, 0.0, radius * 0.8, 40.0)
+
+
+## Événements importants de la parcelle : on s'approche doucement, puis on revient.
+func _on_event(event: Dictionary) -> void:
+	var type := String(event.get("type", ""))
+	match type:
+		"parcel_land_use":
+			_focus_on(ParcelLogic.PARCEL_SIZE * 0.5, 1.2)
+		"parcel_arrival":
+			var herd := creatures.herd_center_of(int(event.get("species_id", -1)))
+			if herd.x < INF:
+				_focus_on(herd, 1.6)
+
+
+func _focus_on(point: Vector2, zoom_factor: float, force := false) -> void:
+	if _focus_cooldown > 0.0 and not force:
+		return
+	_focus_cooldown = FOCUS_COOLDOWN
+	camera.focus(point, zoom_factor, 2.5)
 
 
 ## Cratère fumant : colonne de fumée qui s'éteint en une trentaine de secondes.

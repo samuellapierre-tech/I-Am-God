@@ -87,6 +87,17 @@ func _give_river(g: CreatureGroup) -> void:
 	g.river_wet = _river_wet
 
 
+## Centre du groupe d'une espèce (moyenne des individus visibles), INF si absente.
+func herd_center_of(species_id: int) -> Vector2:
+	var g: CreatureGroup = _groups.get(species_id)
+	if g == null or g.pos.is_empty():
+		return Vector2(INF, INF)
+	var c := Vector2.ZERO
+	for p in g.pos:
+		c += p
+	return c / g.pos.size()
+
+
 func _process(delta: float) -> void:
 	if _groups.is_empty():
 		return
