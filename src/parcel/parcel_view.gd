@@ -19,6 +19,7 @@ const TrailLayer := preload("res://src/parcel/trail_layer.gd")
 const AmbientLayer := preload("res://src/parcel/ambient_layer.gd")
 const Atmosphere := preload("res://src/parcel/atmosphere.gd")
 const NightLights := preload("res://src/parcel/night_lights.gd")
+const ParcelParticles := preload("res://src/parcel/parcel_particles.gd")
 
 ## Rayon visuel (unités monde) d'un pouvoir : base + par cellule de rayon.
 const FX_BASE_RADIUS := 90.0
@@ -50,6 +51,7 @@ func _ready() -> void:
 	structures.trail = trail
 	GameState.parcel_updated.connect(_on_parcel_updated)
 	GameState.divine_action_applied.connect(_on_divine_action)
+	fx.impact.connect(_on_impact)
 	atmosphere.lightning_struck.connect(func(_at: Vector2) -> void: camera.shake(5.0))
 	_on_parcel_updated()
 
@@ -84,7 +86,7 @@ func _process(_delta: float) -> void:
 	# Le temps qui passe : lumière, saisons, sommeil des animaux, lumières de la nuit.
 	var night := 1.0 - atmosphere.daylight
 	daylight.color = atmosphere.sky
-	terrain.set_season(atmosphere.snow_cover, atmosphere.autumn)
+	terrain.set_season(maxf(atmosphere.snow_cover, atmosphere.pulse_level("frost") * 0.9), atmosphere.autumn)
 	ambient.set_night(night)
 	creatures.night = night
 	lights.intensity = clampf(night + (1.0 - atmosphere.sky.v) * 0.3, 0.0, 1.0)
@@ -116,11 +118,41 @@ func _on_divine_action(action: Dictionary, _consequences: Array) -> void:
 		fx.spawn(power, mouse, _fx_radius(radius))
 	else:
 		fx.spawn(power, rect.get_center(), _fx_radius(radius) * 2.0)
-	if power == "meteor":
-		atmosphere.meteor_impact()
-		camera.shake(28.0)
-	elif power in ["flood", "ice_age", "extinct"]:
-		camera.shake(8.0)
+
+
+## Le pouvoir touche le sol (après la traînée pour le météore) : conséquences visuelles durables.
+func _on_impact(power: String, at: Vector2, radius: float) -> void:
+	match power:
+		"meteor":
+			camera.shake(30.0)
+			atmosphere.meteor_impact()
+			trail.emit(TrailLayer.Kind.SCORCH, at, 0.0, radius * 2.4, 110.0)
+			terrain.ignite(maxf(GameState.parcel.vegetation if GameState.parcel else 0.5, 0.5))
+			_crater_smoke(at, radius)
+		"flood":
+			camera.shake(6.0)
+			terrain.flood_pulse()
+		"ice_age":
+			camera.shake(4.0)
+			atmosphere.pulse("frost", at)
+		"plague":
+			atmosphere.pulse("miasma", at)
+		"bless":
+			atmosphere.pulse("golden", at)
+		"extinct":
+			camera.shake(8.0)
+			trail.emit(TrailLayer.Kind.SCORCH, at, 0.0, radius * 0.8, 40.0)
+
+
+## Cratère fumant : colonne de fumée qui s'éteint en une trentaine de secondes.
+func _crater_smoke(at: Vector2, radius: float) -> void:
+	var smoke := ParcelParticles.make_smoke(Vector2(radius * 0.3, radius * 0.2), 60)
+	smoke.position = at
+	smoke.z_index = 7
+	smoke.emitting = true
+	add_child(smoke)
+	get_tree().create_timer(25.0).timeout.connect(func() -> void: smoke.emitting = false)
+	get_tree().create_timer(33.0).timeout.connect(smoke.queue_free)
 
 
 func _fx_radius(cells: int) -> float:

@@ -33,6 +33,8 @@ var _burn := 0.0
 var _burn_density := 0.0
 var _scorch := 0.0
 var _smoke: GPUParticles2D
+var _flood := 0.0
+var _flood_hold := 0.0
 
 
 func _ready() -> void:
@@ -48,6 +50,12 @@ func _ready() -> void:
 	_smoke.z_index = 6
 	add_child(_smoke)
 	_push()
+
+
+## Déluge divin : les eaux montent vite, tiennent quelques secondes, puis refluent
+## (sauf si la simulation déclare la parcelle inondée).
+func flood_pulse() -> void:
+	_flood_hold = 8.0
 
 
 ## Incendie : la couverture `from_vegetation` part en fumée (front de braises, puis brûlis).
@@ -108,6 +116,9 @@ func _process(delta: float) -> void:
 		if key == "vegetation" and _targets[key] > _values[key]:
 			kk = 1.0 - exp(-delta / REGROW_SMOOTHING)
 		_values[key] = lerpf(_values[key], _targets[key], kk)
+	_flood_hold = maxf(0.0, _flood_hold - delta)
+	var flood_target := 1.0 if _flood_hold > 0.0 else (0.55 if _land_use == "flooded" else 0.0)
+	_flood = lerpf(_flood, flood_target, 1.0 - exp(-delta / (2.0 if flood_target > _flood else 8.0)))
 	_burn = maxf(0.0, _burn - delta / FIRE_TIME)
 	_scorch = maxf(0.0, _scorch - delta / SCORCH_TIME)
 	if _smoke.emitting and _burn < 0.25:
@@ -134,6 +145,7 @@ func _push() -> void:
 	_mat.set_shader_parameter("burn", _burn)
 	_mat.set_shader_parameter("burn_density", _burn_density)
 	_mat.set_shader_parameter("scorch", _scorch)
+	_mat.set_shader_parameter("flood", _flood)
 	_mat.set_shader_parameter("grow", clampf((_targets.vegetation - _values.vegetation) * 6.0, 0.0, 1.0))
 	for key in _values:
 		_mat.set_shader_parameter(key, _values[key])

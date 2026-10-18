@@ -85,6 +85,10 @@ func pulse(kind: String, at: Vector2, strength := 1.0) -> void:
 		_mat.set_shader_parameter("golden_center", at)
 
 
+func pulse_level(kind: String) -> float:
+	return float(_pulses.get(kind, 0.0))
+
+
 func effective_temperature() -> float:
 	return _base_temp + ParcelLogic.season_offset_c(year_t, _base_temp)
 

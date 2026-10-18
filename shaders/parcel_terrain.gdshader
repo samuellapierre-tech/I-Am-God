@@ -28,6 +28,8 @@ uniform float burn : hint_range(0.0, 1.0) = 0.0;
 uniform float burn_density : hint_range(0.0, 1.0) = 0.0;
 uniform float scorch : hint_range(0.0, 1.0) = 0.0;
 uniform float grow : hint_range(0.0, 1.0) = 0.0;
+// Déluge divin : les eaux montent d'abord le long de la rivière et dans les creux.
+uniform float flood : hint_range(0.0, 1.0) = 0.0;
 
 // Repères permanents (règle de continuité) : rivière en S et gros rocher plat clair.
 uniform vec2 river_pts[24];
@@ -323,6 +325,17 @@ void fragment() {
 		float flick = 0.6 + 0.4 * sin(TIME * 11.0 + canopy * 47.0);
 		float embers = smoothstep(0.62, 0.8, vnoise(sp * 0.07 + vec2(0.0, -TIME * 0.6)));
 		col += vec3(1.0, 0.38, 0.06) * burnt * burn * embers * flick;
+	}
+
+	// Déluge : nappe d'eau boueuse qui monte depuis les terres basses, frange d'écume.
+	if (flood > 0.001) {
+		float low = fbm(sp * 0.0012 + 55.0) * 0.7 + clamp(river_d / 700.0, 0.0, 1.0) * 0.5;
+		float level = flood * 1.05;
+		float under = 1.0 - smoothstep(level - 0.03, level, low);
+		float foam = (1.0 - smoothstep(0.0, 0.02, abs(low - level + 0.015))) * flood;
+		vec3 flood_col = mix(vec3(0.2, 0.32, 0.36), vec3(0.3, 0.38, 0.36), n1) + 0.03 * sin(TIME * 1.6 + low * 80.0);
+		col = mix(col, flood_col, under * 0.92);
+		col = mix(col, vec3(0.85, 0.9, 0.9), foam * 0.6);
 	}
 
 	// Neige saisonnière (sol puis cimes) ; mares gelées.
