@@ -133,6 +133,64 @@ static func _world_header(ctx: Dictionary) -> String:
 	return "\n".join(lines)
 
 
+## Maître du jeu : le LLM rédige un dilemme dont les options ont été fixées par les règles.
+static func dilemma_system() -> String:
+	return "%s Tu poses à Dieu un dilemme. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour : {\"title\": \"...\", \"text\": \"...\", \"options\": [{\"label\": \"...\", \"hint\": \"...\"}]}. Le titre fait quelques mots ; le texte fait 2 à 4 phrases de mise en scène, en tutoyant Dieu ; chaque option garde le sens de l'action indiquée, dans le même ordre ; le libellé « Ne rien faire » reste tel quel ; chaque indice est une conséquence pressentie, floue, jamais certaine. Tout en français correct." % AiConfig.persona_text()
+
+
+static func build_dilemma_prompt(d: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	lines.append("Déclencheur : %s." % str(d.get("trigger", "")))
+	var past: Array = ctx.get("choices", [])
+	if not past.is_empty():
+		var mem := PackedStringArray()
+		for c in past.slice(maxi(0, past.size() - 4)):
+			mem.append("%s (%s)" % [str(c.get("label", "")), str(c.get("era", ""))])
+		lines.append("Choix passés de Dieu, que tu peux lui rappeler : %s." % "; ".join(mem))
+	var draft := {"title": d.get("title", ""), "text": d.get("text", ""), "options": []}
+	for o in d.get("options", []):
+		draft["options"].append({"label": o["label"], "hint": o["hint"],
+			"action": str(o["action"].get("type", "rien")) if not o["action"].is_empty() else "rien"})
+	lines.append("Brouillon à réécrire à ta manière (même nombre d'options, même ordre, mêmes actions) : " + JSON.stringify(_jsonable(draft)))
+	return "\n".join(lines)
+
+
+## Fusionne la réponse JSON du LLM dans le dilemme ; garde le brouillon pour tout champ invalide.
+static func merge_dilemma_text(d: Dictionary, raw: String) -> Dictionary:
+	var out := d.duplicate(true)
+	var a := raw.find("{")
+	var b := raw.rfind("}")
+	if a < 0 or b <= a:
+		return out
+	var data: Variant = JSON.parse_string(raw.substr(a, b - a + 1))
+	if not (data is Dictionary):
+		return out
+	var title := sanitize_output(str(data.get("title", "")), 1, 80).trim_suffix(".")
+	if title != "" and not title.contains("{"):
+		out["title"] = title
+	var text := sanitize_output(str(data.get("text", "")), 4, 600)
+	var n := 0
+	for i in text.length():
+		if text[i] in [".", "!", "?", "…"] and (i + 1 == text.length() or text[i + 1] == " "):
+			n += 1
+	if n >= 2 and n <= 4 and not text.contains("{"):
+		out["text"] = text
+	var opts: Variant = data.get("options", [])
+	if opts is Array and (opts as Array).size() == (out["options"] as Array).size():
+		for i in opts.size():
+			if not (opts[i] is Dictionary):
+				continue
+			var o: Dictionary = out["options"][i]
+			var label := str(opts[i].get("label", "")).strip_edges()
+			var hint := str(opts[i].get("hint", "")).strip_edges()
+			if not (o["action"] as Dictionary).is_empty() and label != "" and label.length() <= 60 and not label.contains("{"):
+				o["label"] = label
+			if hint != "" and hint.length() <= 160 and not hint.contains("{"):
+				o["hint"] = hint
+	return out
+
+
 ## Narration d'un moment de la parcelle (ParcelNarrator) : le fait, puis l'état du terrain.
 ## context : {era, year}
 static func build_parcel_prompt(moment: Dictionary, context: Dictionary = {}) -> String:

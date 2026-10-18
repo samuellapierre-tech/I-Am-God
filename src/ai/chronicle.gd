@@ -5,7 +5,8 @@ extends RefCounted
 ## ctx : {era, year, snapshot (ParcelNarrator.snapshot), species: [{id, name, clade, diet, size,
 ##        intelligence, sapient, alive}], divine: [{type, year, species_id}], choices: [...], mode: {...}}
 ## ambient(ctx) -> {text, kind, source: "ambient", ...} ; kind : "fact" (fait réel, facts/), "scene"
-## (état de la parcelle), "invention" (monde divergent, inventor.gd), "divergence" (la bascule, dite une fois).
+## (état de la parcelle), "invention" (monde divergent, inventor.gd), "divergence" (la bascule, dite une fois),
+## "memory" (rappel d'un choix passé de Dieu, ctx.choices de game_master.gd).
 ## ctx.mode (divergence.gd) : {real, label, reasons, just_diverged…} ; absent = monde réel.
 ## ctx.recent_events : types d'événements récents (bruts et canoniques), pour choisir des faits à propos.
 ## Le narrateur parle à la première personne (« je ») et tutoie Dieu.
@@ -15,6 +16,10 @@ const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
 const Inventor := preload("res://src/ai/inventor.gd")
+const GameMaster := preload("res://src/ai/game_master.gd")
+
+## Part des phrases d'ambiance qui rappellent un choix passé de Dieu (quand il y en a).
+const MEMORY_SHARE := 0.12
 
 ## Part des phrases d'ambiance consacrées aux faits réels quand il y en a (le reste : scènes).
 const FACT_SHARE := 0.65
@@ -51,7 +56,7 @@ const SCENE_TEMPLATES := {
 	],
 	"falling": [
 		"{espece} [espece:se fait|se font] plus [espece:rare|rares] sur {terre} ; je ne sais pas encore si c'est passager.",
-		"Je compte moins de {espece} qu'hier sur {terre}. Je le note, au cas où.",
+		"Chez {espece}, je compte moins de silhouettes qu'hier sur {terre}. Je le note, au cas où.",
 	],
 	"empty": [
 		"Rien ne bouge sur {terre} ; même le vent semble attendre.",
@@ -93,8 +98,12 @@ func ambient(ctx: Dictionary) -> Dictionary:
 	rng.seed = hash([_seed, _count])
 	var mode: Dictionary = ctx.get("mode", {})
 	var line := {}
+	var past: Array = ctx.get("choices", [])
 	if bool(mode.get("just_diverged", false)):
 		line = inventor.line(ctx)
+	elif not past.is_empty() and rng.randf() < MEMORY_SHARE:
+		var c: Dictionary = past[rng.randi() % past.size()]
+		line = {"text": GameMaster.memory_line(c), "kind": "memory", "source": "ambient", "species_id": int(c.get("species_id", -1))}
 	elif not bool(mode.get("real", true)):
 		if rng.randf() < INVENTION_SHARE:
 			line = inventor.line(ctx)

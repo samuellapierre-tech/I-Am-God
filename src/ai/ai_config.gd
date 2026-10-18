@@ -67,6 +67,13 @@ const DEFAULTS := {
 		"ambient_enabled": true,
 		"ambient_min_sec": 8.0,
 		"ambient_max_sec": 15.0,
+		## Maître du jeu : dilemmes proposés à Dieu (au plus un toutes les dilemma_min_interval_sec).
+		"dilemma_enabled": true,
+		"dilemma_min_interval_sec": 180.0,
+		## Délai de réponse ; au-delà, « Ne rien faire ».
+		"dilemma_timeout_sec": 45.0,
+		## Délai avant de proposer (ou non) le météore de la fin du Crétacé.
+		"dilemma_first_delay_sec": 5.0,
 	},
 }
 
@@ -175,6 +182,8 @@ func _sanitize(section: String, key: String, value: Variant) -> Variant:
 			out = clampf(out, 0.0, 600.0)
 		"ambient_min_sec", "ambient_max_sec":
 			out = clampf(out, 1.0, 600.0)
+		"dilemma_min_interval_sec", "dilemma_timeout_sec", "dilemma_first_delay_sec":
+			out = clampf(out, 1.0, 3600.0)
 		"parcel_heat_drift_c":
 			out = clampf(out, 0.5, 50.0)
 		"model", "ollama_url", "llamacpp_url", "keep_alive":

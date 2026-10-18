@@ -10,6 +10,8 @@ extends Node
 ## - Chronique de la parcelle suivie (parcel_narrator.gd) : événements « parcel_* » et changements
 ##   marquants de GameState.parcel, au plus une fois toutes les parcel_min_interval_sec secondes ;
 ##   les grands moments mondiaux (importance >= WORLD_PRIORITY, gestes divins) passent avant.
+## - Maître du jeu (game_master.gd) : de temps en temps, un dilemme (dilemma_ready) que l'interface
+##   affiche ; resolve_dilemma(id, option) applique le choix. Le narrateur ne met jamais le jeu en pause.
 ## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance sur la parcelle.
 ##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
@@ -25,6 +27,11 @@ signal parcel_narration_ready(text: String, moment: Dictionary)
 ## Chaque ligne du fil écrit (événement du monde, de la parcelle, ambiance, dilemme…), dans l'ordre.
 ## meta : {source: "world"|"parcel"|"ambient"|"dilemma"|"manual", kind, speaker, era, year, world_mode…}.
 signal chronicle_line(text: String, meta: Dictionary)
+## Le narrateur pousse Dieu à choisir. dilemma : {id, title, text, options: [{label, hint, action}],
+## timeout_s, speaker, trigger, species_id} (voir game_master.gd). Jamais deux à la fois.
+signal dilemma_ready(dilemma: Dictionary)
+## Le dilemme est tranché (par Dieu ou, timed_out, par le délai : « Ne rien faire »).
+signal dilemma_closed(id: int, option_index: int, timed_out: bool)
 
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const LlmClient := preload("res://src/ai/llm_client.gd")
@@ -34,6 +41,7 @@ const DecisionSchema := preload("res://src/ai/decision_schema.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const Chronicle := preload("res://src/ai/chronicle.gd")
 const Divergence := preload("res://src/ai/divergence.gd")
+const GameMaster := preload("res://src/ai/game_master.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -54,6 +62,8 @@ const PARCEL_RARE_MAX_AGE := 120.0
 const PARCEL_QUEUE_SIZE := 8
 ## Un événement compte comme « récent » pour le choix des faits pendant ce délai (s).
 const RECENT_EVENT_SEC := 60.0
+## Types d'événements qui peuvent déclencher un dilemme (voir GameMaster.trigger_from_event).
+const DILEMMA_EVENT_TYPES := ["sapience", "war", "discovery", "volcanism", "parcel_land_use", "parcel_heat", "parcel_cold"]
 
 var config: AiConfig
 var client: LlmClient
@@ -62,6 +72,7 @@ var parcel_narrator: ParcelNarrator
 var chronicle: Chronicle
 ## Le monde suit-il l'histoire réelle ? (définitivement « divergent » une fois l'un des critères atteint)
 var lens: Divergence
+var game_master: GameMaster
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
 ## Chronique automatique de la parcelle (désactivable séparément).
@@ -83,6 +94,7 @@ var _next_ambient := 10.0
 var _ambient_rng := RandomNumberGenerator.new()
 ## Gestes divins déjà accomplis, du plus ancien au plus récent : [{type, year, species_id}].
 var _divine_history: Array[Dictionary] = []
+var _meteor_offered := false
 ## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
 var _recent_events: Array[Dictionary] = []
 
@@ -94,6 +106,7 @@ func _ready() -> void:
 	parcel_narrator = ParcelNarrator.new()
 	chronicle = Chronicle.new()
 	lens = Divergence.new()
+	game_master = GameMaster.new()
 	_ambient_rng.randomize()
 	client = LlmClient.new()
 	client.name = "LlmClient"
@@ -141,6 +154,12 @@ func narrate_parcel(event: Dictionary = {}) -> void:
 		_request_parcel_narration(moment, false)
 
 
+## Tranche le dilemme `id` (dilemma_ready) : applique l'action de l'option via GameState.apply_divine_action
+## (sauf « Ne rien faire »), raconte le choix et le mémorise pour la suite du récit.
+func resolve_dilemma(id: int, option_index: int) -> void:
+	_resolve_dilemma(id, option_index, false)
+
+
 ## Oracle « et si ? » : transforme le résumé de WorldSim.project_future() en prophétie. Émet oracle_answered.
 func ask_oracle(question: String, projection: Dictionary) -> void:
 	_ask(
@@ -156,6 +175,8 @@ func generate_prayer(species: Dictionary, situation: Dictionary) -> void:
 	if not sit.has("era"):
 		sit["era"] = _current_era()
 	var sid := int(species.get("id", sit.get("species_id", -1)))
+	if game_master != null:
+		game_master.consider(GameMaster.trigger_from_prayer(species, sit, _gm_context()))
 	_ask(
 		Prompts.PERSONA_PRIERE, Prompts.build_prayer_prompt(species, sit),
 		func() -> String: return procedural.prayer(species, sit),
@@ -205,6 +226,9 @@ func _apply_narrator_config() -> void:
 	auto_narrate = config.get_value("narrator", "enabled")
 	auto_narrate_parcel = config.get_value("narrator", "parcel_enabled")
 	_next_ambient = _draw_ambient_delay()
+	game_master.min_interval = config.get_value("narrator", "dilemma_min_interval_sec")
+	game_master.timeout_s = config.get_value("narrator", "dilemma_timeout_sec")
+	game_master.meteor_delay = config.get_value("narrator", "dilemma_first_delay_sec")
 	parcel_narrator.heat_drift_c = config.get_value("narrator", "parcel_heat_drift_c")
 
 
@@ -244,6 +268,7 @@ func _on_event_occurred(event: Dictionary) -> void:
 	if event.has("id") and _absorbed_ids.has(event["id"]):
 		_absorbed_ids.erase(event["id"])
 		return
+	_consider_event(event)
 	var importance := event_importance(event)
 	if importance < float(config.get_value("narrator", "min_importance")):
 		return
@@ -296,14 +321,24 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 func _on_parcel_event(event: Dictionary) -> void:
 	# Même sans narration, le suivi reste à jour : rien ne déferle d'un coup à la réactivation.
 	var moment := parcel_narrator.on_event(_enrich_parcel_event(event), ParcelNarrator.snapshot(_parcel()))
+	if not moment.is_empty():
+		_consider_event(moment)
 	if auto_narrate and auto_narrate_parcel:
 		_push_parcel(moment)
 
 
 func _on_parcel_updated() -> void:
 	for moment in parcel_narrator.observe(ParcelNarrator.snapshot(_parcel())):
+		_consider_event(moment)
 		if auto_narrate and auto_narrate_parcel:
 			_push_parcel(moment)
+	# Alertes de la parcelle (ParcelSim.alerts : [{kind, species_id, severity, summary}]).
+	var p := _parcel()
+	if p != null and "alerts" in p and p.get("alerts") is Array and not (p.get("alerts") as Array).is_empty():
+		var ctx := _gm_context()
+		for alert in p.get("alerts"):
+			if alert is Dictionary:
+				game_master.consider(GameMaster.trigger_from_alert(alert, ctx))
 
 
 func _on_parcel_changed(_cell: Vector2i) -> void:
@@ -443,12 +478,19 @@ func world_context() -> Dictionary:
 	for e in _recent_events:
 		if _clock - float(e["t"]) <= RECENT_EVENT_SEC:
 			recent.append(e["type"])
-	var ctx := {
-		"era": _current_era(), "year": _current_year(), "snapshot": ParcelNarrator.snapshot(_parcel()),
-		"species": _species_list(), "divine": _divine_history.duplicate(), "recent_events": recent,
-	}
+	var ctx := _gm_context()
+	ctx["recent_events"] = recent
 	ctx["mode"] = lens.update(ctx)
 	return ctx
+
+
+## Contexte sans effet de bord (ni bascule réel/divergent) : ère, date, parcelle, espèces, gestes, choix.
+func _gm_context() -> Dictionary:
+	return {
+		"era": _current_era(), "year": _current_year(), "snapshot": ParcelNarrator.snapshot(_parcel()),
+		"species": _species_list(), "divine": _divine_history.duplicate(),
+		"choices": game_master.choices.duplicate() if game_master != null else [],
+	}
 
 
 ## Retient le type d'un événement (brut, canonique et sans préfixe parcel_) pour choisir des faits à propos.
@@ -473,7 +515,7 @@ func _species_list() -> Array:
 			"sapient": bool(sp.get("sapient", false)), "clade": str(traits.get("clade", sp.get("clade", ""))),
 			"diet": str(traits.get("diet", "")), "size": float(traits.get("size", 0.3)),
 			"intelligence": float(traits.get("intelligence", 0.0)), "aggression": float(traits.get("aggression", 0.5)),
-			"tech_level": float(sp.get("tech_level", 0.0)),
+			"tech_level": float(sp.get("tech_level", 0.0)), "parent": int(sp.get("parent", -1)),
 		})
 	return out
 
@@ -498,11 +540,11 @@ func _narrate_ambient() -> void:
 	var prompt := Prompts.build_invention_prompt(line, ctx) if kind in ["invention", "divergence"] else Prompts.build_ambient_prompt(line, ctx)
 	_ask(Prompts.ambient_system(), prompt, fallback, on_text, 2, false)
 	if kind == "invention":
-		_maybe_enrich(line)
+		_maybe_enrich(line, ctx)
 
 
 ## Un peuple inventé est enrichi une seule fois par le LLM (coutumes, croyance, fête), puis mémorisé.
-func _maybe_enrich(line: Dictionary) -> void:
+func _maybe_enrich(line: Dictionary, ctx: Dictionary) -> void:
 	var p: Variant = line.get("profile", null)
 	if not (p is Dictionary) or not p.has("customs") or p.has("llm_requested") or not is_ai_available():
 		return
@@ -511,7 +553,7 @@ func _maybe_enrich(line: Dictionary) -> void:
 	var on_reply := func(ok: bool, raw: String) -> void:
 		if ok:
 			chronicle.inventor.enrich_from_llm(sid, raw)
-	client.request(Prompts.PERSONA_INVENTION, Prompts.build_enrich_prompt(p, world_context()), on_reply,
+	client.request(Prompts.PERSONA_INVENTION, Prompts.build_enrich_prompt(p, ctx), on_reply,
 		{"json": true, "max_tokens": 200, "temperature": 0.9})
 
 
@@ -527,6 +569,69 @@ func _emit_line(text: String, meta: Dictionary) -> void:
 	_next_ambient = _draw_ambient_delay()
 	narration_ready.emit(text)
 	chronicle_line.emit(text, m)
+
+
+# ---------------------------------------------------------------------------
+# Maître du jeu : dilemmes
+# ---------------------------------------------------------------------------
+
+func _consider_event(event: Dictionary) -> void:
+	if game_master == null or not bool(config.get_value("narrator", "dilemma_enabled")):
+		return
+	# Filtre bon marché avant de construire le contexte (la simulation émet beaucoup d'événements).
+	var t := str(event.get("type", ""))
+	if not t in DILEMMA_EVENT_TYPES or (t == "discovery" and not str(event.get("summary", "")).contains("IA ")):
+		return
+	var trig := GameMaster.trigger_from_event(event, _gm_context())
+	if not trig.is_empty():
+		game_master.consider(trig)
+
+
+func _tick_game_master(delta: float) -> void:
+	if game_master == null or _game_state == null or not bool(config.get_value("narrator", "dilemma_enabled")):
+		return
+	if not _meteor_offered and _clock >= game_master.meteor_delay:
+		var ctx := _gm_context()
+		if GameMaster.meteor_due(ctx, _clock, game_master.meteor_delay):
+			game_master.consider(GameMaster.meteor_trigger(ctx))
+		_meteor_offered = true
+	var r := game_master.tick(delta)
+	if r.has("timeout"):
+		_resolve_dilemma(int(r["timeout"]["id"]), int(r["timeout"]["option_index"]), true)
+	elif r.has("open"):
+		_open_dilemma(r["open"])
+
+
+func _open_dilemma(trigger: Dictionary) -> void:
+	var ctx := _gm_context()
+	var d := game_master.open_dilemma(trigger, ctx)
+	if d.is_empty():
+		return
+	if not is_ai_available():
+		_show_dilemma.call_deferred(d)
+		return
+	# Le LLM ne rédige que titre, texte, libellés et indices ; options et actions restent celles des règles.
+	var on_reply := func(ok: bool, raw: String) -> void:
+		_show_dilemma(Prompts.merge_dilemma_text(d, raw) if ok else d)
+	client.request(Prompts.dilemma_system(), Prompts.build_dilemma_prompt(d, ctx), on_reply,
+		{"json": true, "max_tokens": 400, "temperature": 0.8, "priority": true})
+
+
+func _show_dilemma(d: Dictionary) -> void:
+	game_master.mark_shown(int(d["id"]))
+	dilemma_ready.emit(d)
+	_emit_line(str(d["text"]), {"source": "dilemma", "kind": str(d.get("trigger", "")), "dilemma_id": int(d["id"])})
+
+
+func _resolve_dilemma(id: int, option_index: int, timed_out: bool) -> void:
+	var r := game_master.resolve(id, option_index, timed_out, _gm_context())
+	if not bool(r.get("ok", false)):
+		return
+	_emit_line(str(r["text"]), {"source": "dilemma", "kind": "choice", "dilemma_id": id, "timed_out": timed_out})
+	var action: Dictionary = r["action"]
+	if not action.is_empty() and _game_state != null and _game_state.has_method("apply_divine_action"):
+		_game_state.apply_divine_action(action)
+	dilemma_closed.emit(id, option_index, timed_out)
 
 
 func _parcel() -> Object:
@@ -560,6 +665,7 @@ func _push(event: Dictionary, importance: float) -> void:
 func _process(delta: float) -> void:
 	_clock += delta
 	_since_line += delta
+	_tick_game_master(delta)
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
 	if _auto_in_flight or _cooldown > 0.0:
