@@ -13,8 +13,8 @@ const MAX_LOG_LINES := 200
 const NARRATION_DURATION := 14.0
 
 ## Le HUD demande une narration au Narrateur lors des grands moments (changement d'ère, action divine).
-## À désactiver si un autre système se charge d'appeler Narrator.narrate().
-@export var request_narration := true
+## Désactivé par défaut : le Narrateur écoute déjà GameState et raconte ces moments lui-même.
+@export var request_narration := false
 
 var map: Node = null
 ## 0 = pause, 1..5 = vitesse.
