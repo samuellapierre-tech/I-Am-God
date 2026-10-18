@@ -1,7 +1,9 @@
 extends RefCounted
-## Faits réels : fin du Crétacé (la partie commence il y a 66 millions d'années).
+## Faits réels : fin du Crétacé (Campanien et Maastrichtien, jusqu'à l'impact de -66 Ma).
 ## Format : {t: texte (1 à 2 phrases, vrai), clade, biome, land_use, event: Array[String] (facultatifs),
 ## min_year / max_year (facultatifs : le fait n'est vrai qu'entre ces dates)}. Voir fact_base.gd.
+
+const WINDOW := [-84_000_000.0, -66_000_000.0]
 
 const FACTS := [
 	{"t": "En cette fin du Crétacé, le climat est chaud : il n'y a pas de grande calotte de glace aux pôles, et des forêts poussent jusqu'aux hautes latitudes."},

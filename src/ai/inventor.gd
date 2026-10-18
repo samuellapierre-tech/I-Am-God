@@ -21,6 +21,16 @@ const PHONEMES := {
 	"reptile": ["sil", "ha", "ix", "sa", "thé", "ssa", "ké", "zi"],
 	"ptérosaure": ["aé", "ki", "ra", "ou", "li", "ka", "sé", "vi"],
 	"chimère": ["xo", "va", "nyr", "é", "qa", "zu", "il", "or"],
+	"arthropode": ["krik", "tsa", "ch", "ki", "rr", "ak", "zi", "tek"],
+	"insecte": ["zz", "ri", "ka", "zi", "vé", "tch", "ik", "a"],
+	"mollusque": ["lu", "mo", "ou", "ol", "la", "mu", "on", "é"],
+	"poisson": ["bu", "lo", "ou", "pa", "ul", "oa", "mé", "lou"],
+	"amphibien": ["kro", "a", "ba", "lu", "ok", "rib", "é", "ta"],
+	"synapside": ["gor", "na", "dim", "ta", "ro", "ul", "ka", "mé"],
+	"microbe": ["i", "ou", "é", "si", "ti", "a", "li"],
+	"algue": ["ve", "lu", "ia", "na", "ou", "la", "mé"],
+	"éponge": ["po", "ou", "lu", "mo", "é", "fa"],
+	"plante": ["ver", "fo", "li", "an", "ra", "sé", "mu"],
 }
 
 ## Comment un peuple nomme Dieu, selon le premier geste divin dont il se souvient.
@@ -55,6 +65,16 @@ const CUSTOMS := {
 	"reptile": ["toute décision attend que le soleil du matin ait réchauffé l'assemblée", "on garde ses mues comme d'autres gardent des portraits"],
 	"ptérosaure": ["les morts sont confiés au vent du haut des falaises", "on lit l'avenir dans les courants chauds"],
 	"chimère": ["nul ne sait d'où ils viennent, pas même eux, et ils en ont fait une religion", "chacun change de nom à chaque saison"],
+	"arthropode": ["chaque mue est une fête, et l'on garde l'ancienne carapace comme un portrait", "les lois sont gravées en vibrations sur les parois des terriers"],
+	"insecte": ["les décisions se prennent en essaim, et nul ne parle en son seul nom", "chaque reine est vénérée, puis oubliée dès qu'elle meurt"],
+	"mollusque": ["on parle en changeant de couleur, et mentir se voit sur la peau", "les morts sont rendus à la mer avec leur coquille"],
+	"poisson": ["les bancs votent en tournant ensemble, et la direction choisie fait loi", "personne ne dort jamais tout à fait, par prudence"],
+	"amphibien": ["on chante la nuit au bord de l'eau, et le plus beau chant fixe les lois", "les enfants naissent dans l'eau et n'ont un nom qu'à leur sortie"],
+	"synapside": ["on se tient chaud en dormant serrés, et dormir seul est une punition", "les anciens enseignent en grondant doucement"],
+	"microbe": ["on partage ses gènes avec les voisins comme d'autres partagent le pain", "nul n'est vraiment seul : chacun est une colonie"],
+	"algue": ["on vit au rythme de la lumière, et la nuit est un temps sacré", "on se tourne ensemble vers le soleil avant de parler"],
+	"éponge": ["on filtre l'eau en silence, et le bruit est une offense", "chacun se reconstruit après une blessure, et l'on en fait une vertu"],
+	"plante": ["on ne se déplace jamais : on attend que le monde vienne à soi", "les conversations durent une saison entière"],
 }
 ## Ce que les peuples bâtissent et manient, selon l'ère atteinte.
 const MATERIALS := {
@@ -75,6 +95,16 @@ const BEHAVIORS := {
 	"reptile": ["se chauffer au soleil en rangs serrés chaque matin", "attendre sous l'eau, seuls les yeux dépassant"],
 	"ptérosaure": ["planer des heures dans les courants chauds", "pêcher en rasant la surface de l'eau"],
 	"chimère": ["changer de couleur quand on [espece:l'approche|les approche]", "dormir debout, en cercle, la tête vers l'extérieur"],
+	"arthropode": ["muer tous ensemble à la même lune", "creuser des galeries qui forment de véritables cités"],
+	"insecte": ["bâtir des nids collectifs hauts comme des arbres", "voler en nuées si denses qu'elles cachent le soleil"],
+	"mollusque": ["changer de couleur pour se parler", "dériver en longues files au gré des courants"],
+	"poisson": ["nager en bancs qui tournent comme un seul corps", "remonter les rivières bien plus loin qu'on ne l'aurait cru"],
+	"amphibien": ["chanter toute la nuit au bord des mares", "passer la saison sèche enfouis dans la boue"],
+	"synapside": ["se serrer les uns contre les autres pour garder leur chaleur", "creuser de vastes terriers pour fuir la chaleur du jour"],
+	"microbe": ["bâtir des tapis de plus en plus épais sur les rochers", "s'unir en colonies qui se comportent comme un seul être"],
+	"algue": ["couvrir les eaux de tapis verts au moindre rayon de soleil", "se laisser porter par les vagues jusqu'aux rivages"],
+	"éponge": ["filtrer l'eau des récifs jour et nuit", "repousser entières à partir d'un simple fragment"],
+	"plante": ["s'étendre en forêts qui gagnent chaque année sur les rivages", "tourner leurs feuilles vers le soleil comme un seul champ"],
 	"large": ["faire trembler le sol à chacun de leurs pas"],
 	"small": ["se faufiler partout, en bandes nombreuses"],
 }

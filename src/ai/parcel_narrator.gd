@@ -14,6 +14,7 @@ extends RefCounted
 ## land_use/from/first, species_id/species_name/role/returning, delta_c/temperature_c, summary.
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
+const FactBase := preload("res://src/ai/facts/fact_base.gd")
 
 ## Genres de moments racontés.
 const KINDS := ["land_use", "arrival", "departure", "extinction", "heat", "cold", "focus", "generic"]
@@ -75,6 +76,19 @@ const LAND_USE_VIEWS := {
 ## Décor par ère. {bati} est toujours pluriel (« des huttes… ») ; {habitants} et les bêtes sont des
 ## groupes au pluriel qui servent quand la parcelle ne nomme pas l'espèce.
 const LEXICON := {
+	"Précambrien": {
+		"ciel": ["sous un ciel orangé sans oxygène", "au bord d'un océan tiède", "dans la vapeur des sources chaudes"],
+		"fin": ["La vie est minuscule, mais elle tient bon.", "Rien ne bouge à l'œil nu, et pourtant tout commence.", "Le monde n'est encore qu'une promesse."],
+		"culture": ["des tapis de microbes"], "bati": ["des stromatolites"], "habitants": ["les premières cellules"],
+		"herbivore": ["les tapis de microbes"], "carnivore": ["les microbes chasseurs"], "omnivore": ["les cellules vagabondes"],
+	},
+	"Paléozoïque": {
+		"ciel": ["dans l'eau trouble des lagunes", "sous les fougères géantes", "au bord des marais chauds"],
+		"fin": ["La vie apprend à marcher.", "Chaque carapace est une invention.", "Les mers débordent de formes nouvelles."],
+		"culture": ["des fougères"], "bati": ["des récifs"], "habitants": ["les premiers esprits"],
+		"herbivore": ["les brouteurs des récifs"], "carnivore": ["les scorpions de mer", "les poissons cuirassés"],
+		"omnivore": ["les mille-pattes"],
+	},
 	"Mésozoïque": {
 		"ciel": ["sous un ciel lourd et chaud", "dans l'odeur des fougères", "au bord des marais fumants"],
 		"fin": ["La Terre est jeune, et elle a faim.", "Les écailles ne savent rien de toi.", "Le règne des géants continue, pour l'instant."],
@@ -592,7 +606,7 @@ func narrate(m: Dictionary, era: Variant = "", year: Variant = null) -> String:
 	if year == null:
 		year = snap.get("year", null)
 	rng.seed = hash([_seed, _count, kind, str(m.get("land_use", "")), int(m.get("species_id", -1))])
-	var e := Procedural.era_key(era)
+	var e := lexicon_key(era, year)
 	var slots := _slots(e, m, snap, year)
 	var templates := templates_for(m)
 	var idx := rng.randi() % templates.size()
@@ -644,12 +658,24 @@ static func all_templates() -> Array:
 
 ## Emplacements de gabarit pour un moment (partagés avec le fil continu, chronicle.gd).
 func slots_for(era: Variant, m: Dictionary, snap: Dictionary, year: Variant) -> Dictionary:
-	return _slots(Procedural.era_key(era), m, snap, year)
+	return _slots(lexicon_key(era, year), m, snap, year)
 
 
 ## Rend un gabarit précis pour un moment (utilisé par les tests pour couvrir chaque gabarit).
 func render_template(tpl: String, m: Dictionary, era: Variant = "", year: Variant = null) -> String:
-	return render(tpl, _slots(Procedural.era_key(era), m, m.get("snapshot", {}), year))
+	return render(tpl, _slots(lexicon_key(era, year), m, m.get("snapshot", {}), year))
+
+
+## Décor à utiliser : avant -66 Ma, l'étape datée (prologue, Trias, Jurassique) ; ensuite, l'ère.
+static func lexicon_key(era: Variant, year: Variant) -> String:
+	var stage := FactBase.stage_for(era, year)
+	if stage in ["Archéen", "Grande Oxydation", "Terre boule de neige"]:
+		return "Précambrien"
+	if stage in ["Explosion cambrienne", "Sortie des eaux", "Carbonifère", "Grande Mourance"]:
+		return "Paléozoïque"
+	if stage in ["Trias", "Jurassique"]:
+		return "Mésozoïque"
+	return Procedural.era_key(era) if LEXICON.has(Procedural.era_key(era)) else "generic"
 
 
 ## Rend un gabarit avec des emplacements déjà choisis (accords, contractions, majuscules).

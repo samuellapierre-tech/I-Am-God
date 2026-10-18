@@ -374,6 +374,9 @@ static func event_key(event_type: Variant) -> String:
 
 ## Date lisible en français à partir de l'année de la simulation.
 static func format_year(year: float) -> String:
+	if year <= -1_000_000_000.0:
+		var g := String.num(-year / 1_000_000_000.0, 1).replace(".", ",").trim_suffix(",0")
+		return "il y a %s milliard%s d'années" % [g, "s" if -year >= 2_000_000_000.0 else ""]
 	if year <= -1_000_000.0:
 		var m := -year / 1_000_000.0
 		if m >= 10.0:
@@ -720,7 +723,8 @@ static func _label(v: Variant) -> String:
 
 static func _duration(n: float) -> String:
 	if n >= 1_000_000.0:
-		return "%s millions d'années" % String.num(n / 1_000_000.0, 1).replace(".", ",").trim_suffix(",0")
+		var m := String.num(n / 1_000_000.0, 1).replace(".", ",").trim_suffix(",0")
+		return "%s million%s d'années" % [m, "" if m == "1" else "s"]
 	if n >= 1000.0:
 		return "%d mille ans" % int(round(n / 1000.0))
 	return "%d ans" % int(round(n))
