@@ -288,7 +288,7 @@ void fragment() {
 	// Mares et ruisseaux selon l'humidité.
 	float pond_noise = fbm(sp * 0.0026 + 40.0);
 	float wet = clamp((water - 0.35) / 0.65, 0.0, 1.0);
-	float pond_thr = mix(1.02, 0.5, wet);
+	float pond_thr = mix(1.02, 0.74, wet);
 	float pond = smoothstep(pond_thr, pond_thr + 0.015, pond_noise) * (1.0 - liquid) * clear_ground;
 	float shore = smoothstep(pond_thr - 0.03, pond_thr, pond_noise) * (1.0 - pond) * (1.0 - liquid) * clear_ground;
 	vec3 pond_col = mix(vec3(0.10, 0.30, 0.44), vec3(0.16, 0.40, 0.52), n1)

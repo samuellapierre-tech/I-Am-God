@@ -32,6 +32,10 @@ var _landmarks := {}
 ## Pas plus d'un focus automatique de la caméra toutes les FOCUS_COOLDOWN secondes.
 const FOCUS_COOLDOWN := 12.0
 var _focus_cooldown := 0.0
+## Pendant l'approche du météore, la parcelle n'est pas encore touchée : on retient ses mises à
+## jour jusqu'à l'impact.
+var _hold_updates := false
+var _held_update := false
 
 @onready var terrain: Terrain = $Terrain
 @onready var trail: TrailLayer = $Trail
@@ -63,6 +67,9 @@ func _ready() -> void:
 func _on_parcel_updated() -> void:
 	var p = GameState.parcel
 	if p == null:
+		return
+	if _hold_updates:
+		_held_update = true
 		return
 	var changed: bool = p.cell != _cell
 	if changed:
@@ -119,6 +126,8 @@ func _on_divine_action(action: Dictionary, _consequences: Array) -> void:
 		return
 	var rect := Rect2(Vector2.ZERO, ParcelLogic.PARCEL_SIZE)
 	var mouse := get_global_mouse_position()
+	if power == "meteor":
+		_hold_updates = true
 	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and rect.has_point(mouse):
 		fx.spawn(power, mouse, _fx_radius(radius))
 	else:
@@ -127,6 +136,11 @@ func _on_divine_action(action: Dictionary, _consequences: Array) -> void:
 
 ## Le pouvoir touche le sol (après la traînée pour le météore) : conséquences visuelles durables.
 func _on_impact(power: String, at: Vector2, radius: float) -> void:
+	if power == "meteor" and _hold_updates:
+		_hold_updates = false
+		if _held_update:
+			_held_update = false
+			_on_parcel_updated()
 	if power in ["meteor", "flood", "extinct", "uplift", "spawn_species"]:
 		_focus_on(at, 1.5 if power == "meteor" else 1.35, true)
 	match power:
