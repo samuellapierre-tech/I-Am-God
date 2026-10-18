@@ -7,6 +7,9 @@ const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 
+## Mode Éternité : consigne de ton ajoutée aux prompts.
+const ETERNITY_TONE := "Ton : contemplatif et apaisé, comme au coin du feu ; rien ne presse, ni urgence ni alarme. L'adversaire, s'il parle, est un rival doux qui lance des paris."
+
 ## Contraintes communes à tout ce que le narrateur écrit.
 const STYLE_RULES := "Réponds TOUJOURS en français correct. Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire, ne te présente pas."
 

@@ -8,6 +8,9 @@ extends RefCounted
 ## Coup : {kind: "reveal"|"strike"|"taunt_hook", threat: carte de menace, reason_code}.
 ## Chaque réplique est {t, min_era?, max_era?} (époques de epoch.gd) et passe le filtre d'anachronismes.
 ## Déterministe à graine égale.
+##
+## Deux tons (STRATEGIE.md §10) : "trial" (mode Épreuve, l'accusateur) et "eternity" (mode Éternité,
+## un rival doux qui propose des défis facultatifs au lieu d'attaquer).
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
@@ -80,6 +83,57 @@ const FROM_NARRATOR := [
 ]
 const FALLBACK := {"t": "Continue. Je regarde."}
 
+# --- Mode Éternité : un rival doux, des paris plutôt que des attaques ---------------------------
+## Défis : {espece} est l'espèce la plus visible de la parcelle (needs : "species" ou "sapient").
+const CHALLENGES := [
+	{"t": "Je parie que {espece} [espece:ne verra|ne verront] pas la prochaine glaciation.", "needs": "species"},
+	{"t": "Un pari : {espece} [espece:aura|auront] quitté ta parcelle avant la fin du chapitre.", "needs": "species"},
+	{"t": "Garde {espece} en vie jusqu'au prochain chapitre ; je parie que non.", "needs": "species"},
+	{"t": "Je parie qu'aucune espèce nouvelle n'apparaîtra sur ta parcelle avant le prochain chapitre."},
+	{"t": "Un défi, pour passer le temps : que ta parcelle reste vivante jusqu'au prochain chapitre."},
+	{"t": "Je parie que le climat de ta parcelle aura changé avant la fin du chapitre. Tu tiens le pari ?"},
+	{"t": "Je parie que ta parcelle n'aura pas de village avant la fin du chapitre.", "min_era": Epoch.FIRST_SAPIENT},
+	{"t": "Je parie que {espece} ne [espece:verra|verront] pas l'âge suivant.", "needs": "sapient", "min_era": Epoch.FIRST_SAPIENT},
+	{"t": "Je parie qu'aucune bête ne posera la patte sur la terre ferme ici avant longtemps.", "min_era": Epoch.FIRST_ANIMALS, "max_era": Epoch.CAMBRIAN},
+]
+const REVEAL_ETERNAL := [
+	{"t": "{menace} se prépare. Rien ne t'oblige à l'arrêter ; regardons ce qu'il en sortira."},
+	{"t": "{menace}, au loin. Un défi de plus, si tu as envie de le relever."},
+	{"t": "Je retourne une carte : {menace}. Fais-en ce que tu veux."},
+]
+const STRIKE_ETERNAL := [
+	{"t": "{menace} est passée. Le monde s'en remettra, à sa façon."},
+	{"t": "{menace}. Je compte le point pour moi, sans rancune."},
+	{"t": "{menace}, et la vie continue. Elle continue toujours, c'est ce qui m'agace."},
+]
+const SPITE_ETERNAL := [
+	{"t": "Joli. Je note le point pour toi."},
+	{"t": "Contrée, avec élégance. Je retiens le geste."},
+	{"t": "Tu as gagné celle-là. J'en ai d'autres, et tout notre temps."},
+]
+const HABIT_ETERNAL := [
+	{"t": "Toujours {pouvoir}. C'est presque une signature."},
+	{"t": "{pouvoir}, encore. Je commence à aimer tes manies."},
+]
+const TAUNT_ETERNAL := [
+	{"t": "Rien ne presse. Le monde a tout son temps, et nous aussi."},
+	{"t": "Je regarde avec toi, pour une fois."},
+	{"t": "Je ne parie que pour le plaisir de perdre, parfois."},
+]
+const TO_NARRATOR_ETERNAL := [
+	{"t": "Tes chroniques sont belles, {narrateur}. Je parie qu'elles seront très longues."},
+	{"t": "Écris, {narrateur}. J'aime t'entendre raconter mes défaites."},
+]
+const FROM_NARRATOR_ETERNAL := [
+	{"t": "{adversaire} parie encore. Laisse-le parier ; le monde décidera."},
+	{"t": "Même {adversaire} s'est assis pour regarder. C'est dire si le monde est beau."},
+]
+
+## "trial" (Épreuve) ou "eternity" (Éternité : rival doux).
+var tone := "trial"
+## Mémoire anti-répétition partagée (variety.gd) ; null = sans (il retombe alors sur une réplique neutre).
+var variety: RefCounted = null
+
 var rng := RandomNumberGenerator.new()
 var _seed := 0
 var _count := 0
@@ -94,7 +148,10 @@ func _init(p_seed: int = -1) -> void:
 
 
 ## Provocation de début de manche. round : {index, threats}, actions : budget (-1 inconnu).
-func round_taunt(rd: Dictionary, actions: int, epoch: int) -> Dictionary:
+## En mode Éternité, c'est un défi (ctx : contexte du fil, pour nommer l'espèce de la parcelle).
+func round_taunt(rd: Dictionary, actions: int, epoch: int, ctx: Dictionary = {}) -> Dictionary:
+	if tone == "eternity":
+		return challenge(ctx, epoch)
 	var n := (rd.get("threats", []) as Array).size()
 	return _say("round", ROUND, epoch, {
 		"menaces": "%d menace%s" % [n, "s" if n > 1 else ""] if n > 0 else "aucune menace visible",
@@ -108,37 +165,61 @@ func move_line(move: Dictionary, epoch: int) -> Dictionary:
 	var reason := str(move.get("reason_code", ""))
 	var extra := {"menace": _title(move.get("threat", {}))}
 	var line: Dictionary
+	var eternal := tone == "eternity"
 	match kind:
 		"reveal":
-			line = _say("reveal", REVEAL.get(reason, REVEAL["max_damage"]), epoch, extra)
+			line = _say("reveal", REVEAL_ETERNAL if eternal else REVEAL.get(reason, REVEAL["max_damage"]), epoch, extra)
 		"strike":
-			line = _say("strike", STRIKE.get(reason, []) + STRIKE[""], epoch, extra)
+			line = _say("strike", STRIKE_ETERNAL if eternal else STRIKE.get(reason, []) + STRIKE[""], epoch, extra)
 		_:
-			line = _say("taunt", TAUNT, epoch, extra)
+			line = _say("taunt", TAUNT_ETERNAL if eternal else TAUNT, epoch, extra)
 	line["reason"] = reason
 	return line
 
 
 ## Dépit : une menace vient d'être contrée.
 func spite_line(threat: Dictionary, epoch: int) -> Dictionary:
-	return _say("spite", SPITE, epoch, {"menace": _title(threat)})
+	return _say("spite", SPITE_ETERNAL if tone == "eternity" else SPITE, epoch, {"menace": _title(threat)})
 
 
 ## Satisfaction quand une menace frappe, sans coup de la stratégie pour le dire (repli).
 func strike_line(threat: Dictionary, epoch: int) -> Dictionary:
-	return _say("strike", STRIKE[""], epoch, {"menace": _title(threat)})
+	return _say("strike", STRIKE_ETERNAL if tone == "eternity" else STRIKE[""], epoch, {"menace": _title(threat)})
 
 
 ## Remarque sur une habitude apprise (samael_learned) : {power|counter|kind, count?}.
 func habit_line(habit: Dictionary, epoch: int) -> Dictionary:
 	var power := str(habit.get("power", habit.get("counter", habit.get("kind", ""))))
-	return _say("habit", HABIT, epoch, {"pouvoir": POWERS.get(power, "les mêmes gestes")})
+	return _say("habit", HABIT_ETERNAL if tone == "eternity" else HABIT, epoch, {"pouvoir": POWERS.get(power, "les mêmes gestes")})
 
 
 ## Échange : l'adversaire répond au narrateur (to_narrator) ou le narrateur à l'adversaire.
 func exchange_line(to_narrator: bool, epoch: int) -> Dictionary:
-	var line := _say("exchange", TO_NARRATOR if to_narrator else FROM_NARRATOR, epoch, {})
+	var pool: Array = (TO_NARRATOR_ETERNAL if to_narrator else FROM_NARRATOR_ETERNAL) if tone == "eternity" else (TO_NARRATOR if to_narrator else FROM_NARRATOR)
+	var line := _say("exchange", pool, epoch, {})
+	if line.is_empty():
+		return line
 	line["speaker"] = AiConfig.ADVERSARY_NAME if to_narrator else AiConfig.NARRATOR_NAME
+	return line
+
+
+## Un défi facultatif (mode Éternité) sur l'espèce la plus visible de la parcelle.
+func challenge(ctx: Dictionary, epoch: int) -> Dictionary:
+	var best := {}
+	var sapient := {}
+	for f in ctx.get("snapshot", {}).get("fauna", []):
+		if str(f.get("name", "")) == "":
+			continue
+		if best.is_empty() or int(f.get("count", 0)) > int(best.get("count", 0)):
+			best = f
+		if str(f.get("role", "")) == "sapient":
+			sapient = f
+	var pool := CHALLENGES.filter(func(c: Dictionary) -> bool: return (str(c.get("needs", "")) != "species" or not best.is_empty()) and (str(c.get("needs", "")) != "sapient" or not sapient.is_empty()))
+	var subject: Dictionary = sapient if not sapient.is_empty() and rng.randf() < 0.5 else best
+	var phrase := Procedural.species_phrase(str(subject.get("name", ""))) if not subject.is_empty() else {"text": "la vie", "plural": false}
+	var line := _say("challenge", pool, epoch, {"espece": phrase["text"]}, phrase["plural"])
+	if not line.is_empty():
+		line["challenge"] = true
 	return line
 
 
@@ -151,30 +232,50 @@ func wants_exchange(round_index: int) -> bool:
 
 ## Toutes les répliques (pour les tests).
 static func all_lines() -> Array:
-	var out: Array = ROUND + SPITE + TAUNT + HABIT + TO_NARRATOR + FROM_NARRATOR + [FALLBACK]
+	var out: Array = ROUND + SPITE + TAUNT + HABIT + TO_NARRATOR + FROM_NARRATOR + [FALLBACK] \
+		+ CHALLENGES + REVEAL_ETERNAL + STRIKE_ETERNAL + SPITE_ETERNAL + HABIT_ETERNAL + TAUNT_ETERNAL \
+		+ TO_NARRATOR_ETERNAL + FROM_NARRATOR_ETERNAL
 	for d in [REVEAL, STRIKE]:
 		for k in d:
 			out.append_array(d[k])
 	return out
 
 
-static func render(line: Dictionary, extra: Dictionary) -> String:
+static func render(line: Dictionary, extra: Dictionary, plural := true) -> String:
 	var slots := {"menace": "cette menace", "menaces": "plusieurs menaces", "actions": "quelques actions",
-		"pouvoir": "les mêmes gestes", "narrateur": AiConfig.NARRATOR_NAME, "adversaire": AiConfig.ADVERSARY_NAME}
+		"pouvoir": "les mêmes gestes", "narrateur": AiConfig.NARRATOR_NAME, "adversaire": AiConfig.ADVERSARY_NAME,
+		"espece": "la vie"}
 	slots.merge(extra, true)
-	return Procedural.polish(Procedural.contract(" " + str(line["t"]).format(slots)).strip_edges())
+	var tpl := Procedural.apply_agreement(str(line["t"]), {"espece": plural})
+	return Procedural.polish(Procedural.contract(" " + tpl.format(slots)).strip_edges())
 
 
-func _say(kind: String, pool: Array, epoch: int, extra: Dictionary) -> Dictionary:
+## Choisit une réplique permise à cette époque, propre, et (avec une mémoire de variété) pas dite
+## récemment, en commençant par la moins récemment utilisée. Avec une mémoire et rien de neuf à dire,
+## il se tait ({}), plutôt que de se répéter.
+func _say(kind: String, pool: Array, epoch: int, extra: Dictionary, plural := true) -> Dictionary:
 	_count += 1
 	rng.seed = hash([_seed, _count, kind])
-	var allowed := pool.filter(func(l: Dictionary) -> bool: return Epoch.allows(l, epoch))
-	if not allowed.is_empty():
-		var start := rng.randi() % allowed.size()
-		for i in allowed.size():
-			var text := render(allowed[(start + i) % allowed.size()], extra)
-			if Epoch.is_clean(text, epoch):
-				return {"text": text, "kind": kind, "speaker": AiConfig.ADVERSARY_NAME}
+	var family := "adversary:%s:%s:%d" % [tone, kind, pool.size()]
+	var order: Array = range(pool.size())
+	if variety != null:
+		order = variety.order(family, pool.size(), rng)
+	else:
+		var start := rng.randi() % maxi(1, pool.size())
+		order = order.slice(start) + order.slice(0, start)
+	for i in order:
+		var l: Dictionary = pool[i]
+		if not Epoch.allows(l, epoch):
+			continue
+		var text := render(l, extra, plural)
+		if not Epoch.is_clean(text, epoch) or (variety != null and variety.seen(text)):
+			continue
+		if variety != null:
+			variety.remember(text)
+			variety.used(family, i)
+		return {"text": text, "kind": kind, "speaker": AiConfig.ADVERSARY_NAME}
+	if variety != null:
+		return {}
 	return {"text": render(FALLBACK, extra), "kind": kind, "speaker": AiConfig.ADVERSARY_NAME}
 
 

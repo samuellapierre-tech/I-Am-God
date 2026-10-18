@@ -19,6 +19,10 @@ extends Node
 ##   par manche.
 ## - Chaque ligne a un orateur : speech_ready(speaker, text), et meta.speaker dans chronicle_line.
 ## - Zéro anachronisme (epoch.gd) : prompts avec l'époque et la liste des interdits, sortie du LLM filtrée.
+## - Mode Éternité (GameState.strategy.mode == "eternity") : ton contemplatif, chapitres ouverts et fermés
+##   par un bilan apaisé, adversaire en rival doux (défis) ; une « fin de partie » n'est qu'une fin de chapitre.
+## - Variété (variety.gd) : mémoire anti-répétition bornée partagée par tous les générateurs ; plutôt
+##   que de redire une phrase récente, le narrateur se tait.
 ## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance sur la parcelle.
 ##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
@@ -56,6 +60,7 @@ const StrategyNarrator := preload("res://src/ai/strategy_narrator.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
 const Adversary := preload("res://src/ai/adversary.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
+const Variety := preload("res://src/ai/variety.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -80,6 +85,8 @@ const PARCEL_QUEUE_SIZE := 8
 const RECENT_EVENT_SEC := 60.0
 ## Délai minimal (s) entre deux lignes de règles de la stratégie (manche, menaces, pistes).
 const STORY_GAP := 2.0
+## Lignes retenues par la mémoire anti-répétition (aucun texte narratif identique en deçà).
+const VARIETY_WINDOW := 200
 ## Lignes de règles (et répliques) en attente au plus.
 const STORY_QUEUE_SIZE := 10
 ## Répliques de l'adversaire par manche, en plus de sa provocation d'ouverture.
@@ -97,6 +104,8 @@ var lens: Divergence
 var game_master: GameMaster
 ## La voix de l'adversaire (il ne décide rien : src/strategy/ joue pour lui).
 var adversary: Adversary
+## Mémoire anti-répétition partagée (bornée) : aucun texte identique à moins de VARIETY_WINDOW lignes.
+var variety: Variety
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
 ## Chronique automatique de la parcelle (désactivable séparément).
@@ -133,6 +142,10 @@ var _round_index := 0
 var _adversary_lines := 0
 var _exchange_round := -1
 var _habits_said := {}
+## Mode Éternité : chapitre en cours, et ce qui s'y est passé (pour le bilan apaisé de fin de chapitre).
+var _chapter := 0
+var _chapter_stats := {}
+var _chapter_vitality := -1.0
 ## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
 var _recent_events: Array[Dictionary] = []
 
@@ -146,6 +159,10 @@ func _ready() -> void:
 	lens = Divergence.new()
 	game_master = GameMaster.new()
 	adversary = Adversary.new()
+	variety = Variety.new(VARIETY_WINDOW)
+	for gen in [chronicle, parcel_narrator, procedural, adversary]:
+		gen.variety = variety
+	chronicle.inventor.variety = variety
 	_ambient_rng.randomize()
 	client = LlmClient.new()
 	client.name = "LlmClient"
@@ -308,6 +325,8 @@ func _connect_game_state() -> void:
 
 func _on_event_occurred(event: Dictionary) -> void:
 	_note_event_type(str(event.get("type", "")))
+	if str(event.get("type", "")) == "sapience":
+		_note_chapter("sapience")
 	if str(event.get("type", "")).begins_with("parcel_"):
 		_on_parcel_event(event)
 		return
@@ -371,6 +390,11 @@ func _on_parcel_event(event: Dictionary) -> void:
 	var moment := parcel_narrator.on_event(_enrich_parcel_event(event), ParcelNarrator.snapshot(_parcel()))
 	if not moment.is_empty():
 		_consider_event(moment)
+		var lu := str(moment.get("land_use", ""))
+		var label: String = ParcelNarrator.LAND_USE_LABELS.get(lu, "")
+		if label == "" and _parcel() != null and "land_use_label" in _parcel():
+			label = str(_parcel().get("land_use_label")).to_lower()
+		_note_chapter(str(moment.get("kind", "")), label)
 	if auto_narrate and auto_narrate_parcel:
 		_push_parcel(moment)
 
@@ -500,7 +524,8 @@ func _request_parcel_narration(moment: Dictionary, automatic: bool) -> void:
 		if automatic:
 			_auto_in_flight = false
 		_emit_line(text, {"source": "parcel", "kind": str(moment.get("kind", ""))})
-		parcel_narration_ready.emit(text, moment)
+		if text.strip_edges() != "":
+			parcel_narration_ready.emit(text, moment)
 	_ask(
 		Prompts.parcel_system(), Prompts.build_parcel_prompt(moment, {"era": era, "year": year}),
 		func() -> String: return parcel_narrator.narrate(moment, era, year, epoch), on_text, 2, not automatic, epoch)
@@ -608,6 +633,13 @@ func _maybe_enrich(line: Dictionary, ctx: Dictionary) -> void:
 
 ## Toute ligne du fil passe par ici : compatibilité (narration_ready) + fil (chronicle_line).
 func _emit_line(text: String, meta: Dictionary) -> void:
+	if text.strip_edges() == "":
+		# Rien de neuf à dire sans se répéter : le narrateur se tait (le fil reste calme).
+		_since_line = 0.0
+		_next_ambient = _draw_ambient_delay()
+		return
+	if variety != null and not variety.seen(text):
+		variety.remember(text)
 	var m := meta.duplicate()
 	var speaker := str(meta.get("speaker", AiConfig.NARRATOR_NAME))
 	m["speaker"] = speaker
@@ -750,22 +782,32 @@ func _on_round_started(rd: Dictionary) -> void:
 	for t in rd.get("threats", []):
 		if t is Dictionary and t.has("id"):
 			_announced_threats[t["id"]] = true
-	_push_story(StrategyNarrator.round_line(rd, actions), "round", {"round": int(rd.get("index", 0))})
+	var eternity := _is_eternity()
+	adversary.tone = "eternity" if eternity else "trial"
+	if eternity:
+		# Le narrateur ferme le chapitre précédent par un bilan apaisé, puis ouvre le suivant.
+		_close_chapter()
+		_chapter = int(rd.get("index", _chapter + 1))
+		_push_story(StrategyNarrator.chapter_open(rd), "round", {"round": _chapter, "chapter": true})
+	else:
+		_push_story(StrategyNarrator.round_line(rd, actions), "round", {"round": int(rd.get("index", 0))})
 	_round_index = int(rd.get("index", _round_index + 1))
 	_adversary_lines = 0
 	_habits_said = {}
 	# L'adversaire provoque en début de manche ; parfois, le narrateur lui répond (un échange par manche).
 	var epoch := _current_epoch()
+	var ctx := _gm_context()
 	if _exchange_round != _round_index and adversary.wants_exchange(_round_index):
 		_exchange_round = _round_index
 		if _round_index % 2 == 1:
 			# L'adversaire répond directement à l'annonce du narrateur.
 			_push_adversary(adversary.exchange_line(true, epoch), epoch, true)
 		else:
-			_push_adversary(adversary.round_taunt(rd, actions, epoch), epoch, true)
+			_push_adversary(adversary.round_taunt(rd, actions, epoch, ctx), epoch, true)
 			_push_adversary(adversary.exchange_line(false, epoch), epoch, true)
 	else:
-		_push_adversary(adversary.round_taunt(rd, actions, epoch), epoch, true)
+		# Épreuve : une provocation. Éternité : un défi facultatif.
+		_push_adversary(adversary.round_taunt(rd, actions, epoch, ctx), epoch, true)
 
 
 func _on_threat_revealed(threat: Dictionary) -> void:
@@ -830,12 +872,20 @@ func _on_tracks_changed(tracks: Dictionary) -> void:
 	if _tracks.is_empty():
 		_tracks = tracks.duplicate(true)
 		return
-	for line in StrategyNarrator.tracks_lines(_tracks, tracks):
+	var calm := _is_eternity()
+	for line in StrategyNarrator.tracks_lines(_tracks, tracks, calm):
 		_push_story(str(line), "tracks")
+		if calm and str(line).begins_with("Jalon atteint"):
+			_chapter_stats["works"] = _chapter_stats.get("works", []) + [str(line).trim_prefix("Jalon atteint : ").split(".")[0]]
 	_tracks = tracks.duplicate(true)
 
 
 func _on_game_over(victory: bool, reason: String) -> void:
+	if _is_eternity():
+		# Éternité : pas de fin de partie, seulement la fin d'un chapitre ; la vie repart.
+		_close_chapter()
+		_push_story("Ce chapitre se referme sur une perte. La vie, elle, repart déjà quelque part.", "chapter_end")
+		return
 	var memory := ""
 	for i in range(game_master.choices.size() - 1, -1, -1):
 		if not bool(game_master.choices[i].get("timed_out", false)):
@@ -847,6 +897,44 @@ func _on_game_over(victory: bool, reason: String) -> void:
 	_parcel_pending.clear()
 	# L'épilogue passe tout de suite, avant toute autre ligne.
 	_emit_line(StrategyNarrator.epilogue(victory, reason, memory), {"source": "strategy", "kind": "epilogue", "victory": victory})
+
+
+# ---------------------------------------------------------------------------
+# Mode Éternité
+# ---------------------------------------------------------------------------
+
+## Mode Éternité ? (GameState.strategy.mode, lu sans planter si le champ n'existe pas encore)
+func _is_eternity() -> bool:
+	var s := _strategy()
+	return s != null and str(s.get("mode")) == "eternity"
+
+
+## Note ce qui arrive pendant le chapitre (pour le bilan apaisé).
+func _note_chapter(kind: String, label := "") -> void:
+	match kind:
+		"arrival":
+			_chapter_stats["arrivals"] = int(_chapter_stats.get("arrivals", 0)) + 1
+		"departure":
+			_chapter_stats["departures"] = int(_chapter_stats.get("departures", 0)) + 1
+		"extinction":
+			_chapter_stats["extinctions"] = int(_chapter_stats.get("extinctions", 0)) + 1
+		"sapience":
+			_chapter_stats["births"] = int(_chapter_stats.get("births", 0)) + 1
+		"land_use":
+			if label != "":
+				_chapter_stats["land_uses"] = (_chapter_stats.get("land_uses", []) + [label]).slice(-4)
+
+
+## Bilan du chapitre en cours (s'il y en a un), puis remise à zéro.
+func _close_chapter() -> void:
+	var vitality := float(_tracks.get("vitality", -1.0))
+	if _chapter > 0:
+		var stats := _chapter_stats.duplicate(true)
+		if _chapter_vitality >= 0.0 and vitality >= 0.0:
+			stats["vitality_delta"] = vitality - _chapter_vitality
+		_push_story(StrategyNarrator.chapter_close(_chapter, stats), "chapter_end", {"round": _chapter, "chapter": true})
+	_chapter_stats = {}
+	_chapter_vitality = vitality
 
 
 func _parcel() -> Object:
@@ -1015,6 +1103,8 @@ func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, ma
 	var full_prompt := prompt
 	if epoch >= 0:
 		full_prompt += "\n" + Prompts.epoch_rules(epoch)
+	if _is_eternity():
+		full_prompt += "\n" + Prompts.ETERNITY_TONE
 	var on_reply := func(ok: bool, text: String) -> void:
 		var out: String = Prompts.vet_output(text, max_sentences, epoch) if ok else ""
 		if out == "":
