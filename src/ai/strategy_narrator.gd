@@ -31,6 +31,9 @@ static func round_line(rd: Dictionary, actions := -1) -> String:
 	var parts := PackedStringArray()
 	var name := str(rd.get("name", "")).strip_edges()
 	var index := int(rd.get("index", 0))
+	# La stratégie peut nommer la manche par son numéro (« Manche 3 ») : on ne le répète pas.
+	if name.to_lower().begins_with("manche"):
+		name = ""
 	if name != "":
 		parts.append("Manche %d : %s." % [index, name] if index > 0 else "%s commence." % name)
 	elif index > 0:
@@ -49,6 +52,63 @@ static func round_line(rd: Dictionary, actions := -1) -> String:
 	if actions >= 0:
 		parts.append("Tu disposes de %d action%s." % [actions, "s" if actions > 1 else ""])
 	return Procedural.polish(" ".join(parts))
+
+
+## Mode Éternité : ouverture d'un chapitre, sur un ton apaisé (les menaces sont des événements à venir).
+static func chapter_open(rd: Dictionary) -> String:
+	var parts := PackedStringArray()
+	var index := int(rd.get("index", 0))
+	var name := str(rd.get("name", "")).strip_edges()
+	if name.to_lower().begins_with("manche") or name.to_lower().begins_with("chapitre"):
+		name = ""
+	parts.append(("Chapitre %d : %s." % [index, name]) if name != "" else ("Chapitre %d." % index))
+	var titles := PackedStringArray()
+	for t in rd.get("threats", []):
+		if t is Dictionary and str(t.get("title", "")) != "":
+			titles.append(str(t["title"]))
+	match titles.size():
+		0:
+			parts.append("Le monde respire ; rien ne se dessine à l'horizon.")
+		1:
+			parts.append("Au loin se dessine un seul événement : %s." % titles[0])
+		_:
+			parts.append("Au loin se dessinent %d événements : %s et %s." % [titles.size(), ", ".join(titles.slice(0, titles.size() - 1)), titles[-1]])
+	parts.append("Rien ne presse.")
+	return Procedural.polish(" ".join(parts))
+
+
+## Mode Éternité : bilan apaisé d'un chapitre. stats : {arrivals, departures, extinctions, births,
+## land_uses: [libellés], vitality_delta, works: [noms]}.
+static func chapter_close(index: int, stats: Dictionary) -> String:
+	var parts := PackedStringArray(["Fin du chapitre %d." % index])
+	var notes := PackedStringArray()
+	var a := int(stats.get("arrivals", 0))
+	var x := int(stats.get("extinctions", 0))
+	var b := int(stats.get("births", 0))
+	if b > 0:
+		notes.append("une pensée nouvelle est née" if b == 1 else "%d pensées nouvelles sont nées" % b)
+	if a > 0:
+		notes.append("%d espèce%s %s venue%s vivre sur ta parcelle" % [a, "s" if a > 1 else "", "sont" if a > 1 else "est", "s" if a > 1 else ""])
+	if x > 0:
+		notes.append("%d lignée%s %s éteinte%s" % [x, "s" if x > 1 else "", "se sont" if x > 1 else "s'est", "s" if x > 1 else ""])
+	var lus: Array = stats.get("land_uses", [])
+	if not lus.is_empty():
+		notes.append("ta parcelle est devenue %s" % str(lus[-1]))
+	for w in stats.get("works", []):
+		notes.append("le jalon « %s » est atteint" % str(w))
+	if not notes.is_empty():
+		var shown := notes.slice(0, 3)
+		var s := ", ".join(shown.slice(0, shown.size() - 1)) + (" et " if shown.size() > 1 else "") + str(shown[-1])
+		parts.append(s.substr(0, 1).to_upper() + s.substr(1) + ".")
+	var dv := float(stats.get("vitality_delta", 0.0))
+	if dv > 0.05:
+		parts.append("La vie y a gagné du terrain.")
+	elif dv < -0.05:
+		parts.append("La vie y a reculé ; elle reviendra, elle revient toujours.")
+	elif notes.is_empty():
+		parts.append("Rien n'a beaucoup changé, et c'est très bien ainsi.")
+	parts.append("Je tourne la page.")
+	return Procedural.polish(" ".join(parts.slice(0, 4)))
 
 
 ## Une menace révélée en cours de manche. year : date actuelle (null si inconnue).
@@ -76,7 +136,10 @@ static func resolved_line(threat: Dictionary, countered: bool, target_name := ""
 
 
 ## Ce qui mérite d'être dit quand les pistes changent (liste de phrases, la plus grave d'abord).
-static func tracks_lines(before: Dictionary, after: Dictionary) -> Array:
+## calm : mode Éternité (pas de compte à rebours ni d'alarme : des constats apaisés, des jalons).
+static func tracks_lines(before: Dictionary, after: Dictionary, calm := false) -> Array:
+	if calm:
+		return calm_tracks_lines(before, after)
 	var out := []
 	var c0 := int(before.get("collapses", 0))
 	var c1 := int(after.get("collapses", c0))
@@ -111,6 +174,22 @@ static func tracks_lines(before: Dictionary, after: Dictionary) -> Array:
 		var d1 := int(after["deck_left"])
 		if d1 < d0 and d1 <= DECK_WARN:
 			out.append("Le sablier cosmique se vide : plus que %d menace%s dans la pioche." % [d1, "s" if d1 > 1 else ""] if d1 > 0 else "Le sablier cosmique est vide : il n'y a plus de menace à piocher.")
+	return out
+
+
+static func calm_tracks_lines(before: Dictionary, after: Dictionary) -> Array:
+	var out := []
+	if int(after.get("collapses", 0)) > int(before.get("collapses", 0)):
+		out.append("Un équilibre se rompt sur ta parcelle ; la vie cherchera un autre chemin.")
+	var v0 := float(before.get("vitality", 1.0))
+	var v1 := float(after.get("vitality", v0))
+	if v1 <= VITALITY_WARN and v0 > VITALITY_WARN:
+		out.append("La vie se fait rare sur ta parcelle ; elle reviendra, elle revient toujours.")
+	var w0: Dictionary = before.get("works", {})
+	var w1: Dictionary = after.get("works", {})
+	for k in WORK_NAMES:
+		if bool(w1.get(k, false)) and not bool(w0.get(k, false)):
+			out.append("Jalon atteint : %s. Je l'ajoute à la collection." % WORK_NAMES[k])
 	return out
 
 

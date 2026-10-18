@@ -3,6 +3,8 @@ extends RefCounted
 ## Garantit que le jeu reste entièrement jouable sans aucune IA installée.
 ## Les gabarits utilisent des emplacements {nom} remplis à partir du contexte et des lexiques d'ère.
 
+const Epoch := preload("res://src/ai/epoch.gd")
+
 const ERAS := [
 	"Mésozoïque", "Cénozoïque", "Préhistoire", "Antiquité",
 	"Moyen Âge", "Renaissance", "Industriel", "Moderne", "Cyberpunk", "Post-singularité",
@@ -114,6 +116,27 @@ const ERA_LEXICON := {
 		"savoir": ["la réécriture de la matière", "la simulation de mondes entiers"],
 		"conflit": ["une guerre d'algorithmes", "un schisme entre esprits"],
 		"fin": ["Tes créatures frappent désormais à la porte de Ton royaume.", "Elles commencent, elles aussi, à créer des mondes.", "Le cercle se referme."],
+	},
+	"Précambrien": {
+		"lieu": ["l'océan tiède", "les mares des rivages", "les sources chaudes du fond des mers"],
+		"acteurs": ["les tapis de microbes", "les premières cellules", "les colonies de microbes"],
+		"savoir": ["une chimie nouvelle", "une façon nouvelle de capter la lumière"],
+		"conflit": ["une lutte de cellules", "une course pour la lumière"],
+		"fin": ["La vie est minuscule, mais elle tient bon.", "Rien ne se voit encore à l'œil nu.", "Le monde n'est encore qu'une promesse."],
+	},
+	"Cambrien": {
+		"lieu": ["les mers peu profondes", "les récifs", "les fonds vaseux"],
+		"acteurs": ["les trilobites", "les créatures à carapace", "les nageurs des récifs"],
+		"savoir": ["un œil nouveau", "une carapace plus solide"],
+		"conflit": ["une course aux armements", "une lutte de carapaces"],
+		"fin": ["Chaque carapace est une invention.", "Les mers débordent de formes nouvelles.", "Personne n'a encore marché sur la terre ferme."],
+	},
+	"Paléozoïque": {
+		"lieu": ["les marais chauds", "les forêts de prêles", "les rivages boueux"],
+		"acteurs": ["les amphibiens", "les mille-pattes géants", "les premiers reptiles"],
+		"savoir": ["une façon nouvelle de respirer", "un œuf à coquille"],
+		"conflit": ["une lutte pour les rivages", "une rivalité de prédateurs"],
+		"fin": ["La vie apprend à marcher.", "La terre ferme se peuple.", "Le monde verdit."],
 	},
 	"generic": {
 		"lieu": ["les terres du monde", "les confins de la planète", "les vallées et les mers"],
@@ -333,6 +356,9 @@ const ORACLE_FINS := [
 ]
 
 var rng := RandomNumberGenerator.new()
+## Mémoire anti-répétition partagée (variety.gd) ; null = sans. Avec elle, une narration déjà dite
+## récemment est remplacée par une autre, sinon narrate() renvoie "" (le narrateur se tait).
+var variety: RefCounted = null
 
 
 func _init(p_seed: int = -1) -> void:
@@ -360,7 +386,18 @@ static func era_key(era: Variant) -> String:
 	return "generic"
 
 
+## Étapes du prologue (WorldSim.ERAS), précédées de leur article.
+const PROLOGUE_ARTICLES := {
+	"Archéen": "l'Archéen", "Grande Oxydation": "la Grande Oxydation", "Terre boule de neige": "la Terre boule de neige",
+	"Explosion cambrienne": "l'explosion cambrienne", "Sortie des eaux": "la sortie des eaux",
+	"Carbonifère": "le Carbonifère", "Grande Mourance": "la Grande Mourance",
+}
+
+
 static func era_with_article(era: Variant) -> String:
+	var i := Epoch.index_of(era)
+	if i >= 0 and PROLOGUE_ARTICLES.has(Epoch.NAMES[i]):
+		return PROLOGUE_ARTICLES[Epoch.NAMES[i]]
 	return ERA_ARTICLES[era_key(era)]
 
 
@@ -386,6 +423,9 @@ static func format_year(year: float) -> String:
 		return "il y a %d mille ans" % int(round(-year / 1000.0))
 	if year < 0.0:
 		return "en l'an %d avant notre ère" % int(round(-year))
+	# Futur sans fin : au-delà d'un million d'années, on compte à partir d'aujourd'hui.
+	if year >= 1_000_000.0:
+		return "dans %s" % _duration(year - 2026.0)
 	return "en l'an %d" % int(round(year))
 
 
@@ -479,10 +519,12 @@ func _narrate_batch(context: Dictionary, events: Array) -> String:
 	# Le premier événement (le plus important) est raconté en entier, le suivant en écho.
 	var first: Dictionary = events[0] if events[0] is Dictionary else {"summary": str(events[0])}
 	var ctx := first.duplicate()
-	for k in ["era", "year"]:
+	for k in ["era", "year", "epoch"]:
 		if not ctx.has(k) and context.has(k):
 			ctx[k] = context[k]
 	var text := _narrate_one(ctx)
+	if text == "":
+		return ""
 	if events.size() > 1:
 		var others := events.size() - 1
 		var echo := [
@@ -495,17 +537,47 @@ func _narrate_batch(context: Dictionary, events: Array) -> String:
 
 func _narrate_one(context: Dictionary) -> String:
 	var era := era_key(context.get("era", ""))
+	var epoch := int(context.get("epoch", Epoch.from_era_year(context.get("era", ""), context.get("year", null))))
 	var etype := event_key(context.get("type", "generic"))
-	var lex: Dictionary = ERA_LEXICON[era]
-	var slots := _era_slots(lex, context)
-	slots["ere"] = era_with_article(era)
+	var lex: Dictionary = ERA_LEXICON[lexicon_for(era, epoch)]
 	# Pour les types où un gabarit inventerait des faits, le résumé de la simulation fait foi.
 	var resume := clean_summary(str(context.get("summary", "")))
 	var templates: Array = EVENT_TEMPLATES[etype]
 	if resume != "" and etype in SUMMARY_TYPES:
 		templates = SUMMARY_TEMPLATES
+	# Aucun mot anachronique (epoch.gd) : on essaie gabarits et emplacements jusqu'à un texte propre.
+	for _attempt in (24 if variety != null else 12):
+		var slots := _era_slots(lex, context)
+		slots["ere"] = era_with_article(era)
 		slots["resume"] = resume
-	return _render(templates[rng.randi() % templates.size()], slots)
+		var text := _render(templates[rng.randi() % templates.size()], slots)
+		if Epoch.is_clean(text, epoch) and (variety == null or not variety.seen(text)):
+			if variety != null:
+				variety.remember(text)
+			return text
+	if variety != null:
+		return ""
+	if resume != "" and Epoch.is_clean(resume, epoch):
+		return _polish(resume + ".")
+	var date := format_year(float(context["year"])) if typeof(context.get("year")) in [TYPE_INT, TYPE_FLOAT] else "En ce jour"
+	return _polish("%s, le monde change, lentement." % date)
+
+
+## Lexique d'une ère, ou de l'étape du prologue quand l'ère est inconnue.
+static func lexicon_for(era: String, epoch: int) -> String:
+	if era != "generic":
+		return era
+	if epoch <= 2:
+		return "Précambrien"
+	if epoch == 3:
+		return "Cambrien"
+	if epoch <= 6:
+		return "Paléozoïque"
+	if epoch == 7:
+		return "Mésozoïque"
+	if epoch == 8:
+		return "Cénozoïque"
+	return "generic"
 
 
 ## Rend un gabarit précis pour un contexte (utilisé par les tests pour couvrir chaque gabarit).
@@ -691,7 +763,7 @@ static func _polish(text: String) -> String:
 ## Contractions françaises produites par l'assemblage des gabarits (« de les » -> « des »...).
 static func contract(text: String) -> String:
 	var t := text
-	for pair in [[" de les ", " des "], [" de le ", " du "], [" à les ", " aux "], [" à le ", " au "]]:
+	for pair in [[" de les ", " des "], [" de le ", " du "], [" à les ", " aux "], [" à le ", " au "], [" de une ", " d'une "], [" de un ", " d'un "]]:
 		t = t.replace(pair[0], pair[1])
 	if t.begins_with("De les "):
 		t = "Des " + t.substr(7)

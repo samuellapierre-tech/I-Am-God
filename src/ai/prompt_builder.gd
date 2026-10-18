@@ -5,6 +5,10 @@ extends RefCounted
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
+
+## Mode Éternité : consigne de ton ajoutée aux prompts.
+const ETERNITY_TONE := "Ton : contemplatif et apaisé, comme au coin du feu ; rien ne presse, ni urgence ni alarme. L'adversaire, s'il parle, est un rival doux qui lance des paris."
 
 ## Contraintes communes à tout ce que le narrateur écrit.
 const STYLE_RULES := "Réponds TOUJOURS en français correct. Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire, ne te présente pas."
@@ -19,6 +23,41 @@ const PERSONA_DECISION := "Tu es le conseil dirigeant d'une civilisation dans un
 
 
 ## Narration des événements du monde (persona de AiConfig).
+## Consigne d'époque ajoutée à chaque prompt (STRATEGIE.md §9) : l'époque technologique et la liste de
+## ce qui n'existe pas encore et ne doit pas être mentionné.
+static func epoch_rules(epoch: int) -> String:
+	if epoch < 0:
+		return ""
+	var forbidden := Epoch.forbidden_labels(clampi(epoch, 0, Epoch.LAST))
+	var s := "Époque technologique du monde : %s." % Epoch.NAMES[clampi(epoch, 0, Epoch.LAST)]
+	if not forbidden.is_empty():
+		s += " INTERDIT de mentionner (cela n'existe pas encore) : %s." % ", ".join(PackedStringArray(forbidden))
+	return s
+
+
+## Nettoie la sortie du LLM et la rejette ("") si elle contient un anachronisme : l'appelant retombe
+## alors sur le repli procédural.
+static func vet_output(text: String, max_sentences: int, epoch: int) -> String:
+	var out := sanitize_output(text, max_sentences)
+	if epoch >= 0 and not Epoch.is_clean(out, epoch):
+		return ""
+	return out
+
+
+## L'adversaire parle (persona de AiConfig) : il commente, il ne décide rien.
+static func adversary_system() -> String:
+	return "%s Réponds en une phrase, deux au plus, glaciale et élégante, en tutoyant Dieu. N'invente ni règle, ni carte, ni chiffre. %s" % [AiConfig.adversary_text(), STYLE_RULES]
+
+
+## line : réplique procédurale de l'adversaire ({text, kind, reason}) ; ctx : contexte du fil.
+static func build_adversary_prompt(line: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	lines.append("Moment : %s%s." % [str(line.get("kind", "")), (" (raison du coup : %s)" % str(line["reason"])) if str(line.get("reason", "")) != "" else ""])
+	lines.append("Réplique de base, à reformuler sans rien ajouter : " + str(line.get("text", "")))
+	return "\n".join(lines)
+
+
 static func narration_system() -> String:
 	return "%s Tu racontes à Dieu l'histoire du monde qu'il façonne, des dinosaures jusqu'au cyberpunk, en 1 à 3 phrases, sur un ton vivant et concret. N'invente pas de faits contraires au contexte. %s" % [AiConfig.persona_text(), STYLE_RULES]
 
@@ -157,7 +196,7 @@ static func build_dilemma_prompt(d: Dictionary, ctx: Dictionary) -> String:
 
 
 ## Fusionne la réponse JSON du LLM dans le dilemme ; garde le brouillon pour tout champ invalide.
-static func merge_dilemma_text(d: Dictionary, raw: String) -> Dictionary:
+static func merge_dilemma_text(d: Dictionary, raw: String, epoch := -1) -> Dictionary:
 	var out := d.duplicate(true)
 	var a := raw.find("{")
 	var b := raw.rfind("}")
@@ -166,15 +205,16 @@ static func merge_dilemma_text(d: Dictionary, raw: String) -> Dictionary:
 	var data: Variant = JSON.parse_string(raw.substr(a, b - a + 1))
 	if not (data is Dictionary):
 		return out
+	var ok_epoch := func(s: String) -> bool: return epoch < 0 or Epoch.is_clean(s, epoch)
 	var title := sanitize_output(str(data.get("title", "")), 1, 80).trim_suffix(".")
-	if title != "" and not title.contains("{"):
+	if title != "" and not title.contains("{") and ok_epoch.call(title):
 		out["title"] = title
 	var text := sanitize_output(str(data.get("text", "")), 4, 600)
 	var n := 0
 	for i in text.length():
 		if text[i] in [".", "!", "?", "…"] and (i + 1 == text.length() or text[i + 1] == " "):
 			n += 1
-	if n >= 2 and n <= 4 and not text.contains("{"):
+	if n >= 2 and n <= 4 and not text.contains("{") and ok_epoch.call(text):
 		out["text"] = text
 	var opts: Variant = data.get("options", [])
 	if opts is Array and (opts as Array).size() == (out["options"] as Array).size():
@@ -184,9 +224,9 @@ static func merge_dilemma_text(d: Dictionary, raw: String) -> Dictionary:
 			var o: Dictionary = out["options"][i]
 			var label := str(opts[i].get("label", "")).strip_edges()
 			var hint := str(opts[i].get("hint", "")).strip_edges()
-			if not (o["action"] as Dictionary).is_empty() and label != "" and label.length() <= 60 and not label.contains("{"):
+			if not (o["action"] as Dictionary).is_empty() and label != "" and label.length() <= 60 and not label.contains("{") and ok_epoch.call(label):
 				o["label"] = label
-			if hint != "" and hint.length() <= 160 and not hint.contains("{"):
+			if hint != "" and hint.length() <= 160 and not hint.contains("{") and ok_epoch.call(hint):
 				o["hint"] = hint
 	return out
 

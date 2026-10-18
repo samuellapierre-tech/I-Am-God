@@ -160,6 +160,7 @@ func test_dilemmes_du_prologue() -> String:
 ## Un choix du prologue est raconté, mémorisé et, s'il contredit l'histoire, fait diverger le monde.
 func test_choix_du_prologue_et_divergence() -> String:
 	var ctx := _ctx()
+	ctx["year"] = -255_000_000.0  # le grand choix n'existe qu'à son étape
 	var gm := GameMaster.new(4)
 	gm.meteor_delay = 0.0
 	gm.min_interval = 0.0
@@ -200,6 +201,9 @@ func test_annonce_de_manche() -> String:
 	var one := StrategyNarrator.round_line({"index": 1, "name": "Archéen", "threats": [{"title": "Volcanisme"}]}, 1)
 	if not (one.contains("Une menace se lève : Volcanisme.") and one.contains("1 action.")):
 		return "annonce d'une menace : " + one
+	var numbered := StrategyNarrator.round_line({"index": 3, "name": "Manche 3", "threats": []})
+	if numbered.contains("Manche 3 : Manche 3"):
+		return "numéro de manche répété : " + numbered
 	var none := StrategyNarrator.round_line({"index": 2, "name": "Trias", "threats": []})
 	if none.contains("action") or not none.contains("aucune menace"):
 		return "manche sans menace ni budget connu : " + none

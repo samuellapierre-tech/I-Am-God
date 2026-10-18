@@ -18,6 +18,7 @@ extends RefCounted
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Grands choix du prologue (docs/STRATEGIE.md §1), un par étape.
 const PROLOGUE_TRIGGERS := ["origin_of_life", "great_oxidation", "snowball", "cambrian", "land_exit", "carboniferous", "great_dying"]
@@ -33,6 +34,20 @@ const STAGE_TRIGGERS := {
 ## Déclencheurs qui ne se présentent qu'une fois par partie.
 const ONCE := ["meteor_decision", "first_sapient", "first_city", "strong_ai",
 	"origin_of_life", "great_oxidation", "snowball", "cambrian", "land_exit", "carboniferous", "great_dying"]
+## Époques (epoch.gd) où chaque déclencheur, et donc ses options, peut exister (STRATEGIE.md §9) :
+## [min_era, max_era]. La guerre et la famine n'existent pas avant l'Antiquité (la faim des bêtes, si),
+## l'IA forte pas avant l'âge de l'information ; chaque grand choix du prologue appartient à son étape.
+const TRIGGER_ERAS := {
+	"origin_of_life": [0, 0], "great_oxidation": [1, 1], "snowball": [2, 2], "cambrian": [3, 3],
+	"land_exit": [4, 4], "carboniferous": [5, 5], "great_dying": [6, 6], "meteor_decision": [7, 7],
+	"first_sapient": [Epoch.FIRST_SAPIENT, Epoch.LAST], "first_city": [Epoch.FIRST_SAPIENT, Epoch.LAST],
+	"prayer": [Epoch.FIRST_SAPIENT, Epoch.LAST], "war": [Epoch.ANTIQUITY, Epoch.LAST],
+	"strong_ai": [Epoch.INFORMATION, Epoch.LAST],
+}
+## Texte neutre, valable à toute époque, si aucun texte du déclencheur ne l'est.
+const SAFE_TEXT := "Quelque chose se joue sur ta parcelle, et c'est à toi de trancher. Que fais-tu ?"
+const SAFE_TITLE := "Un choix"
+
 ## Priorité quand plusieurs déclencheurs attendent (le plus grand d'abord).
 const PRIORITY := {
 	"origin_of_life": 10, "great_oxidation": 10, "snowball": 10, "cambrian": 10, "land_exit": 10,
@@ -132,6 +147,8 @@ const TEXTS := {
 	],
 	"famine": [
 		"La faim s'installe sur {terre}. {espece} [espece:gratte|grattent] la terre et [espece:ne trouve|ne trouvent] rien. Tu nourris, tu éprouves, ou tu laisses faire ?",
+		"La faim s'installe sur {terre}. {espece} [espece:cherche|cherchent] de quoi se nourrir et [espece:ne trouve|ne trouvent] rien. Tu nourris, tu éprouves, ou tu laisses faire ?",
+		"Les greniers sont vides sur {terre}, et la famine menace. Tu nourris, tu éprouves, ou tu laisses faire ?",
 	],
 	"alert": [
 		"Quelque chose se dérègle sur {terre} : {resume}. Ce n'est peut-être rien. Ce n'est peut-être pas rien.",
@@ -359,6 +376,9 @@ func tick(delta: float) -> Dictionary:
 func open_dilemma(trigger: Dictionary, ctx: Dictionary) -> Dictionary:
 	if not active.is_empty():
 		return {}
+	# Pas de dilemme hors de son époque (la guerre avant l'Antiquité, l'IA avant l'âge de l'information…).
+	if not allowed_now(trigger, ctx):
+		return {}
 	var d := build(trigger, ctx)
 	if validate(d) != "":
 		return {}
@@ -367,6 +387,17 @@ func open_dilemma(trigger: Dictionary, ctx: Dictionary) -> Dictionary:
 	_deadline = -1.0
 	active = d
 	return d
+
+
+## Ce déclencheur existe-t-il à l'époque effective du contexte ?
+static func allowed_now(trigger: Dictionary, ctx: Dictionary) -> bool:
+	return Epoch.allows(_era_tags(str(trigger.get("kind", ""))), Epoch.current(ctx))
+
+
+static func _era_tags(kind: String) -> Dictionary:
+	if not TRIGGER_ERAS.has(kind):
+		return {}
+	return {"min_era": int(TRIGGER_ERAS[kind][0]), "max_era": int(TRIGGER_ERAS[kind][1])}
 
 
 ## L'interface affiche le dilemme : le délai de réponse commence.
@@ -425,6 +456,8 @@ func build(trigger: Dictionary, ctx: Dictionary) -> Dictionary:
 	rng.seed = hash([_seed, id, str(trigger.get("kind", ""))])
 	var kind := str(trigger.get("kind", "alert"))
 	var region: Vector2i = trigger.get("region", Vector2i.ZERO) if trigger.get("region") is Vector2i else Vector2i.ZERO
+	var epoch := Epoch.current(ctx)
+	var tags := _era_tags(kind)
 	var options := []
 	for spec in option_specs(trigger, ctx):
 		var a := {}
@@ -439,27 +472,46 @@ func build(trigger: Dictionary, ctx: Dictionary) -> Dictionary:
 		if VARIANTS.has(variant):
 			label = _sentence(VARIANTS[variant][0], target)
 			hint = VARIANTS[variant][1]
-		options.append({"label": label, "hint": hint, "action": a})
+		if not Epoch.is_clean(hint, epoch):
+			hint = HINTS[""]
+		var option := {"label": label, "hint": hint, "action": a}
+		option.merge(tags)
+		options.append(option)
 	var name := str(trigger.get("species_name", ""))
 	var phrase := Procedural.species_phrase(name) if name != "" else {"text": "les vivants", "plural": true}
 	var texts: Array = TEXTS.get(kind, TEXTS["alert"])
-	var tpl: String = texts[rng.randi() % texts.size()]
-	tpl = Procedural.apply_agreement(tpl, {"espece": phrase["plural"]})
 	var resume := Procedural.clean_summary(str(trigger.get("summary", "")))
-	var text := tpl.format({
+	var slots := {
 		"espece": phrase["text"], "rival": str(trigger.get("rival_name", "l'ennemi")),
 		"terre": "ta parcelle", "resume": resume if resume != "" else "rien de clair, et c'est bien ce qui m'inquiète",
 		"ere": Procedural.era_with_article(ctx.get("era", "")),
-	})
+	}
+	# Le premier texte propre à cette époque, à partir d'un choix tiré au sort.
+	var text := SAFE_TEXT
+	var start := rng.randi() % texts.size()
+	for i in texts.size():
+		var tpl := Procedural.apply_agreement(str(texts[(start + i) % texts.size()]), {"espece": phrase["plural"]})
+		var candidate := Procedural.polish(Procedural.contract(tpl.format(slots)))
+		if Epoch.is_clean(candidate, epoch):
+			text = candidate
+			break
 	var memory := callback(trigger, ctx)
-	if memory != "" and _sentences(text) < 4:
+	if memory != "" and _sentences(text) < 4 and Epoch.is_clean(memory, epoch):
 		text += " Souviens-toi : %s." % memory
 	var titles: Array = TITLES.get(kind, TITLES["alert"])
-	return {
-		"id": id, "title": str(titles[rng.randi() % titles.size()]), "text": Procedural.polish(Procedural.contract(text)),
+	var title := SAFE_TITLE
+	var t0 := rng.randi() % titles.size()
+	for i in titles.size():
+		if Epoch.is_clean(str(titles[(t0 + i) % titles.size()]), epoch):
+			title = str(titles[(t0 + i) % titles.size()])
+			break
+	var d := {
+		"id": id, "title": title, "text": text,
 		"options": options, "timeout_s": timeout_s, "speaker": AiConfig.NARRATOR_NAME,
-		"trigger": kind, "species_id": int(trigger.get("species_id", -1)),
+		"trigger": kind, "species_id": int(trigger.get("species_id", -1)), "epoch": epoch,
 	}
+	d.merge(tags)
+	return d
 
 
 ## Options par règles : [[type d'action ("" = ne rien faire), species_id], ...], 2 à 4, « rien » en dernier.

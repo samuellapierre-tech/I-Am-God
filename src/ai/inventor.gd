@@ -8,9 +8,17 @@ extends RefCounted
 ## et réutilisé ensuite. Le LLM peut l'enrichir (enrich_from_llm), jamais le réécrire.
 ##
 ## Repli procédural combinatoire : gabarits × traits (clade, régime, taille, agressivité, climat).
+##
+## Futur sans fin (STRATEGIE.md §10) : quand une civilisation tombe (espèce éteinte ou technologie
+## effondrée), elle rejoint les civilisations disparues ; une nouvelle lignée consciente hérite de leur
+## souvenir (ruines, parfois le nom qu'elles te donnaient). vision() : ce que le narrateur « voit » des
+## âges inventés (exode, cycles, ruines, Soleil qui vieillit), cohérent avec cette mémoire.
+## Mémoire BORNÉE : au-delà de MAX_PROFILES, les profils les moins récemment utilisés sont résumés dans
+## `archive` (bornée elle aussi ; au-delà, on ne garde que le compte des peuples oubliés).
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
+const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Sons par lignée, pour les noms que les peuples se donnent (et donnent à leurs lieux).
 const PHONEMES := {
@@ -130,6 +138,38 @@ const DIVERGENCE_TEMPLATES := [
 	"À partir d'ici, ton monde quitte l'histoire que j'ai vue : {raison}. Je vais devoir inventer avec toi.",
 	"Mes visions se troublent, car {raison}. Ce qui suit, je le découvre en même temps que toi.",
 ]
+## Lignées nées sur les ruines d'une civilisation disparue. {ancien} : groupe nominal de l'ancienne
+## espèce ; {ancien_endonyme}, {ancien_dieu} : ce qu'on en a retenu.
+const HERITAGE_TEMPLATES := [
+	"{peuple} [espece:bâtit|bâtissent] sur les ruines de {ancien}, qui se nommaient « {ancien_endonyme} » ; moi, je m'en souviens.",
+	"Dans les ruines de {ancien}, {peuple} [espece:a retrouvé|ont retrouvé] le nom qu'on te donnait : « {ancien_dieu} ».",
+	"{peuple} [espece:ignore|ignorent] tout de {ancien}. Moi, je n'ai rien oublié de leurs coutumes : {ancienne_coutume}.",
+]
+## Visions des âges inventés (le futur sans fin). Emplacements : {terre}, {ancien}, {ancien_endonyme},
+## {ancien_dieu}, {peuple}, {oublies}. needs : "fallen" (une civilisation disparue), "exodus"
+## (civilisation au sommet de la technologie), "far" (futur lointain), "cycles", "forgotten".
+const VISIONS := [
+	{"t": "Je vois des vaisseaux quitter le ciel de {terre} ; certains reviendront, d'autres jamais.", "needs": "exodus", "min_era": 16},
+	{"t": "Mes visions se troublent : une partie de {peuple} part vers les étoiles, l'autre reste garder les ruines.", "needs": "exodus", "min_era": 16},
+	{"t": "Je me souviens de {ancien} : ils te nommaient « {ancien_dieu} ». Leurs pierres s'effacent peu à peu.", "needs": "fallen"},
+	{"t": "Mes visions gardent la trace de {ancien}, qui se nommaient « {ancien_endonyme} » ; personne d'autre ne s'en souvient.", "needs": "fallen"},
+	{"t": "Là où {ancien} comptaient les saisons, la nature revient, sans se presser.", "needs": "fallen"},
+	{"t": "Les continents ont dérivé depuis l'époque de {ancien} ; même les montagnes ont changé de place.", "needs": "far_fallen"},
+	{"t": "Le Soleil a vieilli ; il chauffe un peu plus à chaque âge. Dans mes visions les plus lointaines, la Terre devient trop chaude pour la vie complexe.", "needs": "far"},
+	{"t": "Un âge s'achève, un autre commence ; je cesse de compter les cycles, pas de les écrire.", "needs": "cycles"},
+	{"t": "J'ai oublié le nom de {oublies} ; mes visions ne retiennent que les plus récents.", "needs": "forgotten"},
+]
+## Au-delà de cette date (années), le futur est « lointain » : continents, Soleil qui vieillit.
+const FAR_FUTURE_YEAR := 100_000_000.0
+## Au-delà de cette date, les âges inventés se succèdent : cycles.
+const CYCLES_YEAR := 100_000.0
+## Profils retenus en entier ; résumés au-delà (archive), elle-même bornée.
+const MAX_PROFILES := 24
+const MAX_ARCHIVE := 64
+const MAX_FALLEN := 16
+## Une civilisation dont la technologie retombe d'autant (niveaux) est tombée.
+const FALL_DROP := 1.5
+
 const AVEUX := [
 	"Je ne l'avais vu dans aucune vision : je le découvre avec toi.", "Ma vision se brouille, mais c'est bien ce que je vois.",
 	"Je l'écris, mais j'avoue que ça me surprend.", "Les images me viennent troubles, comme à travers l'eau.", "",
@@ -138,6 +178,16 @@ const AVEUX := [
 var rng := RandomNumberGenerator.new()
 ## species_id -> profil inventé (voir profile_for).
 var profiles := {}
+## Profils résumés (les plus anciens), du plus ancien au plus récent : [{id, name, endonym, deity, ...}].
+var archive: Array[Dictionary] = []
+## Nombre de peuples dont même le résumé a été oublié.
+var forgotten := 0
+## Civilisations disparues, de la plus ancienne à la plus récente (résumés).
+var fallen: Array[Dictionary] = []
+## Mémoire anti-répétition partagée (variety.gd) ; null = sans.
+var variety: RefCounted = null
+## Suivi hors profil (pour que le profil, lui, ne change jamais) : id -> {used, max_tech, fallen}.
+var _lives := {}
 var _seed := 0
 var _count := 0
 var _parcel: ParcelNarrator
@@ -156,19 +206,159 @@ func _init(p_seed: int = -1) -> void:
 ## identique ensuite (même si le contexte a changé : c'est la mémoire de ce qui a été raconté).
 func profile_for(sp: Dictionary, ctx: Dictionary = {}) -> Dictionary:
 	var id := int(sp.get("id", sp.get("species_id", -1)))
+	_count += 1
+	_life(id)["used"] = _count
 	if profiles.has(id):
 		var known: Dictionary = profiles[id]
 		# Une espèce devenue intelligente a désormais une culture : on la complète, sans rien effacer.
 		if bool(sp.get("sapient", false)) and not known.has("customs"):
 			known.merge(_culture(sp, ctx, _profile_rng(id, str(sp.get("name", "")) + "#culture")))
+			_inherit(known, id, _profile_rng(id, "heritage"))
 		known["name"] = str(sp.get("name", known.get("name", "")))
 		return known
 	var prng := _profile_rng(id, str(sp.get("name", "")))
 	var p := {"id": id, "name": str(sp.get("name", "")), "clade": _clade(sp), "behaviors": _pick_n(_behavior_pool(sp), 3, prng)}
-	if bool(sp.get("sapient", false)):
+	# Un peuple résumé dans l'archive revient avec ce qu'on en avait retenu (noms, dieu, une coutume).
+	for i in range(archive.size() - 1, -1, -1):
+		if int(archive[i].get("id", -2)) == id:
+			for k in ["endonym", "place_name", "deity", "deity_cause", "deity_origin", "customs", "heritage"]:
+				if archive[i].has(k):
+					p[k] = archive[i][k]
+			archive.remove_at(i)
+			break
+	if bool(sp.get("sapient", false)) and not p.has("customs"):
 		p.merge(_culture(sp, ctx, prng))
+		_inherit(p, id, _profile_rng(id, "heritage"))
 	profiles[id] = p
+	_bound_memory()
 	return p
+
+
+## Une nouvelle lignée consciente hérite du souvenir de la dernière civilisation disparue.
+func _inherit(p: Dictionary, id: int, prng: RandomNumberGenerator) -> void:
+	for i in range(fallen.size() - 1, -1, -1):
+		var f: Dictionary = fallen[i]
+		if int(f.get("id", -2)) == id:
+			continue
+		p["heritage"] = f.duplicate()
+		# Parfois, ils retrouvent dans les ruines le nom que l'ancien peuple te donnait.
+		if prng.randf() < 0.5 and str(f.get("deity", "")) != "":
+			p["deity"] = f["deity"]
+			p["deity_cause"] = "le jour où ils ont trouvé les ruines de " + Procedural.species_phrase(str(f.get("name", "")))["text"]
+		return
+
+
+## Résumé compact d'un profil (ce que la mémoire garde d'un peuple ancien).
+static func summarize(p: Dictionary) -> Dictionary:
+	var s := {"id": int(p.get("id", -1)), "name": str(p.get("name", "")), "clade": str(p.get("clade", ""))}
+	for k in ["endonym", "place_name", "deity", "deity_cause", "deity_origin"]:
+		if p.has(k):
+			s[k] = p[k]
+	if p.has("customs"):
+		s["customs"] = (p["customs"] as Array).slice(0, 1)
+	if p.has("heritage"):
+		var h: Dictionary = p["heritage"]
+		s["heritage"] = {"name": str(h.get("name", "")), "endonym": str(h.get("endonym", ""))}
+	return s
+
+
+## Mémoire bornée : les profils les moins récemment utilisés sont résumés dans l'archive.
+func _bound_memory() -> void:
+	while profiles.size() > MAX_PROFILES:
+		var oldest := -1
+		var oldest_use := 1 << 62
+		for id in profiles:
+			var u := int(_life(id).get("used", 0))
+			if u < oldest_use:
+				oldest_use = u
+				oldest = id
+		archive.append(summarize(profiles[oldest]))
+		profiles.erase(oldest)
+	while archive.size() > MAX_ARCHIVE:
+		archive.pop_front()
+		forgotten += 1
+	if _lives.size() > MAX_PROFILES + MAX_ARCHIVE + MAX_FALLEN:
+		for id in _lives.keys():
+			if not profiles.has(id):
+				_lives.erase(id)
+				if _lives.size() <= MAX_PROFILES + MAX_ARCHIVE:
+					break
+
+
+## Suit les peuples : une espèce intelligente éteinte, ou dont la technologie s'effondre, est tombée.
+func observe(ctx: Dictionary) -> void:
+	for sp in ctx.get("species", []):
+		if not (sp is Dictionary) or not bool(sp.get("sapient", false)):
+			continue
+		var id := int(sp.get("id", -1))
+		var life := _life(id)
+		var tech := float(sp.get("tech_level", 0.0))
+		life["max_tech"] = maxf(float(life.get("max_tech", tech)), tech)
+		var fell := not bool(sp.get("alive", true)) or tech < float(life["max_tech"]) - FALL_DROP
+		if fell and not bool(life.get("fallen", false)):
+			life["fallen"] = true
+			var p := profile_for(sp, ctx)
+			var s := summarize(p)
+			s["epoch"] = Epoch.current({"species": [{"sapient": true, "alive": true, "tech_level": life["max_tech"]}]})
+			fallen.append(s)
+			while fallen.size() > MAX_FALLEN:
+				fallen.pop_front()
+		elif not fell and bool(life.get("fallen", false)) and bool(sp.get("alive", true)):
+			# Une civilisation qui se relève redevient vivante (sans effacer le souvenir de sa chute).
+			life["fallen"] = false
+			life["max_tech"] = tech
+
+
+## Une vision des âges inventés, cohérente avec la mémoire ; {} si rien ne s'applique.
+func vision(ctx: Dictionary) -> Dictionary:
+	_count += 1
+	rng.seed = hash([_seed, _count, "vision"])
+	var epoch := Epoch.current(ctx)
+	var year: Variant = ctx.get("year", null)
+	var y := float(year) if typeof(year) in [TYPE_INT, TYPE_FLOAT] else 0.0
+	var top := {}
+	for sp in ctx.get("species", []):
+		if sp is Dictionary and bool(sp.get("sapient", false)) and bool(sp.get("alive", true)) \
+				and (top.is_empty() or float(sp.get("tech_level", 0.0)) > float(top.get("tech_level", 0.0))):
+			top = sp
+	var has := {
+		"exodus": not top.is_empty() and float(top.get("tech_level", 0.0)) >= 7.5,
+		"fallen": not fallen.is_empty(),
+		"far": y >= FAR_FUTURE_YEAR,
+		"far_fallen": y >= FAR_FUTURE_YEAR and not fallen.is_empty(),
+		"cycles": y >= CYCLES_YEAR or not fallen.is_empty(),
+		"forgotten": forgotten > 0,
+	}
+	var old: Dictionary = fallen[rng.randi() % fallen.size()] if not fallen.is_empty() else {}
+	var slots := _base_slots(top if not top.is_empty() else {"name": ""}, ctx)
+	slots["peuple"] = Procedural.species_phrase(str(top.get("name", "")))["text"] if not top.is_empty() else "les vivants"
+	slots["ancien"] = Procedural.species_phrase(str(old.get("name", "")))["text"] if not old.is_empty() else "les anciens"
+	slots["ancien_endonyme"] = str(old.get("endonym", "les Anciens"))
+	slots["ancien_dieu"] = str(old.get("deity", "le Silencieux"))
+	slots["oublies"] = "%d peuple%s" % [forgotten, "s" if forgotten > 1 else ""]
+	var order: Array = range(VISIONS.size())
+	if variety != null:
+		order = variety.order("vision", VISIONS.size(), rng)
+	else:
+		var start := rng.randi() % VISIONS.size()
+		order = order.slice(start) + order.slice(0, start)
+	for i in order:
+		var v: Dictionary = VISIONS[i]
+		if not bool(has.get(str(v.get("needs", "")), false)) or not Epoch.allows(v, epoch):
+			continue
+		var text := ParcelNarrator.render(str(v["t"]), slots)
+		if not Epoch.is_clean(text, epoch) or (variety != null and variety.seen(text)):
+			continue
+		if variety != null:
+			variety.used("vision", i)
+		return {"text": text, "kind": "vision", "source": "ambient"}
+	return {}
+
+
+func _life(id: int) -> Dictionary:
+	if not _lives.has(id):
+		_lives[id] = {}
+	return _lives[id]
 
 
 ## Ajoute ce que le LLM a inventé pour un peuple (JSON {coutumes: [..], croyance, fete}) ; false si invalide.
@@ -203,6 +393,7 @@ func line(ctx: Dictionary) -> Dictionary:
 	_count += 1
 	rng.seed = hash([_seed, _count, "line"])
 	var mode: Dictionary = ctx.get("mode", {})
+	observe(ctx)
 	if bool(mode.get("just_diverged", false)):
 		return divergence_line(ctx)
 	var subject := pick_subject(ctx)
@@ -247,30 +438,50 @@ func pick_subject(ctx: Dictionary) -> Dictionary:
 	return {}
 
 
+## Une ligne sur un peuple ; {} si aucune n'est possible sans anachronisme à cette époque.
 func _people_line(p: Dictionary, sp: Dictionary, ctx: Dictionary) -> Dictionary:
 	var customs: Array = p["customs"] + p.get("llm_customs", [])
-	var slots := _base_slots(sp, ctx)
-	slots["peuple"] = slots["espece"]
-	slots["endonyme"] = p["endonym"]
-	slots["dieu"] = p["deity"]
-	slots["cause"] = p["deity_cause"]
-	slots["coutume"] = Procedural.apply_agreement(str(customs[rng.randi() % customs.size()]), {"espece": slots["_espece_pl"]})
-	slots["lieu_nom"] = p["place_name"]
-	slots["materiau"] = MATERIALS.get(Procedural.era_key(ctx.get("era", "")), MATERIALS["generic"])
-	var tpl: String = PEOPLE_TEMPLATES[rng.randi() % PEOPLE_TEMPLATES.size()]
-	return {"text": ParcelNarrator.render(tpl, slots), "kind": "invention", "source": "ambient",
-		"species_id": int(p["id"]), "profile": p}
+	var epoch := Epoch.current(ctx)
+	var templates: Array = PEOPLE_TEMPLATES.duplicate()
+	if p.has("heritage"):
+		templates.append_array(HERITAGE_TEMPLATES)
+	var tries := 24 if variety != null else 10
+	for _attempt in tries:
+		var slots := _base_slots(sp, ctx)
+		slots["peuple"] = slots["espece"]
+		slots["endonyme"] = p["endonym"]
+		slots["dieu"] = p["deity"]
+		slots["cause"] = p["deity_cause"]
+		slots["coutume"] = Procedural.apply_agreement(str(customs[rng.randi() % customs.size()]), {"espece": slots["_espece_pl"]})
+		slots["lieu_nom"] = p["place_name"]
+		slots["materiau"] = MATERIALS.get(Epoch.NAMES[epoch], MATERIALS["generic"])
+		var h: Dictionary = p.get("heritage", {})
+		slots["ancien"] = Procedural.species_phrase(str(h.get("name", "")))["text"] if not h.is_empty() else "les anciens"
+		slots["ancien_endonyme"] = str(h.get("endonym", "les Anciens"))
+		slots["ancien_dieu"] = str(h.get("deity", p["deity"]))
+		var hc: Array = h.get("customs", [])
+		slots["ancienne_coutume"] = str(hc[0]) if not hc.is_empty() else str(customs[0])
+		var tpl: String = templates[rng.randi() % templates.size()]
+		var text := ParcelNarrator.render(tpl, slots)
+		if Epoch.is_clean(text, epoch) and (variety == null or not variety.seen(text)):
+			return {"text": text, "kind": "invention", "source": "ambient", "species_id": int(p["id"]), "profile": p}
+	return {}
 
 
+## Une ligne sur une bête ; {} si aucune n'est possible sans anachronisme à cette époque.
 func _beast_line(p: Dictionary, sp: Dictionary, ctx: Dictionary) -> Dictionary:
-	var slots := _base_slots(sp, ctx)
 	var behaviors: Array = p["behaviors"]
-	slots["comportement"] = Procedural.apply_agreement(str(behaviors[rng.randi() % behaviors.size()]), {"espece": slots["_espece_pl"]})
 	var reasons: Array = ctx.get("mode", {}).get("reasons", [])
-	slots["raison"] = str(reasons[0]) if not reasons.is_empty() else "tout a pris un autre chemin"
-	var tpl: String = BEAST_TEMPLATES[rng.randi() % BEAST_TEMPLATES.size()]
-	return {"text": ParcelNarrator.render(tpl, slots), "kind": "invention", "source": "ambient",
-		"species_id": int(p["id"]), "profile": p}
+	var epoch := Epoch.current(ctx)
+	for _attempt in (24 if variety != null else 10):
+		var slots := _base_slots(sp, ctx)
+		slots["comportement"] = Procedural.apply_agreement(str(behaviors[rng.randi() % behaviors.size()]), {"espece": slots["_espece_pl"]})
+		slots["raison"] = str(reasons[0]) if not reasons.is_empty() else "tout a pris un autre chemin"
+		var tpl: String = BEAST_TEMPLATES[rng.randi() % BEAST_TEMPLATES.size()]
+		var text := ParcelNarrator.render(tpl, slots)
+		if Epoch.is_clean(text, epoch) and (variety == null or not variety.seen(text)):
+			return {"text": text, "kind": "invention", "source": "ambient", "species_id": int(p["id"]), "profile": p}
+	return {}
 
 
 func _base_slots(sp: Dictionary, ctx: Dictionary) -> Dictionary:
@@ -299,11 +510,14 @@ func _culture(sp: Dictionary, ctx: Dictionary, prng: RandomNumberGenerator) -> D
 		if DEITY_NAMES.has(t):
 			first_act = t
 			break
+	# La mémoire ne retient que des coutumes possibles à l'époque où on les invente.
+	var epoch := Epoch.current(ctx)
+	var pool := _custom_pool(sp, ctx).filter(func(c: String) -> bool: return Epoch.is_clean(c, epoch))
 	return {
 		"endonym": _word(clade, prng, 2 + prng.randi() % 2),
 		"place_name": _word(clade, prng, 2),
 		"deity": DEITY_NAMES[first_act], "deity_cause": DEITY_CAUSES[first_act], "deity_origin": first_act,
-		"customs": _pick_n(_custom_pool(sp, ctx), 3, prng),
+		"customs": _pick_n(pool if not pool.is_empty() else ["on se tait quand le ciel change"], 3, prng),
 	}
 
 
