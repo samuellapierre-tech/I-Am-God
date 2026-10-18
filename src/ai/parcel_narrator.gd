@@ -60,7 +60,7 @@ const BIOME_PHRASES := {
 	"Forêt tropicale": "ce pan de jungle", "Montagnes": "ce versant de montagne",
 }
 
-const OUVERTURES := ["Regarde,", "Sous Tes yeux,", "Seigneur,", "Ô Toi qui veilles,", "", ""]
+const OUVERTURES := ["Regarde,", "Sous tes yeux,", "Vois-tu,", "Tiens,", "", ""]
 
 ## Ce que Dieu voit en se penchant sur la parcelle (narration « focus »).
 const LAND_USE_VIEWS := {
@@ -77,69 +77,69 @@ const LAND_USE_VIEWS := {
 const LEXICON := {
 	"Mésozoïque": {
 		"ciel": ["sous un ciel lourd et chaud", "dans l'odeur des fougères", "au bord des marais fumants"],
-		"fin": ["La Terre est jeune, et elle a faim.", "Les écailles ne savent rien de Toi.", "Le règne des géants continue, pour l'instant."],
+		"fin": ["La Terre est jeune, et elle a faim.", "Les écailles ne savent rien de toi.", "Le règne des géants continue, pour l'instant."],
 		"culture": ["des fougères"], "bati": ["des nids de boue"], "habitants": ["les premiers esprits"],
 		"herbivore": ["les troupeaux à cornes", "les grands sauropodes"], "carnivore": ["les prédateurs aux dents en lame"],
 		"omnivore": ["les petits sauriens"],
 	},
 	"Cénozoïque": {
 		"ciel": ["dans le vent des savanes nouvelles", "sous un soleil plus doux", "dans l'herbe haute"],
-		"fin": ["Le sang chaud hérite du monde.", "Rien n'est écrit, sinon par Toi.", "Les petits survivants deviennent les maîtres."],
+		"fin": ["Le sang chaud hérite du monde.", "Rien n'est écrit, sinon par toi.", "Les petits survivants deviennent les maîtres."],
 		"culture": ["des graminées sauvages"], "bati": ["des terriers"], "habitants": ["les premiers esprits"],
 		"herbivore": ["les troupeaux de brouteurs"], "carnivore": ["les meutes à fourrure"], "omnivore": ["les premiers primates"],
 	},
 	"Préhistoire": {
 		"ciel": ["autour d'un feu qui fume", "dans le froid de l'aube", "sous un ciel immense"],
-		"fin": ["Ils lèvent les yeux et Te cherchent.", "Le feu garde la mémoire de ce jour.", "Leurs mythes naîtront ici."],
+		"fin": ["Ils lèvent les yeux et te cherchent.", "Le feu garde la mémoire de ce jour.", "Leurs mythes naîtront ici."],
 		"culture": ["des épis sauvages", "de l'orge sauvage"], "bati": ["des huttes de branchages", "des abris de peaux"],
 		"habitants": ["les clans"], "herbivore": ["les mammouths", "les aurochs"], "carnivore": ["les loups", "les grands félins"],
 		"omnivore": ["les ours"],
 	},
 	"Antiquité": {
 		"ciel": ["sous le soleil des moissons", "dans la poussière des routes", "au chant des cigales"],
-		"fin": ["Les scribes graveront ce jour dans l'argile.", "Les empires passent ; Toi, Tu demeures.", "Les oracles y verront Ta main."],
+		"fin": ["Les scribes graveront ce jour dans l'argile.", "Les empires passent ; toi, tu demeures.", "Les oracles y verront ta main."],
 		"culture": ["du blé et de l'orge", "des vignes et des oliviers"], "bati": ["des murs de pierre et un temple", "des maisons de brique crue"],
 		"habitants": ["les paysans des deltas"], "herbivore": ["les chèvres", "les bœufs"], "carnivore": ["les loups"],
 		"omnivore": ["les sangliers"],
 	},
 	"Moyen Âge": {
 		"ciel": ["au son lointain des cloches", "sous un ciel de pluie fine", "dans la brume du matin"],
-		"fin": ["Les cloches sonnent pour Toi.", "La foi des humbles se fait plus ardente.", "Les moines y verront un signe du Ciel."],
+		"fin": ["Les cloches sonnent pour toi.", "La foi des humbles se fait plus ardente.", "Les moines y verront un signe du Ciel."],
 		"culture": ["du seigle et de l'avoine", "du froment"], "bati": ["des remparts et un clocher", "des chaumières serrées"],
 		"habitants": ["les paysans"], "herbivore": ["les moutons"], "carnivore": ["les loups"], "omnivore": ["les porcs"],
 	},
 	"Renaissance": {
 		"ciel": ["dans la lumière dorée des ateliers", "sous un ciel que l'on mesure enfin", "au bruit des charrettes"],
-		"fin": ["L'homme se croit le centre du monde ; Tu souris.", "Les cartes se redessinent sous Ton regard.", "La raison s'éveille, mais elle Te doit tout."],
+		"fin": ["L'homme se croit le centre du monde ; tu souris.", "Les cartes se redessinent sous ton regard.", "La raison s'éveille, mais elle te doit tout."],
 		"culture": ["du maïs venu d'outre-mer", "des vergers bien alignés"], "bati": ["des façades ornées et des places pavées", "des moulins et des ateliers"],
 		"habitants": ["les bourgeois"], "herbivore": ["les chevaux"], "carnivore": ["les chiens de chasse"], "omnivore": ["les porcs"],
 	},
 	"Industriel": {
 		"ciel": ["sous un ciel de suie", "dans le sifflement des locomotives", "à la lueur des forges"],
-		"fin": ["Les cheminées crachent leur prière noire vers Toi.", "Le progrès avance, aveugle et bruyant.", "Le monde tourne plus vite, mais toujours dans Ta main."],
+		"fin": ["Les cheminées crachent leur prière noire vers toi.", "Le progrès avance, aveugle et bruyant.", "Le monde tourne plus vite, mais toujours dans ta main."],
 		"culture": ["des rangs de betteraves", "du blé moissonné à la machine"], "bati": ["des cheminées de brique", "des usines et des cités ouvrières"],
 		"habitants": ["les ouvriers"], "herbivore": ["les chevaux de trait"], "carnivore": ["les chiens errants"], "omnivore": ["les rats"],
 	},
 	"Moderne": {
 		"ciel": ["sous le bourdonnement des avions", "dans la lueur des lampadaires", "sous un ciel strié de câbles"],
-		"fin": ["Le monde retient son souffle.", "Les écrans ne Te voient pas, mais Tu les vois.", "Tout va plus vite, sauf Ton regard."],
+		"fin": ["Le monde retient son souffle.", "Les écrans ne te voient pas, mais tu les vois.", "Tout va plus vite, sauf ton regard."],
 		"culture": ["des monocultures à perte de vue", "des légumes sous serre"], "bati": ["des tours de verre et d'acier", "des immeubles et des échangeurs"],
 		"habitants": ["les citadins"], "herbivore": ["les vaches"], "carnivore": ["les renards des villes"], "omnivore": ["les pigeons"],
 	},
 	"Cyberpunk": {
 		"ciel": ["sous la pluie acide", "dans le grésillement des néons", "sous un ciel couleur d'écran mort"],
-		"fin": ["Les néons clignotent, comme un signe.", "Les flux de données murmurent Ton nom chiffré.", "Même les IA cherchent un sens à tout cela."],
+		"fin": ["Les néons clignotent, comme un signe.", "Les flux de données murmurent ton nom chiffré.", "Même les IA cherchent un sens à tout cela."],
 		"culture": ["des algues en cuve", "des protéines de synthèse"], "bati": ["des tours de néon et des passerelles", "des blocs de béton tagués"],
 		"habitants": ["les cyborgs"], "herbivore": ["les bêtes clonées"], "carnivore": ["les chiens de garde mécaniques"], "omnivore": ["les rats mutants"],
 	},
 	"Post-singularité": {
 		"ciel": ["dans un silence parfait", "sous un ciel aux nuages programmés", "dans une lumière sans source"],
-		"fin": ["Le cercle se referme.", "Tes créatures créent à leur tour des mondes.", "Même le temps semble y hésiter."],
+		"fin": ["Le cercle se referme.", "tes créatures créent à leur tour des mondes.", "Même le temps semble y hésiter."],
 		"culture": ["des jardins recomposés atome par atome"], "bati": ["des structures sans fenêtres", "des flèches de matière programmable"],
 		"habitants": ["les esprits fusionnés"], "herbivore": ["les bêtes ressuscitées"], "carnivore": ["les prédateurs recréés"], "omnivore": ["les essaims"],
 	},
 	"generic": {
-		"ciel": ["sous Ton regard", "dans la lumière du jour", "au fil des saisons"],
+		"ciel": ["sous ton regard", "dans la lumière du jour", "au fil des saisons"],
 		"fin": ["Le monde se souviendra.", "Ce bout de terre garde la mémoire de tout."],
 		"culture": ["des graines"], "bati": ["des abris"], "habitants": ["les vivants"],
 		"herbivore": ["les brouteurs"], "carnivore": ["les prédateurs"], "omnivore": ["les bêtes"],
@@ -153,7 +153,7 @@ const LAND_USE_TEMPLATES := {
 	"ocean": [
 		"{ouverture} la mer a recouvert {terre} ; les vagues roulent là où l'on marchait. {fin}",
 		"{date}, {terre} sombre sous les flots, et il n'en reste qu'un reflet.",
-		"Les eaux ont pris {terre} : Tu ne vois plus que l'écume. {fin}",
+		"Les eaux ont pris {terre} : tu ne vois plus que l'écume. {fin}",
 	],
 	"ice": [
 		"{ouverture} la glace a figé {terre} ; plus rien ne bouge sous le blanc. {fin}",
@@ -168,12 +168,12 @@ const LAND_USE_TEMPLATES := {
 	"flooded": [
 		"{ouverture} les eaux ont noyé {terre} ; seuls les plus hauts arbres émergent encore.",
 		"{date}, le déluge recouvre {terre}, et tout ce qui marchait doit nager ou périr. {fin}",
-		"Une mer de boue s'étend sur {terre}, comme Tu l'as permis.",
+		"Une mer de boue s'étend sur {terre}, comme tu l'as permis.",
 	],
 	"wild": [
 		"{ouverture} {terre} redevient sauvage {ciel}. {fin}",
 		"{date}, plus aucune main ne façonne {terre} : la vie y suit son propre cours.",
-		"Les herbes et les bêtes reprennent {terre}, sous Ton regard tranquille. {fin}",
+		"Les herbes et les bêtes reprennent {terre}, sous ton regard tranquille. {fin}",
 	],
 	"thaw": [
 		"{ouverture} la glace se retire de {terre}, et la terre nue respire à nouveau. {fin}",
@@ -200,7 +200,7 @@ const LAND_USE_TEMPLATES := {
 	],
 	"farmland": [
 		"{ouverture} des champs couvrent de nouveau {terre}, et l'on y sème {culture}.",
-		"{date}, {terre} redevient terre de labour, sous Ton regard. {fin}",
+		"{date}, {terre} redevient terre de labour, sous ton regard. {fin}",
 		"Les sillons reviennent rayer {terre} {ciel}. {fin}",
 	],
 	"village": [
@@ -265,7 +265,7 @@ const LAND_USE_FIRST_TEMPLATES := {
 	],
 	"city": [
 		"{ouverture} la ville est là : {bati} couvrent {terre}, et les champs reculent. {fin}",
-		"{date}, {terre} devient une ville ; des milliers de vies s'y croisent sans Te voir.",
+		"{date}, {terre} devient une ville ; des milliers de vies s'y croisent sans te voir.",
 		"Là où paissaient des troupeaux, {bati} montent vers le ciel : {terre} est une ville. {fin}",
 	],
 	"megacity": [
@@ -296,7 +296,7 @@ const ARRIVAL_TEMPLATES := {
 		"Sur {terre}, {espece} [espece:prend|prennent] [espece:ses|leurs] quartiers {ciel}. {fin}",
 	],
 	"sapient": [
-		"{ouverture} {espece} [espece:pose|posent] le pied sur {terre} et [espece:lève|lèvent] les yeux, [espece:comme si elle Te cherchait|comme s'ils Te cherchaient].",
+		"{ouverture} {espece} [espece:pose|posent] le pied sur {terre} et [espece:lève|lèvent] les yeux, [espece:comme si elle te cherchait|comme s'ils te cherchaient].",
 		"{date}, {espece} [espece:arrive|arrivent] sur {terre} ; rien n'y sera plus comme avant. {fin}",
 	],
 }
@@ -325,9 +325,9 @@ const COLD_TEMPLATES := [
 	"Le givre mord chaque matin un peu plus {terre} : plus que {temp}. {fin}",
 ]
 const FOCUS_TEMPLATES := [
-	"Ton regard se pose sur {terre} : {vue}. {fin}",
-	"{date}, Tu choisis de veiller sur {terre} ; {vue}.",
-	"Tu Te penches sur {terre} {ciel} : {vue}. {fin}",
+	"ton regard se pose sur {terre} : {vue}. {fin}",
+	"{date}, tu choisis de veiller sur {terre} ; {vue}.",
+	"tu te penches sur {terre} {ciel} : {vue}. {fin}",
 ]
 const GENERIC_TEMPLATES := [
 	"{date}, sur {terre} : {resume}.",
@@ -637,6 +637,11 @@ static func all_templates() -> Array:
 	return out
 
 
+## Emplacements de gabarit pour un moment (partagés avec le fil continu, chronicle.gd).
+func slots_for(era: Variant, m: Dictionary, snap: Dictionary, year: Variant) -> Dictionary:
+	return _slots(Procedural.era_key(era), m, snap, year)
+
+
 ## Rend un gabarit précis pour un moment (utilisé par les tests pour couvrir chaque gabarit).
 func render_template(tpl: String, m: Dictionary, era: Variant = "", year: Variant = null) -> String:
 	return render(tpl, _slots(Procedural.era_key(era), m, m.get("snapshot", {}), year))
@@ -666,7 +671,7 @@ func _slots(era: String, m: Dictionary, snap: Dictionary, year: Variant) -> Dict
 		default_beasts = pick.call("habitants")
 	var esp := Procedural.species_phrase(str(m.get("species_name", "")) if str(m.get("species_name", "")) != "" else default_beasts)
 	var hab := Procedural.species_phrase(_sapient_name(snap) if _sapient_name(snap) != "" else pick.call("habitants"))
-	var terre := "Ta parcelle"
+	var terre := "ta parcelle"
 	var biome := str(snap.get("biome", ""))
 	if BIOME_PHRASES.has(biome) and rng.randf() < 0.6:
 		terre = BIOME_PHRASES[biome]
@@ -689,7 +694,7 @@ func _slots(era: String, m: Dictionary, snap: Dictionary, year: Variant) -> Dict
 		"temp": "%d °C" % int(round(temp)),
 		"delta": "%d degré%s" % [delta, "s" if delta > 1 else ""],
 		"vue": LAND_USE_VIEWS.get(lu, "la vie y suit son cours"),
-		"resume": resume if resume != "" else "quelque chose change sous Tes yeux",
+		"resume": resume if resume != "" else "quelque chose change sous tes yeux",
 	}
 
 

@@ -47,8 +47,9 @@ const DEFAULTS := {
 	},
 	"narrator": {
 		"enabled": true,
-		## Délai minimal entre deux narrations automatiques (secondes réelles).
-		"min_interval_sec": 6.0,
+		## Délai minimal entre deux lignes du fil (secondes réelles) : un événement est raconté dès
+		## que ce délai est écoulé.
+		"min_interval_sec": 3.0,
 		## Nombre maximal d'événements résumés dans une seule narration.
 		"max_batch": 5,
 		## Importance minimale (0..1) pour qu'un événement de la simulation soit raconté.
@@ -56,11 +57,16 @@ const DEFAULTS := {
 		## Chronique de la parcelle suivie (arrivées d'espèces, champs, ville, ruines, chaleur…).
 		"parcel_enabled": true,
 		## Délai minimal entre deux narrations de la parcelle (secondes réelles).
-		"parcel_min_interval_sec": 15.0,
+		"parcel_min_interval_sec": 5.0,
 		## Importance minimale (0..1) d'un moment de parcelle pour être raconté.
 		"parcel_min_importance": 0.35,
 		## Dérive de température locale (°C) qui mérite d'être racontée.
 		"parcel_heat_drift_c": 4.0,
+		## Fil continu : une phrase d'ambiance quand rien ne s'est passé depuis un délai tiré entre
+		## ambient_min_sec et ambient_max_sec.
+		"ambient_enabled": true,
+		"ambient_min_sec": 8.0,
+		"ambient_max_sec": 15.0,
 	},
 }
 
@@ -167,6 +173,8 @@ func _sanitize(section: String, key: String, value: Variant) -> Variant:
 			out = clampf(out, 0.0, 1.0)
 		"parcel_min_interval_sec":
 			out = clampf(out, 0.0, 600.0)
+		"ambient_min_sec", "ambient_max_sec":
+			out = clampf(out, 1.0, 600.0)
 		"parcel_heat_drift_c":
 			out = clampf(out, 0.5, 50.0)
 		"model", "ollama_url", "llamacpp_url", "keep_alive":

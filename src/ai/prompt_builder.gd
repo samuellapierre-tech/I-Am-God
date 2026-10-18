@@ -51,6 +51,30 @@ static func build_narration_prompt(context: Dictionary) -> String:
 	return "\n".join(lines)
 
 
+## Fil continu : une phrase d'ambiance quand rien de marquant n'arrive.
+static func ambient_system() -> String:
+	return "%s Tu tiens un fil continu, écrit, de l'histoire de la parcelle que Dieu regarde : une seule phrase courte (deux au plus), à la première personne (« je ») et en tutoyant Dieu. %s" % [AiConfig.persona_text(), STYLE_RULES]
+
+
+## line : sortie de Chronicle.ambient() ; ctx : contexte du fil (era, year, snapshot…).
+static func build_ambient_prompt(line: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	var era := str(ctx.get("era", ""))
+	if era != "":
+		lines.append("Époque : %s." % era)
+	if typeof(ctx.get("year")) in [TYPE_INT, TYPE_FLOAT]:
+		lines.append("Date : %s." % Procedural.format_year(float(ctx["year"])))
+	var snap: Dictionary = ctx.get("snapshot", {})
+	if not snap.is_empty():
+		lines.append("État de la parcelle :")
+		for l in ParcelNarrator.describe_snapshot(snap):
+			lines.append("- " + l)
+	lines.append("")
+	lines.append("Observation à transmettre (vraie, n'ajoute aucun fait) : " + str(line.get("text", "")))
+	lines.append("Reformule-la à ta manière en une phrase, deux au plus.")
+	return "\n".join(lines)
+
+
 ## Narration d'un moment de la parcelle (ParcelNarrator) : le fait, puis l'état du terrain.
 ## context : {era, year}
 static func build_parcel_prompt(moment: Dictionary, context: Dictionary = {}) -> String:

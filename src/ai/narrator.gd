@@ -10,6 +10,8 @@ extends Node
 ## - Chronique de la parcelle suivie (parcel_narrator.gd) : événements « parcel_* » et changements
 ##   marquants de GameState.parcel, au plus une fois toutes les parcel_min_interval_sec secondes ;
 ##   les grands moments mondiaux (importance >= WORLD_PRIORITY, gestes divins) passent avant.
+## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance sur la parcelle.
+##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
 signal narration_ready(text: String)
 signal oracle_answered(text: String)
@@ -20,6 +22,9 @@ signal backend_changed(backend: String)
 ## Émis EN PLUS de narration_ready pour une narration de la parcelle (l'UI peut la styler à part ;
 ## moment : {kind, type, importance, land_use, species_name…}). Ne pas afficher les deux.
 signal parcel_narration_ready(text: String, moment: Dictionary)
+## Chaque ligne du fil écrit (événement du monde, de la parcelle, ambiance, dilemme…), dans l'ordre.
+## meta : {source: "world"|"parcel"|"ambient"|"dilemma"|"manual", kind, speaker, era, year, world_mode…}.
+signal chronicle_line(text: String, meta: Dictionary)
 
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const LlmClient := preload("res://src/ai/llm_client.gd")
@@ -27,6 +32,7 @@ const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const Prompts := preload("res://src/ai/prompt_builder.gd")
 const DecisionSchema := preload("res://src/ai/decision_schema.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
+const Chronicle := preload("res://src/ai/chronicle.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -50,6 +56,7 @@ var config: AiConfig
 var client: LlmClient
 var procedural: Procedural
 var parcel_narrator: ParcelNarrator
+var chronicle: Chronicle
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
 ## Chronique automatique de la parcelle (désactivable séparément).
@@ -65,6 +72,12 @@ var _game_state: Node
 var _parcel_pending: Array[Dictionary] = []
 var _parcel_cooldown := 0.0
 var _clock := 0.0
+## Fil continu : temps écoulé depuis la dernière ligne, et délai avant la prochaine phrase d'ambiance.
+var _since_line := 0.0
+var _next_ambient := 10.0
+var _ambient_rng := RandomNumberGenerator.new()
+## Gestes divins déjà accomplis, du plus ancien au plus récent : [{type, year, species_id}].
+var _divine_history: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -72,6 +85,8 @@ func _ready() -> void:
 	config.load_or_create()
 	procedural = Procedural.new()
 	parcel_narrator = ParcelNarrator.new()
+	chronicle = Chronicle.new()
+	_ambient_rng.randomize()
 	client = LlmClient.new()
 	client.name = "LlmClient"
 	add_child(client)
@@ -181,6 +196,7 @@ func reload_config() -> void:
 func _apply_narrator_config() -> void:
 	auto_narrate = config.get_value("narrator", "enabled")
 	auto_narrate_parcel = config.get_value("narrator", "parcel_enabled")
+	_next_ambient = _draw_ambient_delay()
 	parcel_narrator.heat_drift_c = config.get_value("narrator", "parcel_heat_drift_c")
 
 
@@ -253,6 +269,9 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 		"species_id": target, "region": action.get("region", Vector2i.ZERO),
 		"summary": "; ".join(summaries.slice(0, 3)), "action": action,
 	}
+	_divine_history.append({"type": str(action.get("type", "")), "year": _current_year(), "species_id": int(target) if typeof(target) in [TYPE_INT, TYPE_FLOAT] else -1})
+	if _divine_history.size() > 64:
+		_divine_history.pop_front()
 	_push(event, 1.1)  # le geste du joueur passe avant tout
 	_cooldown = minf(_cooldown, DIVINE_DELAY)
 	# Évite que l'ensemble grossisse indéfiniment si la simulation ne réémet pas certaines conséquences.
@@ -386,11 +405,84 @@ func _request_parcel_narration(moment: Dictionary, automatic: bool) -> void:
 	var on_text := func(text: String) -> void:
 		if automatic:
 			_auto_in_flight = false
-		narration_ready.emit(text)
+		_emit_line(text, {"source": "parcel", "kind": str(moment.get("kind", ""))})
 		parcel_narration_ready.emit(text, moment)
 	_ask(
 		Prompts.parcel_system(), Prompts.build_parcel_prompt(moment, {"era": era, "year": year}),
 		func() -> String: return parcel_narrator.narrate(moment, era, year), on_text, 2, not automatic)
+
+
+# ---------------------------------------------------------------------------
+# Fil continu
+# ---------------------------------------------------------------------------
+
+## Faut-il écrire une phrase d'ambiance maintenant ? (pure, testée sans GameState)
+static func ambient_due(since_line: float, next_delay: float, enabled: bool, has_world: bool) -> bool:
+	return enabled and has_world and since_line >= next_delay
+
+
+func _draw_ambient_delay() -> float:
+	var lo := float(config.get_value("narrator", "ambient_min_sec"))
+	var hi := maxf(lo, float(config.get_value("narrator", "ambient_max_sec")))
+	return _ambient_rng.randf_range(lo, hi)
+
+
+## Contexte du fil : ère, date, parcelle, espèces, gestes divins.
+func world_context() -> Dictionary:
+	return {
+		"era": _current_era(), "year": _current_year(), "snapshot": ParcelNarrator.snapshot(_parcel()),
+		"species": _species_list(), "divine": _divine_history.duplicate(),
+	}
+
+
+func _species_list() -> Array:
+	var out := []
+	if _game_state == null or not ("sim" in _game_state) or _game_state.sim == null or not ("species" in _game_state.sim):
+		return out
+	for id in _game_state.sim.species:
+		var sp: Dictionary = _game_state.sim.species[id]
+		var traits: Dictionary = sp.get("traits", {})
+		out.append({
+			"id": int(id), "name": str(sp.get("name", "")), "alive": bool(sp.get("alive", true)),
+			"sapient": bool(sp.get("sapient", false)), "clade": str(traits.get("clade", sp.get("clade", ""))),
+			"diet": str(traits.get("diet", "")), "size": float(traits.get("size", 0.3)),
+			"intelligence": float(traits.get("intelligence", 0.0)), "aggression": float(traits.get("aggression", 0.5)),
+			"tech_level": float(sp.get("tech_level", 0.0)),
+		})
+	return out
+
+
+func _narrate_ambient() -> void:
+	var ctx := world_context()
+	var line := chronicle.ambient(ctx)
+	if str(line.get("text", "")) == "":
+		_since_line = 0.0
+		return
+	_auto_in_flight = true
+	_cooldown = float(config.get_value("narrator", "min_interval_sec"))
+	var on_text := func(text: String) -> void:
+		_auto_in_flight = false
+		var meta := {"source": "ambient", "kind": str(line.get("kind", ""))}
+		for k in ["fact_id", "species_id", "world_mode"]:
+			if line.has(k):
+				meta[k] = line[k]
+		_emit_line(text, meta)
+	var fallback := func() -> String: return str(line["text"])
+	_ask(Prompts.ambient_system(), Prompts.build_ambient_prompt(line, ctx), fallback, on_text, 2, false)
+
+
+## Toute ligne du fil passe par ici : compatibilité (narration_ready) + fil (chronicle_line).
+func _emit_line(text: String, meta: Dictionary) -> void:
+	var m := meta.duplicate()
+	m["speaker"] = AiConfig.NARRATOR_NAME
+	if not m.has("era"):
+		m["era"] = _current_era()
+	if not m.has("year"):
+		m["year"] = _current_year()
+	_since_line = 0.0
+	_next_ambient = _draw_ambient_delay()
+	narration_ready.emit(text)
+	chronicle_line.emit(text, m)
 
 
 func _parcel() -> Object:
@@ -423,9 +515,14 @@ func _push(event: Dictionary, importance: float) -> void:
 
 func _process(delta: float) -> void:
 	_clock += delta
+	_since_line += delta
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
 	if _auto_in_flight or _cooldown > 0.0:
+		return
+	if _pending.is_empty() and _parcel_pending.is_empty():
+		if ambient_due(_since_line, _next_ambient, auto_narrate and bool(config.get_value("narrator", "ambient_enabled")), _game_state != null):
+			_narrate_ambient()
 		return
 	if not _parcel_pending.is_empty():
 		_parcel_pending = expire_parcel_moments(_parcel_pending, _clock)
@@ -496,7 +593,8 @@ func _request_narration(context: Dictionary, automatic: bool) -> void:
 	var on_text := func(text: String) -> void:
 		if automatic:
 			_auto_in_flight = false
-		narration_ready.emit(text)
+		var first: Variant = context.get("events", [{}])[0] if not context.get("events", []).is_empty() else context
+		_emit_line(text, {"source": "world" if automatic else "manual", "kind": str(first.get("type", "")) if first is Dictionary else ""})
 	_ask(
 		Prompts.narration_system(), Prompts.build_narration_prompt(context),
 		func() -> String: return procedural.narrate(context), on_text, 3, not automatic)
