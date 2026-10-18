@@ -235,6 +235,13 @@ func test_feed_fading() -> String:
 		_expect(FeedMath.is_at_bottom(500.0, 1000.0, 100.0), false, "remonté dans l'historique"),
 		_expect(FeedMath.clean_line("  Les Aviens\n  prient.  "), "Les Aviens prient.", "texte nettoyé"),
 		_expect(FeedMath.clean_line(" \n "), "", "texte vide"),
+		_expect(FeedMath.is_clipped(120.0, 150.0), true, "ligne rognée par le haut"),
+		_expect(FeedMath.is_clipped(150.0, 150.0), false, "ligne pile en haut de la vue"),
+		_expect(FeedMath.is_clipped(400.0, 150.0), false, "ligne entièrement visible"),
+		_near(FeedMath.header_y(100.0, 400.0, 26.0, false), 370.0, "en-tête posé sur les lignes"),
+		_near(FeedMath.header_y(100.0, 400.0, 26.0, true), 100.0, "en-tête en haut au survol"),
+		_near(FeedMath.header_y(100.0, 110.0, 26.0, false), 100.0, "en-tête jamais hors du panneau"),
+		_near(FeedMath.header_y(100.0, INF, 26.0, false), 100.0, "aucune ligne"),
 	])
 
 

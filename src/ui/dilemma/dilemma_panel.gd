@@ -16,9 +16,11 @@ const DilemmaMath := preload("res://src/ui/dilemma/dilemma_math.gd")
 const TimeDilation := preload("res://src/ui/dilemma/time_dilation.gd")
 const TimeBar := preload("res://src/ui/dilemma/time_bar.gd")
 
-const PANEL_WIDTH := 840.0
-## Bas du panneau : au-dessus de la barre des pouvoirs du HUD (qui commence à 128 px du bas).
-const BOTTOM_MARGIN := 140.0
+const Layout := preload("res://src/ui/layout.gd")
+
+const PANEL_WIDTH := Layout.DILEMMA.size.x
+## Bas du panneau : au-dessus de la barre des pouvoirs et de son indication (Layout.DILEMMA).
+const BOTTOM_MARGIN := Layout.REF_SIZE.y - (Layout.DILEMMA.position.y + Layout.DILEMMA.size.y)
 const GOLD := Color(1.0, 0.85, 0.5)
 const OUTRO := 0.7
 

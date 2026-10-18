@@ -4,8 +4,9 @@ extends CanvasLayer
 ## (une ligne animée par espèce) et courbes de température et de population tirées de
 ## parcel.history. Repliable avec la touche S.
 ##
-## Placé sur la colonne gauche, entre la barre du haut du HUD (y < 88) et la Chronique (y > 660) :
-## ne cache ni le centre de l'écran ni les panneaux de hud.gd. Ne lit que le contrat ParcelSim
+## Placé en haut de la colonne gauche (la barre du haut du HUD est centrée, le tiroir Chronique s'ouvre
+## dessous, y > 664) : ne cache ni le centre de l'écran ni les panneaux de hud.gd.
+## L'en-tête tient aussi lieu de fiche de la parcelle (cellule, technologie en infobulle). Ne lit que le contrat ParcelSim
 ## (GameState.parcel) et se rafraîchit sur GameState.parcel_updated (≤ 4 Hz).
 
 const MapMath := preload("res://src/map/map_math.gd")
@@ -15,8 +16,10 @@ const SpeciesRow := preload("res://src/ui/stats/species_row.gd")
 const TemperatureGauge := preload("res://src/ui/stats/temperature_gauge.gd")
 const TrendArrow := preload("res://src/ui/stats/trend_arrow.gd")
 
-const PANEL_POS := Vector2(12, 96)
-const PANEL_WIDTH := 360.0
+const Layout := preload("res://src/ui/layout.gd")
+
+const PANEL_POS := Layout.STATS.position
+const PANEL_WIDTH := Layout.STATS.size.x
 const TOGGLE_KEY := KEY_S
 ## Échantillons de la mini-courbe de chaleur et fenêtre des tendances.
 const SPARK_SAMPLES := 64
@@ -410,7 +413,12 @@ func _refresh_header() -> void:
 		if s != "":
 			parts.append(s)
 	_sub_label.text = "  ·  ".join(parts)
-	_sub_label.tooltip_text = "Parcelle suivie : cellule (%d, %d)" % [p.cell.x, p.cell.y]
+	var tip := "Parcelle suivie : cellule (%d, %d)" % [p.cell.x, p.cell.y]
+	if "tech" in p:
+		tip += "
+Technologie locale : %d %%" % int(float(p.tech) * 100.0)
+	_sub_label.tooltip_text = tip
+	_land_label.tooltip_text = tip
 
 
 ## Effectif affiché : un futur champ `population` (effectif réel) l'emporte sur `count`
