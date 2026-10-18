@@ -2,6 +2,8 @@ extends CanvasLayer
 ## Fil de narration : l'histoire racontée en continu par le Narrateur (Narrator.narration_ready).
 ## Le plus récent en bas ; les dernières lignes restent visibles puis s'estompent (FeedMath).
 ## Au survol (ou PageUp / PageDown) le fond apparaît et tout l'historique se relit à la molette.
+## En tête : le nom du narrateur (DilemmaMath.speaker_name : NARRATOR_NAME de ai_config.gd, sinon
+## le nom par défaut), visible dès qu'il a parlé.
 ##
 ## Placé dans la colonne droite, entre le panneau « Espèces vivantes » du HUD (y < 540) et ses
 ## infos de région (y > 860) : ne masque ni le centre de la parcelle ni les statistiques (à gauche).
@@ -9,6 +11,7 @@ extends CanvasLayer
 
 const FeedMath := preload("res://src/ui/chronicle/feed_math.gd")
 const StatsMath := preload("res://src/ui/stats/stats_math.gd")
+const DilemmaMath := preload("res://src/ui/dilemma/dilemma_math.gd")
 
 const PANEL_LEFT := -312.0
 const PANEL_RIGHT := -12.0
@@ -21,6 +24,7 @@ const PEEK_DURATION := 4.0
 
 var _panel: PanelContainer
 var _header: HBoxContainer
+var _speaker_label: Label
 var _scroll: ScrollContainer
 var _lines: VBoxContainer
 var _latest_button: Button
@@ -99,12 +103,14 @@ func _build() -> void:
 	_header = HBoxContainer.new()
 	_header.modulate.a = 0.0
 	box.add_child(_header)
-	var title := Label.new()
-	title.text = "Récit"
-	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override("font_size", 16)
-	title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
-	_header.add_child(title)
+	_speaker_label = Label.new()
+	_speaker_label.text = DilemmaMath.speaker_name(null, DilemmaMath.load_config_constants())
+	_speaker_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_speaker_label.add_theme_font_size_override("font_size", 17)
+	_speaker_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+	_speaker_label.tooltip_text = "Le narrateur, maître du jeu"
+	_speaker_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	_header.add_child(_speaker_label)
 	_latest_button = Button.new()
 	_latest_button.text = "Récent ↓"
 	_latest_button.focus_mode = Control.FOCUS_NONE
@@ -142,7 +148,10 @@ func _process(delta: float) -> void:
 			_jump_to_latest()  # hors survol, on revient toujours aux lignes récentes
 	var bg := 1.0 if _hovered else 0.0
 	_panel.self_modulate.a = move_toward(_panel.self_modulate.a, bg, delta * 5.0)
-	_header.modulate.a = _panel.self_modulate.a
+	# Le nom du narrateur reste lisible dès qu'il a parlé ; le reste de l'en-tête suit le fond.
+	var has_lines := _lines.get_child_count() > 0
+	_header.modulate.a = maxf(_panel.self_modulate.a, 0.75 if has_lines else 0.0)
+	_latest_button.visible = _hovered and not _following
 	if _scroll_frames > 0:
 		_scroll_frames -= 1
 		var bar := _scroll.get_v_scroll_bar()
@@ -179,12 +188,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _on_scrolled(value: float) -> void:
 	var bar := _scroll.get_v_scroll_bar()
 	_following = FeedMath.is_at_bottom(value, bar.max_value, bar.page)
-	_latest_button.visible = not _following
 
 
 func _jump_to_latest() -> void:
 	_following = true
-	_latest_button.visible = false
 	_scroll_frames = 2
 
 

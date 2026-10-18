@@ -236,3 +236,22 @@ func test_feed_fading() -> String:
 		_expect(FeedMath.clean_line("  Les Aviens\n  prient.  "), "Les Aviens prient.", "texte nettoyé"),
 		_expect(FeedMath.clean_line(" \n "), "", "texte vide"),
 	])
+
+
+func test_speaker_name() -> String:
+	var raw := _sample()
+	raw.speaker = "  Ézéchiel le Prophète "
+	var signed: String = DilemmaMath.normalize(raw).speaker
+	var unsigned: String = DilemmaMath.normalize(_sample()).speaker
+	return _first_error([
+		_expect(signed, "Ézéchiel le Prophète", "speaker du dilemme"),
+		_expect(unsigned, "", "dilemme sans speaker"),
+		_expect(DilemmaMath.speaker_name(signed, {NARRATOR_NAME = "Autre"}), "Ézéchiel le Prophète",
+			"le dilemme l'emporte sur ai_config"),
+		_expect(DilemmaMath.speaker_name("", {NARRATOR_NAME = "Nom de config"}), "Nom de config",
+			"repli sur NARRATOR_NAME"),
+		_expect(DilemmaMath.speaker_name(null, {}), DilemmaMath.DEFAULT_SPEAKER, "nom par défaut"),
+		_expect(DilemmaMath.DEFAULT_SPEAKER, "Ézéchiel", "le narrateur s'appelle Ézéchiel"),
+		_expect(DilemmaMath.signature("Ézéchiel"), "— Ézéchiel", "signature"),
+		"" if DilemmaMath.load_config_constants() is Dictionary else "constantes de ai_config illisibles",
+	])

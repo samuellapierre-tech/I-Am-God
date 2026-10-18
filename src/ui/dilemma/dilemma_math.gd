@@ -6,7 +6,13 @@ extends RefCounted
 ## Contrat attendu (Narrator.dilemma_ready) :
 ##   {id, title, text, options: [{label, hint, action}], timeout_s}
 ## Champs facultatifs reconnus : title (titre par défaut), hint, action, timeout_s (DEFAULT_TIMEOUT),
-## default_index (option retenue si le temps s'écoule ; -1 = « Dieu se tait »).
+## default_index (option retenue si le temps s'écoule ; -1 = « Dieu se tait »),
+## speaker (nom du narrateur qui signe le dilemme).
+
+## Nom du narrateur, maître du jeu, quand ni le dilemme ni ai_config.gd ne le donnent.
+## Seul endroit de l'interface où il est écrit : tout passe par speaker_name().
+const DEFAULT_SPEAKER := "Ézéchiel"
+const AI_CONFIG_PATH := "res://src/ai/ai_config.gd"
 
 const MIN_OPTIONS := 2
 const MAX_OPTIONS := 4
@@ -57,6 +63,7 @@ static func normalize(raw: Variant) -> Dictionary:
 		options = options,
 		timeout_s = timeout,
 		default_index = default_index,
+		speaker = _text(d.get("speaker")),
 	}
 
 
@@ -86,6 +93,33 @@ static func validate(d: Dictionary) -> String:
 		if not o is Dictionary or _text(o.get("label")).is_empty():
 			return "option %d sans libellé" % (i + 1)
 	return ""
+
+
+## Nom du narrateur : `speaker` du dilemme, sinon NARRATOR_NAME des constantes de ai_config.gd,
+## sinon DEFAULT_SPEAKER.
+static func speaker_name(speaker: Variant = null, config_constants: Dictionary = {}) -> String:
+	var name := _text(speaker)
+	if name == "":
+		name = _text(config_constants.get("NARRATOR_NAME"))
+	return name if name != "" else DEFAULT_SPEAKER
+
+
+## « — Ézéchiel »
+static func signature(name: String) -> String:
+	return "— " + name
+
+
+## Constantes de src/ai/ai_config.gd ({} si le script n'existe pas). Lu une fois par panneau.
+static func load_config_constants() -> Dictionary:
+	if not ResourceLoader.exists(AI_CONFIG_PATH):
+		return {}
+	var script := load(AI_CONFIG_PATH) as Script
+	var out := {}
+	if script:
+		var constants := script.get_script_constant_map()
+		for k in constants:
+			out[str(k)] = constants[k]  # clés en String (la carte peut contenir des StringName)
+	return out
 
 
 ## Part de temps restant (1 = plein, 0 = écoulé).

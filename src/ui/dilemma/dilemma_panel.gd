@@ -2,7 +2,8 @@ extends CanvasLayer
 ## Panneau de dilemme : le Narrateur, maître du jeu, pose un choix au joueur.
 ## Écoute Narrator.dilemma_ready(dilemma) et répond par Narrator.resolve_dilemma(id, index).
 ## Panneau solennel au centre-bas (au-dessus de la barre des pouvoirs du HUD) : titre, texte écrit
-## progressivement, 2 à 4 options (libellé + indication), barre de temps restant.
+## progressivement, signature du narrateur (DilemmaMath.speaker_name),
+## 2 à 4 options (libellé + indication), barre de temps restant.
 ## Pendant l'affichage, le temps du monde ralentit fortement (TimeDilation) puis reprend sa vitesse.
 ## Raccourcis : 1 à 4 (rangée du haut ou pavé numérique), clic, ou manette (croix + A).
 ## Si le temps s'écoule : option `default_index` du dilemme, sinon -1 (« Dieu se tait »).
@@ -24,6 +25,7 @@ const OUTRO := 0.7
 var _panel: PanelContainer
 var _title: Label
 var _text: RichTextLabel
+var _signature: Label
 var _options_box: HBoxContainer
 var _buttons: Array[Button] = []
 var _time_bar: TimeBar
@@ -38,12 +40,15 @@ var _chosen := -2  # -2 : pas encore tranché
 var _outro := 0.0
 var _dilation := TimeDilation.new()
 var _tween: Tween
+## Constantes de ai_config.gd (NARRATOR_NAME), lues une fois.
+var _config := {}
 
 
 func _ready() -> void:
 	layer = 12  # au-dessus du HUD (10) et des statistiques (9)
 	# Après le HUD, qui réécrit la vitesse du temps à chaque image : on ralentit sa valeur.
 	process_priority = 100
+	_config = DilemmaMath.load_config_constants()
 	_build()
 	var narrator := get_node_or_null("/root/Narrator")
 	if narrator and narrator.has_signal("dilemma_ready"):
@@ -118,6 +123,11 @@ func _build() -> void:
 	_text.tooltip_text = ""
 	_text.gui_input.connect(_on_text_input)
 	box.add_child(_text)
+	_signature = Label.new()
+	_signature.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_signature.add_theme_font_size_override("font_size", 18)
+	_signature.add_theme_color_override("font_color", GOLD.darkened(0.1))
+	box.add_child(_signature)
 	_options_box = HBoxContainer.new()
 	_options_box.add_theme_constant_override("separation", 10)
 	box.add_child(_options_box)
@@ -215,6 +225,8 @@ func _open(d: Dictionary) -> void:
 	_title.text = d.title
 	_text.text = d.text
 	_text.visible_characters = 0
+	_signature.text = DilemmaMath.signature(DilemmaMath.speaker_name(d.speaker, _config))
+	_signature.modulate.a = 0.0
 	for c in _options_box.get_children():
 		_options_box.remove_child(c)
 		c.queue_free()
@@ -258,7 +270,11 @@ func _process(delta: float) -> void:
 		if _outro >= OUTRO:
 			_close()
 		return
-	_text.visible_characters = DilemmaMath.visible_chars(_elapsed, _text.get_total_character_count())
+	var total_chars := _text.get_total_character_count()
+	_text.visible_characters = DilemmaMath.visible_chars(_elapsed, total_chars)
+	# La signature apparaît une fois le texte écrit.
+	if _text.visible_characters >= total_chars:
+		_signature.modulate.a = minf(1.0, _signature.modulate.a + delta * 3.0)
 	var paused: bool = GameState.paused if GameState else false
 	_remaining = DilemmaMath.tick(_remaining, delta, paused)
 	_time_bar.ratio = DilemmaMath.time_ratio(_remaining, float(_current.timeout_s))
@@ -308,6 +324,7 @@ func _choose(index: int, timed_out: bool = false) -> void:
 		return
 	_chosen = index
 	_text.visible_characters = -1
+	_signature.modulate.a = 1.0
 	# L'option retenue reste allumée (focus doré), les autres s'éteignent.
 	for i in _buttons.size():
 		_buttons[i].disabled = i != index
