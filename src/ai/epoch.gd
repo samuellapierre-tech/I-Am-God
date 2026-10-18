@@ -145,8 +145,21 @@ static func violations(text: String, epoch: int) -> Array:
 	return out
 
 
+## Une expression par époque (tous les mots encore interdits), compilée une fois : sur des parties de
+## dizaines d'heures, le filtre passe sur chaque ligne candidate.
+static var _clean_cache: Array = []
+
+
 static func is_clean(text: String, epoch: int) -> bool:
-	return violations(text, epoch).is_empty()
+	if _clean_cache.is_empty():
+		for e in range(LAST + 1):
+			var parts := PackedStringArray()
+			for w in WORDS:
+				if e < int(w[1]):
+					parts.append("(?:%s)" % str(w[0]))
+			_clean_cache.append(RegEx.create_from_string("(?i)" + "|".join(parts)) if not parts.is_empty() else null)
+	var re: RegEx = _clean_cache[clampi(epoch, 0, LAST)]
+	return re == null or re.search(text) == null
 
 
 ## Ce qu'on n'a pas le droit de mentionner à cette époque (pour les prompts du LLM).

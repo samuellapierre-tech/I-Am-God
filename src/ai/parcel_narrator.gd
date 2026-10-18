@@ -359,6 +359,9 @@ const GENERIC_TEMPLATES := [
 
 var rng := RandomNumberGenerator.new()
 var heat_drift_c := DEFAULT_HEAT_DRIFT_C
+## Mémoire anti-répétition partagée (variety.gd) ; null = sans. Avec elle, narrate() renvoie "" plutôt
+## que de redire un texte récent (le narrateur se tait).
+var variety: RefCounted = null
 
 var _seed := 0
 var _count := 0
@@ -624,13 +627,24 @@ func narrate(m: Dictionary, era: Variant = "", year: Variant = null, epoch := -1
 	var idx := rng.randi() % templates.size()
 	if templates[idx] == _last_template and templates.size() > 1:
 		idx = (idx + 1) % templates.size()
-	for attempt in templates.size() * 3:
-		var tpl: String = templates[(idx + attempt) % templates.size()]
+	var family := "parcel:%s:%s" % [kind, str(templates[0]).substr(0, 24)]
+	var order: Array = variety.order(family, templates.size(), rng) if variety != null else []
+	for attempt in templates.size() * (5 if variety != null else 3):
+		var i: int = order[attempt % order.size()] if variety != null else (idx + attempt) % templates.size()
+		var tpl: String = templates[i]
 		var text := render(tpl, _slots(e, m, snap, year))
-		if Epoch.is_clean(text, epoch):
-			_last_template = tpl
-			return text
-	return render(SAFE_TEMPLATE, _slots(e, m, snap, year)).replace("ce coin de forêt", "ta parcelle")
+		if not Epoch.is_clean(text, epoch):
+			continue
+		if variety != null:
+			if variety.seen(text):
+				continue
+			variety.remember(text)
+			variety.used(family, i)
+		_last_template = tpl
+		return text
+	if variety != null:
+		return ""
+	return render(SAFE_TEMPLATE, _slots(e, m, snap, year))
 
 
 ## Gabarits candidats pour un moment (exposé pour les tests).

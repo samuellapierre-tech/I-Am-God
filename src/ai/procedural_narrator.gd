@@ -356,6 +356,9 @@ const ORACLE_FINS := [
 ]
 
 var rng := RandomNumberGenerator.new()
+## Mémoire anti-répétition partagée (variety.gd) ; null = sans. Avec elle, une narration déjà dite
+## récemment est remplacée par une autre, sinon narrate() renvoie "" (le narrateur se tait).
+var variety: RefCounted = null
 
 
 func _init(p_seed: int = -1) -> void:
@@ -383,7 +386,18 @@ static func era_key(era: Variant) -> String:
 	return "generic"
 
 
+## Étapes du prologue (WorldSim.ERAS), précédées de leur article.
+const PROLOGUE_ARTICLES := {
+	"Archéen": "l'Archéen", "Grande Oxydation": "la Grande Oxydation", "Terre boule de neige": "la Terre boule de neige",
+	"Explosion cambrienne": "l'explosion cambrienne", "Sortie des eaux": "la sortie des eaux",
+	"Carbonifère": "le Carbonifère", "Grande Mourance": "la Grande Mourance",
+}
+
+
 static func era_with_article(era: Variant) -> String:
+	var i := Epoch.index_of(era)
+	if i >= 0 and PROLOGUE_ARTICLES.has(Epoch.NAMES[i]):
+		return PROLOGUE_ARTICLES[Epoch.NAMES[i]]
 	return ERA_ARTICLES[era_key(era)]
 
 
@@ -409,6 +423,9 @@ static func format_year(year: float) -> String:
 		return "il y a %d mille ans" % int(round(-year / 1000.0))
 	if year < 0.0:
 		return "en l'an %d avant notre ère" % int(round(-year))
+	# Futur sans fin : au-delà d'un million d'années, on compte à partir d'aujourd'hui.
+	if year >= 1_000_000.0:
+		return "dans %s" % _duration(year - 2026.0)
 	return "en l'an %d" % int(round(year))
 
 
@@ -506,6 +523,8 @@ func _narrate_batch(context: Dictionary, events: Array) -> String:
 		if not ctx.has(k) and context.has(k):
 			ctx[k] = context[k]
 	var text := _narrate_one(ctx)
+	if text == "":
+		return ""
 	if events.size() > 1:
 		var others := events.size() - 1
 		var echo := [
@@ -527,13 +546,17 @@ func _narrate_one(context: Dictionary) -> String:
 	if resume != "" and etype in SUMMARY_TYPES:
 		templates = SUMMARY_TEMPLATES
 	# Aucun mot anachronique (epoch.gd) : on essaie gabarits et emplacements jusqu'à un texte propre.
-	for _attempt in 12:
+	for _attempt in (24 if variety != null else 12):
 		var slots := _era_slots(lex, context)
 		slots["ere"] = era_with_article(era)
 		slots["resume"] = resume
 		var text := _render(templates[rng.randi() % templates.size()], slots)
-		if Epoch.is_clean(text, epoch):
+		if Epoch.is_clean(text, epoch) and (variety == null or not variety.seen(text)):
+			if variety != null:
+				variety.remember(text)
 			return text
+	if variety != null:
+		return ""
 	if resume != "" and Epoch.is_clean(resume, epoch):
 		return _polish(resume + ".")
 	var date := format_year(float(context["year"])) if typeof(context.get("year")) in [TYPE_INT, TYPE_FLOAT] else "En ce jour"
