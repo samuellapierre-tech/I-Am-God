@@ -4,6 +4,7 @@ extends CanvasLayer
 ## - en bas, au centre : barre des pouvoirs compacte (+ indication flottante quand un pouvoir est armé) ;
 ## - tiroirs fermés par défaut : « Espèces vivantes » du monde (touche E, choix de la cible) à droite,
 ##   « Chronique » du monde (touche C) en bas à gauche.
+## Zones : src/ui/layout.gd (dont la bande et la colonne réservées à la couche stratégie).
 ## Ailleurs, et hors de ce fichier : statistiques de la parcelle à gauche (S), fil d'Ézéchiel à droite,
 ## dilemmes au centre-bas. La narration n'est affichée que par le fil (src/ui/chronicle/).
 ## Construite en code pour rester lisible et sans dépendance à des ressources externes.
@@ -11,6 +12,7 @@ extends CanvasLayer
 
 const MapMath := preload("res://src/map/map_math.gd")
 const Powers := preload("res://src/map/divine_powers.gd")
+const Layout := preload("res://src/ui/layout.gd")
 
 ## Multiplicateurs de vitesse x1..x5 (appliqués à MapMath.base_years_per_second()).
 const SPEEDS := [1.0, 2.0, 3.0, 4.0, 5.0]
@@ -144,7 +146,7 @@ func _build() -> void:
 func _build_top_bar(root: Control) -> void:
 	var top := _panel(root)
 	top.theme_type_variation = &"CompactPanel"
-	_place(top, Vector4(0.5, 0, 0.5, 0), Vector4(0, 8, 0, 8))
+	_place(top, Vector4(0.5, 0, 0.5, 0), Vector4(0, Layout.TOP_BAR.position.y, 0, Layout.TOP_BAR.position.y))
 	top.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
@@ -196,7 +198,8 @@ func _build_top_bar(root: Control) -> void:
 func _build_power_bar(root: Control) -> void:
 	var bar := _panel(root)
 	bar.theme_type_variation = &"CompactPanel"
-	_place(bar, Vector4(0.5, 1, 0.5, 1), Vector4(0, -8, 0, -8))
+	var bar_bottom := Layout.POWER_BAR.end.y - Layout.REF_SIZE.y
+	_place(bar, Vector4(0.5, 1, 0.5, 1), Vector4(0, bar_bottom, 0, bar_bottom))
 	bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	var power_row := HBoxContainer.new()
@@ -217,7 +220,8 @@ func _build_power_bar(root: Control) -> void:
 
 	_hint_panel = _panel(root)
 	_hint_panel.theme_type_variation = &"CompactPanel"
-	_place(_hint_panel, Vector4(0.5, 1, 0.5, 1), Vector4(0, -80, 0, -80))
+	var hint_bottom := Layout.POWER_HINT.end.y - Layout.REF_SIZE.y
+	_place(_hint_panel, Vector4(0.5, 1, 0.5, 1), Vector4(0, hint_bottom, 0, hint_bottom))
 	_hint_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	_hint_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	_hint_panel.visible = false
@@ -245,7 +249,7 @@ func _build_power_bar(root: Control) -> void:
 ## Tiroir « Espèces vivantes » (monde entier) : choix de la cible des pouvoirs. Fermé par défaut.
 func _build_species_drawer(root: Control) -> void:
 	_species_drawer = _panel(root)
-	_place(_species_drawer, Vector4(1, 0, 1, 0), Vector4(-332, 64, -12, 540))
+	Layout.place(_species_drawer, Layout.SPECIES_DRAWER, Vector2(1, 0))
 	_species_drawer.visible = false
 	var box := VBoxContainer.new()
 	_species_drawer.add_child(box)
@@ -267,7 +271,7 @@ func _build_species_drawer(root: Control) -> void:
 ## Tiroir « Chronique » (journal du monde), en bas à gauche, sous les statistiques. Fermé par défaut.
 func _build_chronicle_drawer(root: Control) -> void:
 	_chronicle_drawer = _panel(root)
-	_place(_chronicle_drawer, Vector4(0, 1, 0, 1), Vector4(12, -416, 512, -84))
+	Layout.place(_chronicle_drawer, Layout.CHRONICLE_DRAWER, Vector2(0, 1))
 	_chronicle_drawer.visible = false
 	var box := VBoxContainer.new()
 	_chronicle_drawer.add_child(box)

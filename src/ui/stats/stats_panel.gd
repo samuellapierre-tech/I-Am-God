@@ -16,8 +16,10 @@ const SpeciesRow := preload("res://src/ui/stats/species_row.gd")
 const TemperatureGauge := preload("res://src/ui/stats/temperature_gauge.gd")
 const TrendArrow := preload("res://src/ui/stats/trend_arrow.gd")
 
-const PANEL_POS := Vector2(12, 12)
-const PANEL_WIDTH := 360.0
+const Layout := preload("res://src/ui/layout.gd")
+
+const PANEL_POS := Layout.STATS.position
+const PANEL_WIDTH := Layout.STATS.size.x
 const TOGGLE_KEY := KEY_S
 ## Échantillons de la mini-courbe de chaleur et fenêtre des tendances.
 const SPARK_SAMPLES := 64

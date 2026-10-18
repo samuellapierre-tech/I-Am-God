@@ -15,11 +15,7 @@ const FeedMath := preload("res://src/ui/chronicle/feed_math.gd")
 const StatsMath := preload("res://src/ui/stats/stats_math.gd")
 const DilemmaMath := preload("res://src/ui/dilemma/dilemma_math.gd")
 
-## Ancré en bas à droite (marges depuis le coin bas-droit).
-const PANEL_LEFT := -352.0
-const PANEL_RIGHT := -12.0
-const PANEL_TOP := -524.0
-const PANEL_BOTTOM := -84.0
+const Layout := preload("res://src/ui/layout.gd")
 const TEXT_SIZE := 18
 const YEAR_SIZE := 13
 ## Durée (s) pendant laquelle PageUp / PageDown laissent l'historique affiché.
@@ -85,14 +81,7 @@ func _build() -> void:
 	_panel = PanelContainer.new()
 	_panel.name = "NarrationFeed"
 	_panel.mouse_filter = Control.MOUSE_FILTER_PASS
-	_panel.anchor_left = 1.0
-	_panel.anchor_right = 1.0
-	_panel.anchor_top = 1.0
-	_panel.anchor_bottom = 1.0
-	_panel.offset_left = PANEL_LEFT
-	_panel.offset_right = PANEL_RIGHT
-	_panel.offset_top = PANEL_TOP
-	_panel.offset_bottom = PANEL_BOTTOM
+	Layout.place(_panel, Layout.FEED, Vector2(1, 1))  # ancré au coin bas-droit
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.04, 0.05, 0.09, 0.82)
 	style.border_color = Color(0.85, 0.7, 0.35, 0.35)
