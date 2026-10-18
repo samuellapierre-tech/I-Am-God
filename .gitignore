@@ -1,0 +1,6 @@
+.godot/
+*.import
+export/
+builds/
+*.tmp
+/models/*.gguf
