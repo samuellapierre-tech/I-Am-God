@@ -19,6 +19,9 @@ const MESOZOIC := 7
 const CENOZOIC := 8
 const FIRST_SAPIENT_ERA := 9
 const LAST_ERA := 16
+## Après la chute ou le départ de toute civilisation : l'âge des héritiers (mode Éternité), d'où
+## une nouvelle lignée peut s'éveiller (retour à FIRST_SAPIENT_ERA : un nouveau cycle).
+const AFTERMATH := 17
 const MAX_TECH := 8.0
 
 ## Noms des ères (WorldSim.ERAS), dans l'ordre des indices ci-dessus.
@@ -27,6 +30,7 @@ const NAMES := [
 	"Sortie des eaux", "Carbonifère", "Grande Mourance",
 	"Mésozoïque", "Cénozoïque", "Préhistoire", "Antiquité",
 	"Moyen Âge", "Renaissance", "Industriel", "Moderne", "Cyberpunk", "Post-singularité",
+	"Âge des héritiers",
 ]
 ## Dates de référence (années) des étapes du prologue dans l'histoire réelle : la simulation les
 ## retrouve à peu près sans intervention, mais ce sont des conséquences, pas des déclencheurs.
@@ -38,6 +42,7 @@ const PROLOGUE_REFERENCE_YEARS := [-3.8e9, -2.4e9, -720.0e6, -540.0e6, -375.0e6,
 const IDEAL_DT: Array[float] = [
 	12.0e6, 5.5e6, 1.0e6, 550000.0, 380000.0, 260000.0, 120000.0,
 	70000.0, 50000.0, 500.0, 10.0, 5.0, 2.0, 1.0, 0.5, 0.25, 0.25,
+	50000.0,
 ]
 ## Fin du Crétacé de référence (rythme de l'acte I, voir WorldSim.MESOZOIC_STEPS).
 const CRETACEOUS_END := -66.0e6
@@ -68,7 +73,7 @@ static func era_for_tech(level: float) -> int:
 
 
 static func ideal_dt(era_index: int) -> float:
-	return IDEAL_DT[clampi(era_index, 0, LAST_ERA)]
+	return IDEAL_DT[clampi(era_index, 0, IDEAL_DT.size() - 1)]
 
 
 ## Durée de référence d'une ère, utilisée pour dimensionner les conséquences différées

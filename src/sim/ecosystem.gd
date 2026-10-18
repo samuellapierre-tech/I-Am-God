@@ -248,7 +248,9 @@ func region_fits(idx: int, r: int) -> bool:
 
 ## Facteurs de capacité dus à l'oxygène (thread principal, entre deux pas) : la vie complexe en
 ## exige, il empoisonne les anaérobies, et sans couche d'ozone les terres restent stériles.
-func set_oxygen(oxygen: float, needs: Array[float]) -> void:
+## `complex_room` (0..1) : part de capacité laissée à la vie complexe (complexité ≥ 3) par la
+## chaleur du Soleil vieillissant.
+func set_oxygen(oxygen: float, needs: Array[float], complex_room := 1.0) -> void:
 	land_open = smoothstep(0.08, 0.3, oxygen) if explicit_flora == 1 else 1.0
 	for s in MAXS:
 		if t_alive[s] == 0:
@@ -258,6 +260,8 @@ func set_oxygen(oxygen: float, needs: Array[float]) -> void:
 		var f := 1.0 if need <= 0.0 else smoothstep(0.4 * need, need, oxygen)
 		if t_anaer[s] == 1:
 			f *= 1.0 - clampf(oxygen / 0.05, 0.0, 0.9)
+		if t_cx[s] >= 3.0:
+			f *= complex_room
 		t_oxf[s] = maxf(f, 0.0)
 
 

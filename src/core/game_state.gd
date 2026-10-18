@@ -182,6 +182,9 @@ func _refresh_parcel() -> void:
 ## tempéré à chaud, humide), pour que la partie s'ouvre sur des dinosaures et non sur un désert.
 ## Une cellule testée par région écologique (4×4) ; déterministe à graine égale.
 func _liveliest_cell() -> Vector2i:
+	if sim.is_prologue() and sim.land_flora <= 0.0:
+		# Avant toute vie terrestre : un estran à stromatolites qui émergera (voir ParcelSim).
+		return ParcelSim.pick_start_cell(sim)
 	var best := _first_land_cell(DEFAULT_PARCEL)
 	var best_score := -1.0
 	for y in range(2, WorldSim.HEIGHT, 4):

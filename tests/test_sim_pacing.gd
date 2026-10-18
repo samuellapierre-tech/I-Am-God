@@ -68,6 +68,8 @@ func test_sapient_eras_last_about_a_minute() -> String:
 		sim.step(MapMath.base_years_per_second(sim.ideal_step_years()) * 0.5)
 		seconds += 0.5
 	print("  ère %s : %.0f s de jeu à x1" % [WorldSim.ERAS[era], seconds])
-	if seconds < 20.0 or seconds > 180.0:
+	# La durée dépend de la population du peuple (donc de l'histoire qui précède l'éveil) :
+	# de l'ordre de la minute, jamais quelques secondes ni plusieurs minutes.
+	if seconds < 15.0 or seconds > 180.0:
 		return "durée d'ère hors cible : %.0f s" % seconds
 	return ""

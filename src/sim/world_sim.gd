@@ -123,6 +123,35 @@ const MESOZOIC_STEPS := 2650.0
 const MESOZOIC_DT_MIN := 40000.0
 const MESOZOIC_DT_MAX := 110000.0
 
+# --- Mode Éternité et futur lointain ---------------------------------------------------------
+## Exode : une civilisation post-singularité finit par quitter la Terre (taux par an).
+const EXODUS_RATE := 1.0 / 1500.0
+## Effondrements tardifs (mode Éternité) : occurrences par durée de niveau technologique, à partir
+## du niveau EXHAUSTION_LEVEL (ère moderne).
+const EXHAUSTION_LEVEL := 5.0
+const EXHAUSTION_RATE := 0.08
+## Plafond de la pression vers la complexité (sinon, dans un futur lointain, chaque lignée
+## deviendrait consciente sitôt la précédente partie).
+const MAX_COMPLEXITY_PRESSURE := 4.0
+## Soleil vieillissant : décalage de température par milliard d'années après l'an 0, et seuils où
+## la vie complexe commence / finit de suffoquer.
+const SUN_WARMING_PER_GA := 0.3
+const SUN_COMPLEX_LIMIT := Vector2(0.18, 0.4)
+## Glaciations naturelles après le prologue (taux par an) et leur refroidissement.
+const NATURAL_ICE_AGE_RATE := 1.0 / 60.0e6
+const NATURAL_ICE_AGE_COLD := -0.12
+## Sans aucune vie, la vie renaît (sources chaudes) après ce délai (mode Éternité).
+const ABIOGENESIS_YEARS := 20.0e6
+## Niveau marin (élévation 0..1, prologue) : les continents émergent lentement (« franc-bord »),
+## jusqu'à LAND_EMERGENCE_YEAR ; le climat s'y ajoute (glaciations basses, mondes chauds hauts).
+const SEA_FREEBOARD := 0.05
+const SEA_FREEBOARD_POWER := 0.2
+const LAND_EMERGENCE_YEAR := -450.0e6
+const SEA_CLIMATE_GAIN := 0.15
+## Les calottes mettent des millions d'années à croître ou fondre : le niveau marin suit le climat
+## avec ce temps de réponse (les chocs brefs ne font pas battre les rivages).
+const SEA_LEVEL_TAU := 5.0e6
+
 const STAGE_TEXT := {
 	Eras.GREAT_OXIDATION: "les cyanobactéries saturent l'atmosphère d'oxygène et empoisonnent la vie ancienne",
 	Eras.SNOWBALL: "le méthane disparaît, la glace gagne l'équateur",
@@ -164,6 +193,15 @@ var land_fauna := 1.0
 var snowball := false
 ## Année d'entrée dans chaque ère atteinte : {indice d'ère: année}.
 var era_years := {}
+## Mode Éternité (par défaut) : exode des civilisations accomplies, effondrements tardifs, vie qui
+## renaît d'elle-même. false = mode Épreuve (piloté par la stratégie), voir set_endless().
+var endless := true
+## Niveau de la mer, en unités d'altitude (0 = rivage de la carte). Varie au prologue et avec le
+## climat ; toujours 0 dans le scénario du Crétacé.
+var sea_level := 0.0
+## Cycles de civilisation achevés (chute ou départ de toute civilisation) et renaissances de la vie.
+var cycles := 0
+var rebirths := 0
 ## Journal causal (history, get_event, chain).
 var causal_log: RefCounted
 ## Nombre maximal de pas internes par appel à step() (borne le coût d'une image).
@@ -216,6 +254,9 @@ var _planet_cause := -1
 ## planète entière (les supervolcans n'y suffisent pas). Décroît comme _climate_anom.
 var _ice_push := 0.0
 var _meso_dt := 0.0
+var _peak_complexity := 0.0
+var _lifeless_since := NAN
+var _had_civilization := false
 
 
 func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_PROLOGUE) -> void:
@@ -261,6 +302,7 @@ func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_PROLOGUE) -> 
 		_methane = 2.0 / 3.0
 		var none: Array[Dictionary] = []
 		_climate_step(0.0, none)
+		_update_sea_level(0.0)
 	else:
 		year = CRETACEOUS_START_YEAR
 		_era_idx = Eras.MESOZOIC
@@ -368,7 +410,8 @@ func fork() -> RefCounted:
 		f.set(prop, get(prop))
 	for prop in ["scenario", "oxygen", "max_complexity", "land_flora", "land_fauna", "snowball",
 			"_iron", "_sink", "_co2", "_proto", "_methane", "_trap_clock", "_great_dying_year",
-			"_amniote_year", "_dino_ruled", "_land_regions", "_sea_regions", "_planet_cause", "_ice_push", "_meso_dt"]:
+			"_amniote_year", "_dino_ruled", "_land_regions", "_sea_regions", "_planet_cause", "_ice_push", "_meso_dt", "endless", "sea_level", "cycles", "rebirths",
+			"_peak_complexity", "_lifeless_since", "_had_civilization"]:
 		f.set(prop, get(prop))
 	f.era_years = era_years.duplicate()
 	f._recent_ext = _recent_ext.duplicate()
@@ -423,6 +466,22 @@ func is_prologue() -> bool:
 	return Eras.is_prologue(_era_idx)
 
 
+## Mode Éternité (true, par défaut) ou Épreuve (false) : en Épreuve, les civilisations ne partent
+## pas d'elles-mêmes vers les étoiles, ne s'épuisent pas spontanément et la vie ne renaît pas d'un
+## monde stérile — la partie peut donc finir.
+func set_endless(on: bool) -> void:
+	endless = on
+
+
+## Tailles des structures qui croissent avec la partie (mémoire bornée).
+func memory_report() -> Dictionary:
+	var r: Dictionary = causal_log.size_report()
+	r.species_records = species.size()
+	r.alive = _alive.size()
+	r.runtime_records = _rt.size()
+	return r
+
+
 ## Nom du niveau de complexité atteint (« microbes », « animaux », « amniotes »…).
 func complexity_name() -> String:
 	return Species.COMPLEXITY_NAMES[clampi(int(max_complexity), 0, Species.COMPLEXITY_NAMES.size() - 1)]
@@ -438,6 +497,8 @@ func ideal_step_years() -> float:
 	if lead < 0:
 		if _era_idx == Eras.MESOZOIC and _meso_dt > 0.0:
 			return _meso_dt
+		if _era_idx == Eras.AFTERMATH and max_complexity < 3.0:
+			return Eras.ideal_dt(Eras.CAMBRIAN)  # la vie repart des microbes : temps géologique
 		return Eras.ideal_dt(_era_idx)
 	var level: float = species[lead].tech_level
 	if level >= Eras.MAX_TECH:
@@ -717,7 +778,26 @@ func _global_offset() -> float:
 	var baseline := clampf((-3.0e6 - year) / 63.0e6, 0.0, 1.0) * 0.06
 	var lead := _leading_tech()
 	var warming := clampf((lead - 4.0) * 0.03, 0.0, 0.09)
-	return baseline + warming + _climate_anom + _proto
+	return baseline + warming + _climate_anom + _proto + _sun_warming()
+
+
+## Le Soleil vieillit : après l'an 0, la Terre se réchauffe (~0,3 de l'échelle de température par
+## milliard d'années) ; vers +1 Ga, la vie complexe n'y tient plus.
+func _sun_warming() -> float:
+	return SUN_WARMING_PER_GA * clampf(year / 1.0e9, 0.0, 1.5)
+
+
+func _complex_room() -> float:
+	return 1.0 - smoothstep(SUN_COMPLEX_LIMIT.x, SUN_COMPLEX_LIMIT.y, _sun_warming())
+
+
+## Niveau marin : émergence lente des continents puis climat (glaciations basses, serre haute).
+func _update_sea_level(dt: float) -> void:
+	var frac := clampf((LAND_EMERGENCE_YEAR - year) / (LAND_EMERGENCE_YEAR - PROLOGUE_START_YEAR), 0.0, 1.0)
+	var freeboard := SEA_FREEBOARD * pow(frac, SEA_FREEBOARD_POWER)
+	var climate := clampf(_global_offset() - 0.06, -0.3, 0.15) * SEA_CLIMATE_GAIN
+	var target := freeboard + climate
+	sea_level = target if dt <= 0.0 else target + (sea_level - target) * exp(-dt / SEA_LEVEL_TAU)
 
 
 func _substep(dt: float, out: Array[Dictionary]) -> void:
@@ -725,12 +805,14 @@ func _substep(dt: float, out: Array[Dictionary]) -> void:
 	year += dt
 	if year > _mig_until:
 		_mig_mult = 1.0
-	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED)
+	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED, _complex_room())
 	_eco.prepare(dt, _mig_mult)
 	_run_ecosystem()
 	_update_species_stats(out)
 	if scenario == SCENARIO_PROLOGUE:
 		_planet_step(dt, out)
+		_update_sea_level(dt)
+	_life_cycle_step(dt, out)
 	_evolve(dt, out)
 	_advance_civilisations(dt, out)
 	_natural_events(dt, out)
@@ -839,8 +921,10 @@ func _evolve(dt: float, out: Array[Dictionary]) -> void:
 	# Pression vers la complexité : tant qu'aucun esprit n'a émergé, elle croît avec le temps
 	# (convergence évolutive). Garantit qu'une civilisation finit par naître, quelle que soit la graine.
 	var pressure := 1.0
-	if _leading_species() < 0:
-		pressure = 1.0 + maxf(0.0, year + 66.0e6) / COMPLEXITY_PRESSURE_YEARS
+	# Avant le tout premier esprit seulement : ensuite, la nature a le temps de se reconstituer
+	# entre deux civilisations.
+	if _leading_species() < 0 and not _had_civilization:
+		pressure = minf(MAX_COMPLEXITY_PRESSURE, 1.0 + maxf(0.0, year + 66.0e6) / COMPLEXITY_PRESSURE_YEARS)
 	for id in _alive.duplicate():
 		if not species.has(id) or not species[id].alive:
 			continue
@@ -947,6 +1031,10 @@ func _nearest_coast(r: int) -> int:
 
 ## Une transition de clade (Species.TRANSITIONS) tentée à la spéciation, selon l'état du monde.
 func _pick_transition(parent: Dictionary, radiating: bool, crowd := {}) -> Dictionary:
+	# Le scénario du Crétacé part de son roster cible : ses lignées ne fondent pas de clades,
+	# sauf après une renaissance de la vie.
+	if scenario == SCENARIO_CRETACEOUS and rebirths == 0:
+		return {}
 	var clade := String(parent.get("clade", ""))
 	var c := float(parent.get("complexity", 6.0))
 	for k in Species.TRANSITIONS.size():
@@ -1024,7 +1112,12 @@ func _become_sapient(id: int, out: Array[Dictionary]) -> void:
 	sp.sapient = true
 	sp.tech_level = 0.0
 	sp.name = title
-	var cause: int = rt.lineage_cause if rt.lineage_cause > 0 else rt.origin_event
+	_had_civilization = true
+	# Cause de l'éveil : ce qui a façonné la lignée (geste divin), sinon la catastrophe dont elle a
+	# profité (radiation adaptative), sinon sa naissance.
+	var cause: int = rt.lineage_cause
+	if cause <= 0:
+		cause = rt.radiation_cause if rt.radiation_cause > 0 else rt.origin_event
 	var ev := _event("sapience", _cell_of(rt.last_region), id,
 		"Éveil : les %s (%s) accèdent à la conscience — naissance des %s" % [old_name, sp.traits.clade, title],
 		cause, out)
@@ -1137,11 +1230,81 @@ func _civ_random_events(id: int, dt: float, out: Array[Dictionary]) -> void:
 		rt.tech_cause = ev.id
 		_note(id, ev.id)
 		causal_log.schedule(year + 0.15 * span, "decline", ev.id, region, id, 0.35)
+	if endless and level >= EXHAUSTION_LEVEL and _chance(dt, EXHAUSTION_RATE / span):
+		# Les civilisations accomplies s'épuisent : ressources, guerres, effondrement.
+		var ev := _event("collapse", region, id, "Effondrement : la civilisation des %s s'écroule sous son propre poids" % sp.name, recent, out)
+		sp.tech_level = maxf(0.0, level - _rng.randf_range(1.0, 2.0))
+		_eco.scale_species(rt.idx, 0.5)
+		_mark_harm({rt.idx: true}, ev.id, unit * 2.0)
+		rt.tech_cause = ev.id
+		_note(id, ev.id)
+		return
+	if endless and level >= Eras.MAX_TECH and _chance(dt, EXODUS_RATE):
+		_exodus(id, out)
+		return
 	if _chance(dt, 1.0 / span):
 		var ev := _event("discovery", region, id, "Percée : un génie des %s fait faire un bond au savoir" % sp.name, rt.tech_cause, out)
 		sp.tech_level = minf(Eras.MAX_TECH, sp.tech_level + 0.08)
 		rt.tech_cause = ev.id
 		_note(id, ev.id)
+
+
+## Exode : la civilisation accomplie quitte la Terre ; ses villes deviennent des ruines que la
+## nature reprendra. L'espèce n'est pas éteinte : elle est partie (departed = true).
+func _exodus(id: int, out: Array[Dictionary]) -> void:
+	var sp: Dictionary = species[id]
+	var rt: Dictionary = _rt[id]
+	var ev := _event("exodus", _cell_of(rt.last_region), id,
+		"Exode : les %s quittent la Terre pour les étoiles et laissent leurs villes au silence" % sp.name, rt.tech_cause, out)
+	sp.alive = false
+	sp.departed = true
+	sp.extinct_year = year
+	sp.population = 0.0
+	sp.regions = 0
+	_eco.scale_species(rt.idx, 0.0)
+	_eco.release_index(rt.idx)
+	_alive.erase(id)
+	_planet_cause = ev.id
+
+
+## Cycles de la vie (après le prologue) : fin d'un cycle de civilisation, glaciations naturelles,
+## renaissance depuis les microbes après la mort de la vie complexe, vie qui renaît d'un monde
+## stérile (mode Éternité).
+func _life_cycle_step(dt: float, out: Array[Dictionary]) -> void:
+	var cmax := 0.0
+	for id in _alive:
+		cmax = maxf(cmax, float(species[id].traits.get("complexity", 6.0)))
+	if scenario != SCENARIO_PROLOGUE:
+		max_complexity = cmax
+	if cmax >= 4.0:
+		_peak_complexity = maxf(_peak_complexity, cmax)
+	elif _peak_complexity >= 4.0 and cmax <= 2.0 and not _alive.is_empty():
+		# La vie complexe a disparu : les survivants recommencent l'histoire, sans dates héritées.
+		_peak_complexity = cmax
+		_rule_ready.clear()
+		rebirths += 1
+		var ev := _event("rebirth", Vector2i(-1, -1), -1,
+			"Renaissance : la vie complexe a disparu, les microbes survivants recommencent l'histoire", _planet_cause, out)
+		_planet_cause = ev.id
+	if _alive.is_empty():
+		if is_nan(_lifeless_since):
+			_lifeless_since = year
+		elif endless and year - _lifeless_since >= ABIOGENESIS_YEARS:
+			_lifeless_since = NAN
+			_rule_ready.clear()
+			rebirths += 1
+			_eco.explicit_flora = 1
+			var ev := _event("rebirth", Vector2i(-1, -1), -1,
+				"Genèse : dans les sources chaudes des abysses, la vie apparaît de nouveau", _planet_cause, out)
+			_planet_cause = ev.id
+			_seed_prologue()
+		return
+	_lifeless_since = NAN
+	if _era_idx >= Eras.MESOZOIC and (scenario == SCENARIO_PROLOGUE or _had_civilization) 			and _chance(dt, NATURAL_ICE_AGE_RATE):
+		var unit := Eras.time_unit(_era_idx)
+		var ev := _event("ice_age", Vector2i(-1, -1), -1, "Glaciation : les calottes polaires s'étendent", -1, out)
+		_add_climate_shock(NATURAL_ICE_AGE_COLD, unit * 3.0, ev.id)
+		_note_all(ev.id)
 
 
 func _natural_events(dt: float, out: Array[Dictionary]) -> void:
@@ -1301,6 +1464,10 @@ func _update_era(out: Array[Dictionary]) -> void:
 	elif _era_idx < Eras.MESOZOIC:
 		idx = _prologue_stage()
 		cause = _planet_cause
+	elif _had_civilization:
+		# Plus aucun peuple conscient : l'âge des héritiers, jusqu'au prochain éveil.
+		idx = Eras.AFTERMATH
+		cause = _planet_cause
 	else:
 		# Avant toute sapience : Mésozoïque tant que les dinosaures règnent (poids écologique),
 		# Cénozoïque une fois leur règne fini.
@@ -1324,7 +1491,10 @@ func _update_era(out: Array[Dictionary]) -> void:
 		cause = _last_dino_extinction
 	if idx == _era_idx:
 		return
-	var rising := idx > _era_idx
+	var new_cycle := _era_idx == Eras.AFTERMATH and lead >= 0
+	if idx == Eras.AFTERMATH:
+		cycles += 1
+	var rising := idx > _era_idx or new_cycle
 	_era_idx = idx
 	if not era_years.has(idx):
 		era_years[idx] = year
@@ -1333,9 +1503,13 @@ func _update_era(out: Array[Dictionary]) -> void:
 	var text := "Le monde entre dans l'ère : %s" % ERAS[idx]
 	if lead < 0 and STAGE_TEXT.has(idx):
 		text = "%s : %s" % [ERAS[idx], STAGE_TEXT[idx]]
+	if idx == Eras.AFTERMATH:
+		text = "%s : plus aucun peuple conscient, la Terre attend de nouveaux esprits" % ERAS[idx]
 	if lead >= 0:
 		text += " (portée par les %s)" % species[lead].name
-		if not rising:
+		if new_cycle:
+			text = "Nouveau cycle : les %s s'éveillent, le monde entre dans l'ère : %s" % [species[lead].name, ERAS[idx]]
+		elif not rising:
 			text = "Recul : la civilisation retombe à l'ère %s" % ERAS[idx]
 	var ev := _event("era_change", _cell_of(_rt[lead].last_region) if lead >= 0 else Vector2i(-1, -1),
 		lead, text, cause, out)
