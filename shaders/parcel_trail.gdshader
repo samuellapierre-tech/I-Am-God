@@ -61,7 +61,7 @@ void fragment() {
 		a = puff * 0.45 * (1.0 - k) * (1.0 - k);
 	} else if (kind == 2) {
 		float ang = atan(p.y, p.x);
-		float d = length(p) + 0.06 * sin(ang * 7.0 + custom.x) + 0.04 * sin(ang * 13.0 + 2.0);
+		float d = length(p) + 0.03 * sin(ang * 5.0 + custom.x) + 0.02 * sin(ang * 11.0 + 2.0);
 		a = (1.0 - smoothstep(0.5, 1.0, d)) * 0.7 * (1.0 - k * k);
 		c = mix(vec3(0.05, 0.04, 0.03), vec3(1.0, 0.35, 0.05), (1.0 - smoothstep(0.0, 0.35, d)) * (1.0 - smoothstep(0.0, 0.3, k)));
 	} else {
