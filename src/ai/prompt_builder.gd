@@ -13,6 +13,8 @@ const PERSONA_ORACLE := "Tu es l'Oracle des dieux. Dieu (le joueur) t'interroge 
 
 const PERSONA_PRIERE := "Tu écris la prière qu'un peuple adresse à son Dieu (le joueur). Écris en français, à la première personne du pluriel (« nous »), en 2 ou 3 phrases, dans le style et le vocabulaire de l'époque indiquée. La prière doit exprimer la détresse ou la gratitude du peuple et formuler une demande qui place Dieu devant un choix moral (aider ce peuple a un prix pour d'autres). Pas de liste, pas de titre."
 
+const PERSONA_INVENTION := "Tu inventes la culture d'un peuple imaginaire dans un jeu où Dieu (le joueur) façonne un monde qui a quitté l'histoire réelle de la Terre. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour, de la forme {\"coutumes\": [\"...\", \"...\"], \"croyance\": \"...\", \"fete\": \"...\"}, en français, chaque valeur en une proposition courte, sans majuscule initiale ni point final, cohérente avec les traits et la mémoire fournis."
+
 const PERSONA_DECISION := "Tu es le conseil dirigeant d'une civilisation dans un jeu de simulation. Tu choisis la prochaine grande décision. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour, de la forme {\"action\": \"war\"|\"expand\"|\"research\"|\"worship\", \"target\": \"...\", \"reason\": \"...\"}. La raison est une courte phrase en français."
 
 
@@ -76,6 +78,58 @@ static func build_ambient_prompt(line: Dictionary, ctx: Dictionary) -> String:
 	else:
 		lines.append("Observation à transmettre (vraie, n'ajoute aucun fait) : " + str(line.get("text", "")))
 		lines.append("Reformule-la à ta manière en une phrase, deux au plus.")
+	return "\n".join(lines)
+
+
+## Monde divergent : le LLM invente un détail à partir de l'état réel de la simulation et de la mémoire.
+static func build_invention_prompt(line: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	var p: Variant = line.get("profile", null)
+	if p is Dictionary:
+		var sp := {}
+		for s in ctx.get("species", []):
+			if int(s.get("id", -2)) == int(p.get("id", -1)):
+				sp = s
+		lines.append("Espèce (traits réels de la simulation, JSON) : " + JSON.stringify(_jsonable(sp)))
+		var memory := {}
+		for k in p:
+			if not str(k).begins_with("llm_requested"):
+				memory[k] = p[k]
+		lines.append("Ce qui a déjà été raconté sur elle (mémoire à respecter, ne rien contredire, réutiliser les noms) : " + JSON.stringify(_jsonable(memory)))
+	lines.append("")
+	lines.append("Proposition de base (tu peux la garder ou l'enrichir) : " + str(line.get("text", "")))
+	lines.append("Invente UN détail concret de mœurs, de culture ou de vie quotidienne, cohérent avec ces traits, ce climat, cet usage du sol, cette technologie et la mémoire. Tu avoues découvrir ce monde avec Dieu. Une phrase, deux au plus.")
+	return "\n".join(lines)
+
+
+## Demande d'enrichissement (JSON) d'un peuple inventé ; la réponse passe par Inventor.enrich_from_llm.
+static func build_enrich_prompt(profile: Dictionary, ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	lines.append("Peuple (mémoire, JSON) : " + JSON.stringify(_jsonable(profile)))
+	lines.append("Propose 2 nouvelles coutumes, une croyance et une fête pour ce peuple, cohérentes avec sa mémoire. Réponds uniquement en JSON.")
+	return "\n".join(lines)
+
+
+## En-tête de contexte commun aux prompts d'invention : époque, mode du monde, parcelle, gestes divins.
+static func _world_header(ctx: Dictionary) -> String:
+	var lines := PackedStringArray()
+	var mode: Dictionary = ctx.get("mode", {})
+	lines.append("Monde : %s%s." % [str(mode.get("label", "réel")),
+		(" (" + ", ".join(PackedStringArray(mode.get("reasons", []))) + ")") if not mode.get("reasons", []).is_empty() else ""])
+	if str(ctx.get("era", "")) != "":
+		lines.append("Ère atteinte : %s." % str(ctx["era"]))
+	if typeof(ctx.get("year")) in [TYPE_INT, TYPE_FLOAT]:
+		lines.append("Date : %s." % Procedural.format_year(float(ctx["year"])))
+	var snap: Dictionary = ctx.get("snapshot", {})
+	for l in ParcelNarrator.describe_snapshot(snap):
+		lines.append(l)
+	var acts := PackedStringArray()
+	for a in ctx.get("divine", []):
+		acts.append(str(a.get("type", "")) if a is Dictionary else str(a))
+	if not acts.is_empty():
+		lines.append("Gestes divins passés : %s." % ", ".join(acts))
 	return "\n".join(lines)
 
 

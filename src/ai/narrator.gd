@@ -33,6 +33,7 @@ const Prompts := preload("res://src/ai/prompt_builder.gd")
 const DecisionSchema := preload("res://src/ai/decision_schema.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const Chronicle := preload("res://src/ai/chronicle.gd")
+const Divergence := preload("res://src/ai/divergence.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -59,6 +60,8 @@ var client: LlmClient
 var procedural: Procedural
 var parcel_narrator: ParcelNarrator
 var chronicle: Chronicle
+## Le monde suit-il l'histoire réelle ? (définitivement « divergent » une fois l'un des critères atteint)
+var lens: Divergence
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
 ## Chronique automatique de la parcelle (désactivable séparément).
@@ -90,6 +93,7 @@ func _ready() -> void:
 	procedural = Procedural.new()
 	parcel_narrator = ParcelNarrator.new()
 	chronicle = Chronicle.new()
+	lens = Divergence.new()
 	_ambient_rng.randomize()
 	client = LlmClient.new()
 	client.name = "LlmClient"
@@ -439,10 +443,12 @@ func world_context() -> Dictionary:
 	for e in _recent_events:
 		if _clock - float(e["t"]) <= RECENT_EVENT_SEC:
 			recent.append(e["type"])
-	return {
+	var ctx := {
 		"era": _current_era(), "year": _current_year(), "snapshot": ParcelNarrator.snapshot(_parcel()),
 		"species": _species_list(), "divine": _divine_history.duplicate(), "recent_events": recent,
 	}
+	ctx["mode"] = lens.update(ctx)
+	return ctx
 
 
 ## Retient le type d'un événement (brut, canonique et sans préfixe parcel_) pour choisir des faits à propos.
@@ -483,12 +489,30 @@ func _narrate_ambient() -> void:
 	var on_text := func(text: String) -> void:
 		_auto_in_flight = false
 		var meta := {"source": "ambient", "kind": str(line.get("kind", ""))}
-		for k in ["fact_id", "species_id", "world_mode"]:
+		for k in ["fact_id", "species_id", "world_mode", "scene"]:
 			if line.has(k):
 				meta[k] = line[k]
 		_emit_line(text, meta)
 	var fallback := func() -> String: return str(line["text"])
-	_ask(Prompts.ambient_system(), Prompts.build_ambient_prompt(line, ctx), fallback, on_text, 2, false)
+	var kind := str(line.get("kind", ""))
+	var prompt := Prompts.build_invention_prompt(line, ctx) if kind in ["invention", "divergence"] else Prompts.build_ambient_prompt(line, ctx)
+	_ask(Prompts.ambient_system(), prompt, fallback, on_text, 2, false)
+	if kind == "invention":
+		_maybe_enrich(line)
+
+
+## Un peuple inventé est enrichi une seule fois par le LLM (coutumes, croyance, fête), puis mémorisé.
+func _maybe_enrich(line: Dictionary) -> void:
+	var p: Variant = line.get("profile", null)
+	if not (p is Dictionary) or not p.has("customs") or p.has("llm_requested") or not is_ai_available():
+		return
+	p["llm_requested"] = true
+	var sid := int(p.get("id", -1))
+	var on_reply := func(ok: bool, raw: String) -> void:
+		if ok:
+			chronicle.inventor.enrich_from_llm(sid, raw)
+	client.request(Prompts.PERSONA_INVENTION, Prompts.build_enrich_prompt(p, world_context()), on_reply,
+		{"json": true, "max_tokens": 200, "temperature": 0.9})
 
 
 ## Toute ligne du fil passe par ici : compatibilité (narration_ready) + fil (chronicle_line).

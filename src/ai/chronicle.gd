@@ -5,7 +5,8 @@ extends RefCounted
 ## ctx : {era, year, snapshot (ParcelNarrator.snapshot), species: [{id, name, clade, diet, size,
 ##        intelligence, sapient, alive}], divine: [{type, year, species_id}], choices: [...], mode: {...}}
 ## ambient(ctx) -> {text, kind, source: "ambient", ...} ; kind : "fact" (fait réel, facts/), "scene"
-## (état de la parcelle).
+## (état de la parcelle), "invention" (monde divergent, inventor.gd), "divergence" (la bascule, dite une fois).
+## ctx.mode (divergence.gd) : {real, label, reasons, just_diverged…} ; absent = monde réel.
 ## ctx.recent_events : types d'événements récents (bruts et canoniques), pour choisir des faits à propos.
 ## Le narrateur parle à la première personne (« je ») et tutoie Dieu.
 
@@ -13,9 +14,12 @@ const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
+const Inventor := preload("res://src/ai/inventor.gd")
 
 ## Part des phrases d'ambiance consacrées aux faits réels quand il y en a (le reste : scènes).
 const FACT_SHARE := 0.65
+## Part des phrases d'ambiance inventées quand le monde a divergé (le reste : scènes).
+const INVENTION_SHARE := 0.6
 ## Nombre de faits récents qu'on ne répète pas.
 const FACT_MEMORY := 12
 
@@ -69,6 +73,8 @@ var _count := 0
 var _recent_texts: Array[String] = []
 var _recent_facts: Array[String] = []
 var _parcel: ParcelNarrator
+## Mémoire des inventions (profils des espèces et des peuples), partagée avec le narrateur.
+var inventor: Inventor
 
 
 func _init(p_seed: int = -1) -> void:
@@ -78,17 +84,25 @@ func _init(p_seed: int = -1) -> void:
 		rng.randomize()
 		_seed = rng.randi()
 	_parcel = ParcelNarrator.new(_seed + 1)
+	inventor = Inventor.new(_seed + 3)
 
 
 ## Une phrase pour le fil continu.
 func ambient(ctx: Dictionary) -> Dictionary:
 	_count += 1
 	rng.seed = hash([_seed, _count])
+	var mode: Dictionary = ctx.get("mode", {})
 	var line := {}
-	if rng.randf() < FACT_SHARE:
+	if bool(mode.get("just_diverged", false)):
+		line = inventor.line(ctx)
+	elif not bool(mode.get("real", true)):
+		if rng.randf() < INVENTION_SHARE:
+			line = inventor.line(ctx)
+	elif rng.randf() < FACT_SHARE:
 		line = fact(ctx)
 	if line.is_empty():
 		line = scene(ctx)
+	line["world_mode"] = str(mode.get("label", "réel"))
 	return _remember(line)
 
 
