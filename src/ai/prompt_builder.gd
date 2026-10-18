@@ -70,8 +70,12 @@ static func build_ambient_prompt(line: Dictionary, ctx: Dictionary) -> String:
 		for l in ParcelNarrator.describe_snapshot(snap):
 			lines.append("- " + l)
 	lines.append("")
-	lines.append("Observation à transmettre (vraie, n'ajoute aucun fait) : " + str(line.get("text", "")))
-	lines.append("Reformule-la à ta manière en une phrase, deux au plus.")
+	if str(line.get("kind", "")) == "fact":
+		lines.append("Fait historique VRAI à transmettre : " + str(line.get("text", "")))
+		lines.append("Reformule-le à ta manière, en conteur, sans changer ni ajouter aucune date, aucun chiffre, aucun nom, aucun fait. Une phrase, deux au plus.")
+	else:
+		lines.append("Observation à transmettre (vraie, n'ajoute aucun fait) : " + str(line.get("text", "")))
+		lines.append("Reformule-la à ta manière en une phrase, deux au plus.")
 	return "\n".join(lines)
 
 

@@ -375,6 +375,7 @@ static func snapshot(parcel: Object) -> Dictionary:
 				fauna.append({
 					"species_id": int(f.get("species_id", -1)), "name": str(f.get("name", "")),
 					"role": str(f.get("role", "")), "count": int(f.get("count", 0)), "trend": int(f.get("trend", 0)),
+					"clade": str(f.get("clade", "")),
 				})
 	snap["fauna"] = fauna
 	var kinds := {}

@@ -51,6 +51,8 @@ const PARCEL_MAX_AGE := 40.0
 const PARCEL_RARE := 0.75
 const PARCEL_RARE_MAX_AGE := 120.0
 const PARCEL_QUEUE_SIZE := 8
+## Un événement compte comme « récent » pour le choix des faits pendant ce délai (s).
+const RECENT_EVENT_SEC := 60.0
 
 var config: AiConfig
 var client: LlmClient
@@ -78,6 +80,8 @@ var _next_ambient := 10.0
 var _ambient_rng := RandomNumberGenerator.new()
 ## Gestes divins déjà accomplis, du plus ancien au plus récent : [{type, year, species_id}].
 var _divine_history: Array[Dictionary] = []
+## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
+var _recent_events: Array[Dictionary] = []
 
 
 func _ready() -> void:
@@ -227,6 +231,7 @@ func _connect_game_state() -> void:
 
 
 func _on_event_occurred(event: Dictionary) -> void:
+	_note_event_type(str(event.get("type", "")))
 	if str(event.get("type", "")).begins_with("parcel_"):
 		_on_parcel_event(event)
 		return
@@ -269,6 +274,7 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 		"species_id": target, "region": action.get("region", Vector2i.ZERO),
 		"summary": "; ".join(summaries.slice(0, 3)), "action": action,
 	}
+	_note_event_type(str(action.get("type", "")))
 	_divine_history.append({"type": str(action.get("type", "")), "year": _current_year(), "species_id": int(target) if typeof(target) in [TYPE_INT, TYPE_FLOAT] else -1})
 	if _divine_history.size() > 64:
 		_divine_history.pop_front()
@@ -427,12 +433,26 @@ func _draw_ambient_delay() -> float:
 	return _ambient_rng.randf_range(lo, hi)
 
 
-## Contexte du fil : ère, date, parcelle, espèces, gestes divins.
+## Contexte du fil : ère, date, parcelle, espèces, gestes divins, événements récents.
 func world_context() -> Dictionary:
+	var recent := []
+	for e in _recent_events:
+		if _clock - float(e["t"]) <= RECENT_EVENT_SEC:
+			recent.append(e["type"])
 	return {
 		"era": _current_era(), "year": _current_year(), "snapshot": ParcelNarrator.snapshot(_parcel()),
-		"species": _species_list(), "divine": _divine_history.duplicate(),
+		"species": _species_list(), "divine": _divine_history.duplicate(), "recent_events": recent,
 	}
+
+
+## Retient le type d'un événement (brut, canonique et sans préfixe parcel_) pour choisir des faits à propos.
+func _note_event_type(t: String) -> void:
+	if t == "":
+		return
+	for v in [t, t.trim_prefix("parcel_"), Procedural.event_key(t)]:
+		_recent_events.append({"type": v, "t": _clock})
+	while _recent_events.size() > 30:
+		_recent_events.pop_front()
 
 
 func _species_list() -> Array:

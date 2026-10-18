@@ -4,12 +4,20 @@ extends RefCounted
 ##
 ## ctx : {era, year, snapshot (ParcelNarrator.snapshot), species: [{id, name, clade, diet, size,
 ##        intelligence, sapient, alive}], divine: [{type, year, species_id}], choices: [...], mode: {...}}
-## ambient(ctx) -> {text, kind, source: "ambient", ...} ; kind : "scene" (état de la parcelle).
+## ambient(ctx) -> {text, kind, source: "ambient", ...} ; kind : "fact" (fait réel, facts/), "scene"
+## (état de la parcelle).
+## ctx.recent_events : types d'événements récents (bruts et canoniques), pour choisir des faits à propos.
 ## Le narrateur parle à la première personne (« je ») et tutoie Dieu.
 
 const Procedural := preload("res://src/ai/procedural_narrator.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
+const FactBase := preload("res://src/ai/facts/fact_base.gd")
+
+## Part des phrases d'ambiance consacrées aux faits réels quand il y en a (le reste : scènes).
+const FACT_SHARE := 0.65
+## Nombre de faits récents qu'on ne répète pas.
+const FACT_MEMORY := 12
 
 ## Scènes de la parcelle. Emplacements de ParcelNarrator ({terre}, {ciel}, {espece}, {fin}…) plus
 ## {nombre}, {global}, {narrateur}. Accord : [espece:singulier|pluriel].
@@ -59,6 +67,7 @@ var rng := RandomNumberGenerator.new()
 var _seed := 0
 var _count := 0
 var _recent_texts: Array[String] = []
+var _recent_facts: Array[String] = []
 var _parcel: ParcelNarrator
 
 
@@ -75,8 +84,37 @@ func _init(p_seed: int = -1) -> void:
 func ambient(ctx: Dictionary) -> Dictionary:
 	_count += 1
 	rng.seed = hash([_seed, _count])
-	var line := scene(ctx)
+	var line := {}
+	if rng.randf() < FACT_SHARE:
+		line = fact(ctx)
+	if line.is_empty():
+		line = scene(ctx)
 	return _remember(line)
+
+
+## Un fait réel de l'époque, vrai à cette date et si possible lié à ce qu'on voit ; {} s'il n'y en a pas.
+func fact(ctx: Dictionary) -> Dictionary:
+	var era := Procedural.era_key(ctx.get("era", ""))
+	var f := FactBase.pick(era, ctx.get("year", null), situation(ctx), _recent_facts, rng)
+	if f.is_empty():
+		return {}
+	_recent_facts.append(str(f["id"]))
+	while _recent_facts.size() > FACT_MEMORY:
+		_recent_facts.pop_front()
+	return {"text": str(f["t"]), "kind": "fact", "fact_id": str(f["id"]), "source": "ambient"}
+
+
+## Ce que l'on voit, pour choisir les faits : clades présents, biome, usage du sol, événements récents.
+static func situation(ctx: Dictionary) -> Dictionary:
+	var snap: Dictionary = ctx.get("snapshot", {})
+	var clades := []
+	for f in snap.get("fauna", []):
+		if str(f.get("clade", "")) != "":
+			clades.append(str(f["clade"]))
+	return {
+		"clades": clades, "biome": str(snap.get("biome", "")), "land_use": str(snap.get("land_use", "")),
+		"events": ctx.get("recent_events", []),
+	}
 
 
 ## Une scène tirée de l'état de la parcelle (faune, tendance, chaleur, usage du sol).
