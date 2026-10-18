@@ -13,18 +13,20 @@ une ville, une mégapole cyberpunk… ou un cratère, une banquise, des ruines e
 Le joueur **voit le monde évoluer sous ses yeux, au même endroit**. C'est ce qui rend chaque choix
 lisible : si on laisse vivre les dinosaures, ce sont eux qu'on verra construire sur cette parcelle.
 
-## Deux vues
+## Une seule vue : la parcelle
 
-| Vue | Rôle | Contrôles |
-|---|---|---|
-| **Parcelle** (par défaut) | Le terrain suivi, plein écran, vu de haut. Créatures animées, végétation, constructions, météo. | Clic : pouvoir sur la parcelle. Molette au minimum → passe au globe. |
-| **Globe** | La Terre entière en 3D. Voir l'état du monde, choisir/changer de parcelle, pouvoirs à grande échelle (météore, glaciation). | Glisser : tourner. Molette : zoomer. Zoom maximal sur un point → entre dans la parcelle. |
+Le jeu ne montre **que la parcelle** : le terrain suivi, plein écran, vu de haut (créatures animées,
+végétation, constructions, météo). Pas de globe ni de carte du monde : la planète entière est simulée
+en fond et ne se voit qu'à travers ce qu'elle fait à la parcelle (climat, migrations, impacts…).
 
-**Tab** bascule d'une vue à l'autre. La simulation ne s'arrête jamais en changeant de vue.
+Contrôles : choisir un pouvoir (1-9 ou barre du bas), clic sur la parcelle pour l'appliquer ;
+`[` `]` ou Maj+molette pour le rayon (les pouvoirs à grande échelle — météore, glaciation — touchent
+aussi les alentours, qui se répercutent sur la parcelle). La parcelle suivie est choisie au lancement
+(`GameState.DEFAULT_PARCEL`, première terre trouvée).
 
 ## Statistiques à l'écran
 
-Toujours visibles (mais discrètes) dans les deux vues :
+Toujours visibles (mais discrètes) par-dessus la parcelle :
 
 - **Chaleur** : température locale et moyenne mondiale en °C, avec courbe et tendance.
 - **Populations** : pour chaque espèce présente sur la parcelle, effectif avec flèche ▲ montante /
@@ -49,6 +51,6 @@ La parcelle finit dans un état : ville florissante, ruines, désert, glace, ret
 ## Terre réelle
 
 Le joueur veut une **planète Terre**. Étape 1 (maintenant) : la planète procédurale de la simulation,
-affichée sur un globe 3D. Étape 2 : relief réel de la Terre (cartes du domaine public, p. ex. NASA /
+invisible, qui fait évoluer la parcelle. Étape 2 : relief réel de la Terre (cartes du domaine public, p. ex. NASA /
 NOAA ETOPO) et continents de la fin du Crétacé qui dérivent vers ceux d'aujourd'hui. Demande un
 téléchargement de données à valider.

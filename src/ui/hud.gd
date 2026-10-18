@@ -1,8 +1,9 @@
 extends CanvasLayer
-## Interface divine : année et ère, vitesse du temps, couches de carte, barre de pouvoirs,
+## Interface divine : année et ère, vitesse du temps, barre de pouvoirs,
 ## panneau des espèces (choix de la cible), chronique des événements et boîte du narrateur.
 ## Construite en code pour rester lisible et sans dépendance à des ressources externes.
-## L'état joueur (pouvoir, rayon, couche, cible) vit dans la carte : voir bind_map().
+## L'état joueur (pouvoir, rayon, cible) vit dans src/ui/parcel_powers.gd : voir bind_map().
+## Le jeu ne montre que la parcelle suivie : les pouvoirs la visent.
 
 const MapMath := preload("res://src/map/map_math.gd")
 const Powers := preload("res://src/map/divine_powers.gd")
@@ -24,7 +25,6 @@ var _year_label: Label
 var _era_label: Label
 var _rate_label: Label
 var _speed_buttons: Array[Button] = []
-var _layer_buttons: Array[Button] = []
 var _power_buttons: Array[Button] = []
 var _radius_label: Label
 var _target_label: Label
@@ -56,7 +56,7 @@ func _ready() -> void:
 	_add_log_line("[color=#e8c66a]Que la lumière soit.[/color] Vous veillez sur un monde jeune.")
 
 
-## Relie le HUD à la carte (source de vérité du pouvoir, du rayon, de la couche et de la cible).
+## Relie le HUD à l'état des pouvoirs (source de vérité du pouvoir, du rayon et de la cible).
 func bind_map(world_map: Node) -> void:
 	map = world_map
 	map.state_changed.connect(_sync_from_map)
@@ -98,10 +98,6 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_set_speed(clampi(speed_level + 1, 1, SPEEDS.size()))
 		KEY_MINUS, KEY_KP_SUBTRACT:
 			_set_speed(maxi(speed_level - 1, 1))
-		KEY_F1, KEY_F2, KEY_F3, KEY_F4:
-			if map: map.set_layer(key - KEY_F1)
-		KEY_TAB:
-			if map: map.set_layer((map.layer + 1) % map.LAYERS.size())
 		KEY_BRACKETLEFT:
 			if map: map.set_radius(map.radius - 1)
 		KEY_BRACKETRIGHT:
@@ -128,7 +124,7 @@ func _build() -> void:
 	root.theme = _make_theme()
 	add_child(root)
 
-	# Barre du haut : année, ère, couches, vitesse.
+	# Barre du haut : année, ère, vitesse.
 	var top := _panel(root)
 	_place(top, Vector4(0, 0, 1, 0), Vector4(12, 12, -12, 88))
 	var top_row := HBoxContainer.new()
@@ -157,19 +153,6 @@ func _build() -> void:
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	spacer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	top_row.add_child(spacer)
-
-	var layers_box := HBoxContainer.new()
-	top_row.add_child(layers_box)
-	var layer_group := ButtonGroup.new()
-	var layer_names := ["Biomes", "Espèces", "Technologie", "Température"]
-	for i in layer_names.size():
-		var b := _toggle_button(layer_names[i], layer_group)
-		b.tooltip_text = "Couche de carte (F%d, Tab pour alterner)" % (i + 1)
-		b.pressed.connect(_on_layer_pressed.bind(i))
-		layers_box.add_child(b)
-		_layer_buttons.append(b)
-
-	top_row.add_child(VSeparator.new())
 
 	var speed_box := HBoxContainer.new()
 	top_row.add_child(speed_box)
@@ -212,9 +195,9 @@ func _build() -> void:
 	_target_label.add_theme_font_size_override("font_size", 13)
 	sp_box.add_child(_target_label)
 	var clear := Button.new()
-	clear.text = "Cible : espèce dominante locale"
+	clear.text = "Cible : espèce dominante de la parcelle"
 	clear.focus_mode = Control.FOCUS_NONE
-	clear.tooltip_text = "Sans cible, les pouvoirs visent l'espèce dominante de la région cliquée."
+	clear.tooltip_text = "Sans cible, les pouvoirs visent l'espèce dominante de la parcelle."
 	clear.pressed.connect(_on_clear_target)
 	sp_box.add_child(clear)
 
@@ -269,7 +252,7 @@ func _build() -> void:
 	plus.pressed.connect(_step_radius.bind(1))
 	radius_row.add_child(plus)
 
-	# Infos de la région survolée (bas droite).
+	# Infos de la parcelle suivie (bas droite).
 	var info_panel := _panel(root)
 	_place(info_panel, Vector4(1, 1, 1, 1), Vector4(-312, -220, -12, -140))
 	info_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -357,11 +340,6 @@ func _swatch(color: Color) -> Texture2D:
 	return _swatches[key]
 
 
-func _on_layer_pressed(i: int) -> void:
-	if map and not _syncing:
-		map.set_layer(i)
-
-
 func _on_clear_target() -> void:
 	if map:
 		map.set_target_species(-1)
@@ -381,19 +359,17 @@ func _set_speed(level: int) -> void:
 		_speed_buttons[i].set_pressed_no_signal(i == speed_level)
 
 
-# --- Synchronisation avec la carte ---
+# --- Synchronisation avec l'état des pouvoirs ---
 
 func _sync_from_map() -> void:
 	if map == null:
 		return
 	_syncing = true
-	for i in _layer_buttons.size():
-		_layer_buttons[i].set_pressed_no_signal(i == map.layer)
 	for i in _power_buttons.size():
 		_power_buttons[i].set_pressed_no_signal(Powers.LIST[i].id == map.power)
 	var p := Powers.get_power(map.power)
 	if p.is_empty():
-		_radius_label.text = "Choisissez un pouvoir (1-9) puis cliquez sur la carte"
+		_radius_label.text = "Choisissez un pouvoir (1-9) puis cliquez sur la parcelle"
 	else:
 		_radius_label.text = "%s — rayon %d  ([ ] ou Maj+molette, Échap pour annuler)" % [p.label, map.radius]
 	_update_target_label()
@@ -412,7 +388,7 @@ func _on_power_toggled(on: bool, power_id: String) -> void:
 func _update_target_label() -> void:
 	var id: int = map.target_species if map else -1
 	if id < 0:
-		_target_label.text = "Cible : espèce dominante de la région cliquée"
+		_target_label.text = "Cible : espèce dominante de la parcelle"
 		_species_list.deselect_all()
 		return
 	var info = GameState.sim.species.get(id) if GameState.sim else null
@@ -491,7 +467,7 @@ func _on_species_selected(index: int) -> void:
 	map.set_target_species(_species_ids[index])
 
 
-# --- Survol ---
+# --- Parcelle suivie ---
 
 func _on_region_hovered(region: Vector2i) -> void:
 	var sim = GameState.sim
@@ -501,7 +477,7 @@ func _on_region_hovered(region: Vector2i) -> void:
 	if i < 0 or i >= sim.elevation.size():
 		return
 	var elev: float = sim.elevation[i]
-	var text := "Région (%d, %d) — %s\n" % [region.x, region.y, "océan" if elev < 0.0 else "terres"]
+	var text := "Parcelle (%d, %d) — %s\n" % [region.x, region.y, "océan" if elev < 0.0 else "terres"]
 	text += "Température %d %%   Tech %d %%\n" % [int(sim.temperature[i] * 100.0), int(sim.tech[i] * 100.0)]
 	var sid: int = sim.dominant_species[i]
 	if sid >= 0:
