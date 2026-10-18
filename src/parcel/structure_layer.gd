@@ -1,0 +1,367 @@
+extends Node2D
+## Constructions de la parcelle (parcel.structures) : champs, huttes, routes, bâtiments, tours,
+## ruines, à leurs positions `pos` (0..1) stables. Image assets/parcel/structures/<kind>.png si
+## elle existe, sinon dessin de remplacement. Les nouvelles constructions sortent d'un chantier
+## (échafaudage -> bâti), les disparues s'effondrent (secousse, gravats, poussière).
+
+const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
+const ParcelSim := preload("res://src/sim/parcel_sim.gd")
+const ParcelAssets := preload("res://src/parcel/parcel_assets.gd")
+const TrailLayer := preload("res://src/parcel/trail_layer.gd")
+
+const FADE_TIME := 0.6
+const BUILD_TIME := 5.0
+const COLLAPSE_TIME := 2.5
+## Ce qui ne se « construit » pas : apparaît simplement (les ruines, elles, restent).
+const NO_SCAFFOLD := ["ruin"]
+## Ordre de dessin : le sol construit d'abord, les volumes ensuite.
+const LAYER := {"road": 0, "field": 1, "ruin": 2, "hut": 3, "building": 3, "tower": 4}
+## Usages où les structures sont éclairées au néon.
+const NEON_USES := ["megacity", "arcology"]
+
+var assets: ParcelAssets
+## Poussière des chantiers et des effondrements (optionnel).
+var trail: TrailLayer
+var parcel_size := ParcelLogic.PARCEL_SIZE
+## Repères permanents (ParcelLogic.landmarks) : les constructions s'écartent de la rivière et du
+## rocher ; les routes les franchissent par des ponts.
+var landmarks := {}:
+	set(value):
+		landmarks = value
+		_centers.clear()
+		queue_redraw()
+
+var _items := {} ## key -> {data, alpha, present, build 0..1, collapse 0..1}
+var _land_use := ""
+var _animating := false
+var _time := 0.0
+var _centers := {} ## clé -> centre monde (après évitement des repères), stable
+
+
+func _ready() -> void:
+	if assets == null:
+		assets = ParcelAssets.new()
+
+
+func apply_parcel(p: ParcelSim) -> void:
+	_land_use = p.land_use
+	# Première image d'une parcelle : tout est déjà bâti (pas de chantier général au chargement).
+	var first := _items.is_empty()
+	for item in _items.values():
+		item.present = false
+	for s in p.structures:
+		var key := ParcelLogic.structure_key(s)
+		if _items.has(key):
+			_items[key].present = true
+			_items[key].data = s
+		else:
+			var instant := first or String(s.get("kind", "")) in NO_SCAFFOLD
+			_items[key] = {data = s, alpha = 0.0, present = true, build = 1.0 if instant else 0.0, collapse = 0.0}
+	_animating = true
+	queue_redraw()
+
+
+func clear() -> void:
+	_items.clear()
+	queue_redraw()
+
+
+## Positions monde des structures où vont et viennent les espèces intelligentes.
+func spots() -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for item in _items.values():
+		var s: Dictionary = item.data
+		if item.present and String(s.get("kind", "")) in ["hut", "building", "tower", "field"]:
+			out.append(_center(s))
+	return out
+
+
+## Sources de lumière nocturne : [{pos, kind, size, alpha}] (alpha = fondu d'apparition).
+func light_sources() -> Array:
+	var out := []
+	for item in _items.values():
+		var s: Dictionary = item.data
+		var kind := String(s.get("kind", ""))
+		if kind in ["hut", "building", "tower"]:
+			out.append({pos = _center(s), kind = kind, size = float(s.get("size", 0.05)) * parcel_size.y, alpha = item.alpha})
+	return out
+
+
+## Croisements des routes (centres des structures "road").
+func road_centers() -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for item in _items.values():
+		if item.present and String(item.data.get("kind", "")) == "road":
+			out.append(_center(item.data))
+	return out
+
+
+func _process(delta: float) -> void:
+	_time += delta
+	if not _animating and not _land_use in NEON_USES:
+		return
+	var still := false
+	for key in _items.keys():
+		var item: Dictionary = _items[key]
+		if item.present:
+			item.collapse = 0.0
+			item.alpha = move_toward(item.alpha, 1.0, delta / FADE_TIME)
+			var was: float = item.build
+			item.build = move_toward(was, 1.0, delta / BUILD_TIME)
+			if was < 1.0 and trail and randf() < delta * 1.5:
+				trail.emit(TrailLayer.Kind.DUST, _center(item.data) + Vector2(randf_range(-20, 20), randf_range(-20, 20)), 0.0, 40.0)
+			still = still or item.alpha < 1.0 or item.build < 1.0
+		else:
+			if item.collapse == 0.0 and trail and item.build >= 1.0:
+				var c := _center(item.data)
+				var side := float(item.data.get("size", 0.05)) * parcel_size.y
+				for k in 4:
+					trail.emit(TrailLayer.Kind.DUST, c + Vector2.from_angle(k * TAU / 4.0 + 0.4) * side * 0.4, 0.0, side * 1.2, 2.5)
+			item.collapse = move_toward(item.collapse, 1.0, delta / COLLAPSE_TIME)
+			item.alpha = 1.0 - smoothstep(0.55, 1.0, item.collapse)
+			if item.collapse >= 1.0:
+				_items.erase(key)
+			else:
+				still = true
+	_animating = still
+	queue_redraw()
+
+
+func _draw() -> void:
+	var list := _items.values()
+	list.sort_custom(_draw_order)
+	for item in list:
+		if item.alpha > 0.0:
+			_draw_structure(item.data, item.alpha, item.build, item.collapse)
+
+
+func _draw_order(a: Dictionary, b: Dictionary) -> bool:
+	var la: int = LAYER.get(a.data.get("kind", ""), 3)
+	var lb: int = LAYER.get(b.data.get("kind", ""), 3)
+	if la != lb:
+		return la < lb
+	return _center(a.data).y < _center(b.data).y
+
+
+func _center(s: Dictionary) -> Vector2:
+	var key := ParcelLogic.structure_key(s)
+	if _centers.has(key):
+		return _centers[key]
+	var p: Vector2 = s.get("pos", Vector2(0.5, 0.5))
+	var c := p * parcel_size
+	if String(s.get("kind", "")) != "road":
+		c = ParcelLogic.avoid_landmarks(c, float(s.get("size", 0.05)) * parcel_size.y * 0.6, landmarks)
+	_centers[key] = c
+	return c
+
+
+func _draw_structure(s: Dictionary, a: float, build: float, collapse: float) -> void:
+	var kind := String(s.get("kind", ""))
+	var center := _center(s)
+	var side := float(s.get("size", 0.05)) * parcel_size.y
+	var h := hash(ParcelLogic.structure_key(s))
+	var angle := 0.0 if kind == "road" else (float(h % 4) * PI * 0.5 + (float(h % 100) / 100.0 - 0.5) * 0.25)
+	var tex := assets.structure_texture(kind, _land_use)
+	if kind == "road":
+		_draw_road(center, side * build, tex, a, build)
+		return
+	var grow := 1.0
+	if collapse > 0.0:
+		# Effondrement : secousse, affaissement, puis gravats.
+		center += Vector2(sin(_time * 40.0 + h), cos(_time * 37.0)) * 3.0 * (1.0 - collapse)
+		angle += collapse * 0.12 * (1.0 if h % 2 else -1.0)
+		grow = 1.0 - 0.3 * collapse
+	elif build < 1.0:
+		# Chantier : l'échafaudage monte, puis le bâti apparaît dedans.
+		draw_set_transform(center, angle)
+		_draw_scaffold(side, build, a * (1.0 - smoothstep(0.75, 1.0, build)))
+		a *= smoothstep(0.35, 0.9, build)
+		grow = lerpf(0.8, 1.0, smoothstep(0.35, 1.0, build))
+	if a <= 0.0:
+		draw_set_transform(Vector2.ZERO)
+		return
+	draw_set_transform(center, angle, Vector2.ONE * grow)
+	if tex:
+		var r := Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side))
+		draw_texture_rect(tex, r.grow(side * 0.05), false, Color(1, 1, 1, a))
+	else:
+		match kind:
+			"field": _draw_field(side, h, a)
+			"hut": _draw_hut(side, a)
+			"building": _draw_building(side, h, a)
+			"tower": _draw_tower(side, h, a)
+			"ruin": _draw_ruin(side, h, a)
+			_: draw_rect(Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side)), Color(0.4, 0.4, 0.4, a))
+	if collapse > 0.0:
+		_draw_rubble(side, h, collapse)
+	draw_set_transform(Vector2.ZERO)
+
+
+## Échafaudage vu de dessus : poteaux d'angle, puis bords et croisillons qui se complètent.
+func _draw_scaffold(side: float, build: float, a: float) -> void:
+	if a <= 0.0:
+		return
+	var wood := Color(0.55, 0.4, 0.22, a)
+	var r := side * 0.5
+	var corners := [Vector2(-r, -r), Vector2(r, -r), Vector2(r, r), Vector2(-r, r)]
+	var p := clampf(build / 0.6, 0.0, 1.0)
+	for k in 4:
+		draw_rect(Rect2(corners[k] - Vector2(2.5, 2.5), Vector2(5, 5)), wood)
+		var edge := clampf(p * 4.0 - k, 0.0, 1.0)
+		if edge > 0.0:
+			draw_line(corners[k], corners[k].lerp(corners[(k + 1) % 4], edge), wood, 2.0)
+	if p >= 1.0:
+		draw_line(corners[0], corners[2], Color(wood, a * 0.7), 1.5)
+		draw_line(corners[1], corners[3], Color(wood, a * 0.7), 1.5)
+	# Planches et matériaux posés à côté.
+	draw_rect(Rect2(Vector2(r + 4.0, -r * 0.6), Vector2(side * 0.18, side * 0.5)), Color(0.62, 0.5, 0.32, a * 0.9))
+
+
+## Gravats qui s'étalent pendant l'effondrement.
+func _draw_rubble(side: float, h: int, collapse: float) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = h + 17
+	var spread := side * (0.4 + 0.5 * collapse)
+	for k in 14:
+		var p := Vector2.from_angle(rng.randf() * TAU) * rng.randf() * spread
+		draw_circle(p, rng.randf_range(2.0, side * 0.09), Color(0.42, 0.39, 0.35, minf(1.0, collapse * 2.0)))
+
+
+# --- Placeholders (vus de haut) ---
+
+func _draw_field(side: float, h: int, a: float) -> void:
+	var crops := [Color("c9b458"), Color("8fae4a"), Color("b5a04a"), Color("6f9a3e")]
+	var col: Color = crops[h % crops.size()]
+	var r := Rect2(Vector2(-side, -side * 0.7) * 0.5, Vector2(side, side * 0.7))
+	draw_rect(r, Color(col, a))
+	var furrow := Color(col.darkened(0.3), a * 0.8)
+	var y := r.position.y + 4.0
+	while y < r.end.y - 2.0:
+		draw_line(Vector2(r.position.x + 2.0, y), Vector2(r.end.x - 2.0, y), furrow, 1.5)
+		y += 7.0
+	draw_rect(r, Color(0.3, 0.25, 0.15, a * 0.6), false, 2.0)
+
+
+func _draw_hut(side: float, a: float) -> void:
+	var r := side * 0.5
+	draw_circle(Vector2(r * 0.25, r * 0.3), r, Color(0, 0, 0, 0.3 * a))
+	draw_circle(Vector2.ZERO, r, Color(0.55, 0.42, 0.24, a))
+	draw_circle(Vector2.ZERO, r * 0.7, Color(0.64, 0.5, 0.3, a))
+	for k in 8:
+		var d := Vector2.from_angle(k * TAU / 8.0)
+		draw_line(d * r * 0.15, d * r, Color(0.42, 0.31, 0.17, a), 1.5)
+	draw_circle(Vector2.ZERO, r * 0.15, Color(0.25, 0.2, 0.15, a))
+
+
+func _draw_building(side: float, h: int, a: float) -> void:
+	var size := Vector2(side, side * (0.6 + float(h % 30) / 100.0))
+	var r := Rect2(-size * 0.5, size)
+	var town := _land_use in ["village", "town"]
+	var roof := Color("a5523a") if town else Color("6c6f78")
+	draw_rect(Rect2(r.position + Vector2(side * 0.12, side * 0.16), size), Color(0, 0, 0, 0.3 * a))
+	draw_rect(r, Color(roof, a))
+	# Faîtage : deux pans de toit.
+	draw_rect(Rect2(r.position, Vector2(size.x, size.y * 0.5)), Color(roof.lightened(0.15), a))
+	draw_line(Vector2(r.position.x, 0), Vector2(r.end.x, 0), Color(roof.darkened(0.35), a), 2.0)
+	draw_rect(r, Color(roof.darkened(0.4), a), false, 1.5)
+
+
+func _draw_tower(side: float, h: int, a: float) -> void:
+	var r := Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side))
+	# Ombre longue : la tour est haute.
+	draw_rect(Rect2(r.position + Vector2(side * 0.35, side * 0.5), r.size), Color(0, 0, 0, 0.35 * a))
+	var neon := _land_use in NEON_USES
+	var body := Color("2a2c3a") if neon else Color("7a7f8a")
+	draw_rect(r, Color(body, a))
+	var cells := 4
+	var cell := side / cells
+	for ix in cells:
+		for iy in cells:
+			if (h >> (ix * cells + iy)) & 1:
+				var lit := Color("ffe9a8") if not neon else (Color("3ff2ff") if (ix + iy) % 2 else Color("ff4fd8"))
+				var w := Rect2(r.position + Vector2(ix, iy) * cell + Vector2.ONE * cell * 0.25, Vector2.ONE * cell * 0.5)
+				draw_rect(w, Color(lit, a * (0.5 if not neon else 0.6 + 0.4 * sin(_time * 3.0 + ix + iy * 2.0))))
+	if neon:
+		var glow := Color(0.25, 0.95, 1.0, a * (0.5 + 0.3 * sin(_time * 2.0 + float(h % 10))))
+		draw_rect(r, glow, false, 2.5)
+	else:
+		draw_rect(r, Color(0.3, 0.3, 0.35, a), false, 1.5)
+
+
+func _draw_ruin(side: float, h: int, a: float) -> void:
+	var r := Rect2(Vector2(-side, -side) * 0.5, Vector2(side, side))
+	var wall := Color(0.55, 0.52, 0.46, a)
+	var corners := [r.position, Vector2(r.end.x, r.position.y), r.end, Vector2(r.position.x, r.end.y)]
+	for k in 4:
+		if (h >> k) & 1 or k == 0:
+			var from: Vector2 = corners[k]
+			var to: Vector2 = corners[(k + 1) % 4]
+			# Mur effondré : seul un morceau tient encore.
+			draw_line(from, from.lerp(to, 0.45 + float((h >> (k + 4)) % 50) / 100.0), wall, 3.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = h
+	for k in 6:
+		var p := Vector2(rng.randf_range(r.position.x, r.end.x), rng.randf_range(r.position.y, r.end.y))
+		draw_circle(p, rng.randf_range(1.5, side * 0.08), Color(0.45, 0.42, 0.38, a))
+	draw_circle(Vector2(side * 0.1, -side * 0.15), side * 0.18, Color(0.24, 0.42, 0.2, 0.6 * a)) # mousse
+
+
+## Routes : deux axes qui se croisent en `center`, sur `side` (size * hauteur de la parcelle).
+## Routes : elles poussent depuis le croisement pendant le chantier (build).
+func _draw_road(center: Vector2, side: float, tex: Texture2D, a: float, build := 1.0) -> void:
+	var paved := not _land_use in ["village", "camp", "pasture", "farmland"]
+	var width := 30.0 if paved else 16.0
+	var half := maxf(side, parcel_size.x * build) * 0.5
+	var rects := [
+		Rect2(center.x - half, center.y - width * 0.5, half * 2.0, width),
+		Rect2(center.x - width * 0.5, center.y - half, width, half * 2.0),
+	]
+	for r: Rect2 in rects:
+		if tex:
+			draw_texture_rect(tex, r, true, Color(1, 1, 1, a))
+			continue
+		var col := Color("3b3d42") if paved else Color("8a7350")
+		draw_rect(r.grow(2.0), Color(col.darkened(0.3), a * 0.7))
+		draw_rect(r, Color(col, a))
+		_draw_bridges(r, width, paved, a)
+		if paved:
+			var horizontal := r.size.x > r.size.y
+			var dash := Color(0.95, 0.85, 0.4, a * 0.8)
+			var length := r.size.x if horizontal else r.size.y
+			var t := 0.0
+			while t < length:
+				if horizontal:
+					draw_line(Vector2(r.position.x + t, center.y), Vector2(r.position.x + t + 14.0, center.y), dash, 2.0)
+				else:
+					draw_line(Vector2(center.x, r.position.y + t), Vector2(center.x, r.position.y + t + 14.0), dash, 2.0)
+				t += 30.0
+
+
+## Ponts là où l'axe de la route croise la rivière.
+func _draw_bridges(r: Rect2, width: float, paved: bool, a: float) -> void:
+	if landmarks.is_empty():
+		return
+	var river: PackedVector2Array = landmarks.river
+	var horizontal := r.size.x > r.size.y
+	var from := Vector2(r.position.x, r.get_center().y) if horizontal else Vector2(r.get_center().x, r.position.y)
+	var to := Vector2(r.end.x, r.get_center().y) if horizontal else Vector2(r.get_center().x, r.end.y)
+	var span := float(landmarks.river_width) + 34.0
+	var deck := Color("7d7a72") if paved else Color("8b6a44")
+	for k in river.size() - 1:
+		var hit = Geometry2D.segment_intersects_segment(from, to, river[k], river[k + 1])
+		if hit == null:
+			continue
+		var c: Vector2 = hit
+		var along := Vector2.RIGHT if horizontal else Vector2.DOWN
+		draw_set_transform(c, along.angle())
+		var body := Rect2(Vector2(-span * 0.5, -width * 0.5 - 5.0), Vector2(span, width + 10.0))
+		draw_rect(Rect2(body.position + Vector2(6, 8), body.size), Color(0, 0, 0, 0.3 * a))
+		draw_rect(body, Color(deck, a))
+		draw_line(Vector2(-span * 0.5, body.position.y + 2.0), Vector2(span * 0.5, body.position.y + 2.0), Color(deck.darkened(0.4), a), 3.0)
+		draw_line(Vector2(-span * 0.5, body.end.y - 2.0), Vector2(span * 0.5, body.end.y - 2.0), Color(deck.darkened(0.4), a), 3.0)
+		if not paved:
+			var x := -span * 0.5 + 6.0
+			while x < span * 0.5:
+				draw_line(Vector2(x, body.position.y + 4.0), Vector2(x, body.end.y - 4.0), Color(deck.darkened(0.2), a * 0.7), 1.0)
+				x += 7.0
+		draw_set_transform(Vector2.ZERO)
