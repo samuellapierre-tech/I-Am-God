@@ -66,7 +66,18 @@ func _ready() -> void:
 ## Raconte un contexte : {type, era, year, summary, species_name|species_id, events: Array, action: Dictionary}.
 ## Émet narration_ready(text) plus tard (jamais pendant l'appel).
 func narrate(context: Dictionary) -> void:
-	_request_narration(context, false)
+	var ctx := context.duplicate()
+	var action: Variant = ctx.get("action", null)
+	if action is Dictionary:
+		if not ctx.has("type"):
+			ctx["type"] = str(action.get("type", "generic"))
+		if not ctx.has("species_id"):
+			ctx["species_id"] = action.get("species_id", -1)
+	if not ctx.has("species_name"):
+		var name := _species_name_for(ctx.get("species_id", -1))
+		if name != "":
+			ctx["species_name"] = name
+	_request_narration(ctx, false)
 
 
 ## Oracle « et si ? » : transforme le résumé de WorldSim.project_future() en prophétie. Émet oracle_answered.
@@ -176,15 +187,19 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 		return
 	# Les conséquences arrivent aussi via event_occurred : on les fond dans ce récit.
 	var summaries := PackedStringArray()
+	var target: Variant = action.get("species_id", -1)
 	for c in consequences:
 		if c is Dictionary:
+			# La simulation choisit la cible réelle (espèce la plus proche) : on la préfère à celle demandée.
+			if int(c.get("species_id", -1)) >= 0 and (typeof(target) != TYPE_INT or target < 0):
+				target = int(c["species_id"])
 			if c.has("id"):
 				_absorbed_ids[c["id"]] = true
 			if str(c.get("summary", "")) != "":
 				summaries.append(str(c["summary"]))
 	var event := {
 		"type": str(action.get("type", "generic")), "year": _current_year(),
-		"species_id": action.get("species_id", -1), "region": action.get("region", Vector2i.ZERO),
+		"species_id": target, "region": action.get("region", Vector2i.ZERO),
 		"summary": "; ".join(summaries.slice(0, 3)), "action": action,
 	}
 	_push(event, 1.1)  # le geste du joueur passe avant tout
@@ -203,6 +218,11 @@ static func event_importance(event: Dictionary) -> float:
 
 func _push(event: Dictionary, importance: float) -> void:
 	var e := event.duplicate()
+	# Les événements de la simulation ne portent que species_id : on y joint le nom pour la narration.
+	if not e.has("species_name"):
+		var name := _species_name_for(e.get("species_id", -1))
+		if name != "":
+			e["species_name"] = name
 	e["_importance"] = importance
 	_pending.append(e)
 	# Garde-fou mémoire : on ne conserve que les plus importants.
@@ -243,6 +263,15 @@ func _current_era() -> String:
 	if _game_state != null and "sim" in _game_state and _game_state.sim != null and _game_state.sim.has_method("current_era"):
 		return str(_game_state.sim.current_era())
 	return _last_era
+
+
+func _species_name_for(id: Variant) -> String:
+	if not (typeof(id) in [TYPE_INT, TYPE_FLOAT]) or int(id) < 0:
+		return ""
+	if _game_state == null or not ("sim" in _game_state) or _game_state.sim == null or not ("species" in _game_state.sim):
+		return ""
+	var sp: Variant = _game_state.sim.species.get(int(id), null)
+	return str(sp.get("name", "")) if sp is Dictionary else ""
 
 
 func _current_year() -> Variant:

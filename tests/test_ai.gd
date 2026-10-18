@@ -117,6 +117,179 @@ func test_contractions_francaises() -> String:
 	return ""
 
 
+# --- Accord singulier / pluriel (noms d'espèces réels de src/sim) -------------
+
+const PLURAL_NAMES := ["Multituberculés", "Euthériens insectivores", "Crocodyliformes kasaris",
+	"les premiers primates", "Humains Mivel", "Tyrannosauridés", "Sauriens"]
+const SINGULAR_NAMES := ["Verpha moloum", "Kensar tolumensis", "Raxi", "Squamates nuloa"]
+
+
+func test_detection_nombre_espece() -> String:
+	for n in PLURAL_NAMES:
+		var ph := Procedural.species_phrase(n)
+		if not ph["plural"] or not ph["text"].to_lower().begins_with("les "):
+			return "%s devrait être pluriel : %s" % [n, str(ph)]
+	for n in SINGULAR_NAMES:
+		var ph := Procedural.species_phrase(n)
+		if ph["plural"] or ph["text"] != "l'espèce " + n:
+			return "%s devrait être singulier : %s" % [n, str(ph)]
+	if Procedural.species_phrase("la lignée des ombres")["plural"]:
+		return "article singulier ignoré"
+	return ""
+
+
+## Chaque gabarit, pour chaque nom : les marques d'accord doivent toutes être résolues dans le bon nombre.
+func test_accord_tous_gabarits() -> String:
+	var gen := Procedural.new(5)
+	var re := RegEx.new()
+	re.compile("\\[(\\w+):([^|\\]]*)\\|([^\\]]*)\\]")
+	for etype in Procedural.EVENT_TEMPLATES:
+		for tpl in Procedural.EVENT_TEMPLATES[etype]:
+			for n in PLURAL_NAMES + SINGULAR_NAMES:
+				for lieu in ["les marais fumants", "la toundra sans fin", "le substrat planétaire"]:
+					var plural: bool = Procedural.species_phrase(n)["plural"]
+					var t := gen.render(tpl, {"era": "Cénozoïque", "year": -3.0e7, "species_name": n, "lieu": lieu})
+					for bad in ["[", "]", "{", "}", " de les ", " à les ", " de le "]:
+						if t.contains(bad):
+							return "« %s » dans : %s" % [bad, t]
+					for m in re.search_all(tpl):
+						var is_pl: bool = plural if m.get_string(1) == "espece" else lieu.begins_with("les ")
+						var want := m.get_string(3) if is_pl else m.get_string(2)
+						var wrong := m.get_string(2) if is_pl else m.get_string(3)
+						if not t.contains(want):
+							return "accord manquant « %s » (%s, %s) : %s" % [want, n, lieu, t]
+						if wrong != want and t.contains(" " + wrong + " ") and not want.contains(wrong):
+							return "accord faux « %s » (%s, %s) : %s" % [wrong, n, lieu, t]
+	return ""
+
+
+func test_regression_primates_disparait() -> String:
+	var gen := Procedural.new(1)
+	for _i in 200:
+		var t := gen.narrate({"type": "extinction", "era": "Cénozoïque", "year": -3.0e7})
+		for bad in ["primates disparaît", "mammifères disparaît", "coureurs disparaît", "fourrure disparaît", "n'a pas survécu"]:
+			if t.contains(bad):
+				return "accord faux : " + t
+	var t2 := gen.render(Procedural.EVENT_TEMPLATES["extinction"][0], {"era": "Cénozoïque", "species_name": "les premiers primates"})
+	if not t2.contains("les premiers primates disparaissent"):
+		return "pluriel attendu : " + t2
+	var t3 := gen.render(Procedural.EVENT_TEMPLATES["save"][1], {"era": "Moderne", "species_name": "Verpha moloum"})
+	if not t3.contains("l'espèce Verpha moloum échappe à la fin, protégée"):
+		return "singulier féminin attendu : " + t3
+	var t4 := gen.render(Procedural.EVENT_TEMPLATES["save"][1], {"era": "Moderne", "species_name": "Multituberculés"})
+	if not t4.contains("les Multituberculés échappent à la fin, protégés"):
+		return "pluriel masculin attendu : " + t4
+	return ""
+
+
+## Types et résumés tels que les produit src/sim/world_sim.gd.
+func test_evenements_reels_de_la_simulation() -> String:
+	var gen := Procedural.new(9)
+	var events := [
+		{"type": "extinction", "summary": "Extinction : les Titanosaures disparaissent", "species_name": "Titanosaures"},
+		{"type": "speciation", "summary": "Spéciation : Verpha moloum se sépare des Plésiadapiformes", "species_name": "Verpha moloum"},
+		{"type": "sapience", "summary": "Éveil : les Plésiadapiformes (primate) accèdent à la conscience — naissance des Humains", "species_name": "Humains"},
+		{"type": "discovery", "summary": "Les Humains maîtrisent le feu", "species_name": "Humains"},
+		{"type": "war", "summary": "Guerre : les Humains affrontent les Sauriens", "species_name": "Humains"},
+		{"type": "plague", "summary": "Épidémie : une peste ravage les Humains", "species_name": "Humains"},
+		{"type": "golden_age", "summary": "Âge d'or : les Humains connaissent une ère de prospérité", "species_name": "Humains"},
+		{"type": "decline", "summary": "Décadence : la prospérité des Humains s'effrite", "species_name": "Humains"},
+		{"type": "volcanism", "summary": "Supervolcan : une éruption colossale obscurcit le ciel"},
+		{"type": "climate", "summary": "Le ciel s'éclaircit : l'hiver d'impact prend fin"},
+		{"type": "ice_age_end", "summary": "Fin de la glaciation : les glaces reculent"},
+		{"type": "land_bridge", "summary": "Ponts de glace : les mers basses ouvrent des routes de migration"},
+		{"type": "immunity", "summary": "Les Humains survivants développent une immunité", "species_name": "Humains"},
+		{"type": "radiation", "summary": "Radiation adaptative : Multituberculés se diversifient", "species_name": "Multituberculés"},
+		{"type": "fertile_silt", "summary": "Le limon du déluge fertilise les plaines"},
+		{"type": "endemic", "summary": "Les Squamates restent cantonnés à leur berceau (3 régions)", "species_name": "Squamates"},
+		{"type": "invasion", "summary": "Invasion : les Squamates ont conquis 40 régions", "species_name": "Squamates"},
+		{"type": "era_change", "summary": "Le monde entre dans l'ère : Antiquité (portée par les Humains)"},
+		{"type": "impact", "summary": "Impact : un astéroïde creuse un cratère de 900 km et embrase le ciel"},
+		{"type": "collapse", "summary": "Âge sombre : l'impact plonge les Humains dans le chaos", "species_name": "Humains"},
+		{"type": "lazarus", "summary": "Taxon Lazare : les Ptérosaures reviennent d'entre les morts", "species_name": "Ptérosaures"},
+		{"type": "protection", "summary": "Les Ptérosaures sont placés sous protection divine", "species_name": "Ptérosaures"},
+		{"type": "blessing", "summary": "Bénédiction : la terre devient luxuriante"},
+		{"type": "deluge", "summary": "Déluge : les eaux engloutissent les basses terres"},
+		{"type": "spawn", "summary": "Création : Dieu façonne les Raxi", "species_name": "Raxi"},
+		{"type": "divine_meteor", "summary": "Dieu : un météore fend le ciel"},
+	]
+	for e in events:
+		for era in ["Mésozoïque", "Antiquité", "Cyberpunk"]:
+			var ctx: Dictionary = e.duplicate()
+			ctx["era"] = era
+			ctx["year"] = -1000.0
+			for _i in 4:
+				var t := gen.narrate(ctx)
+				if t.length() < 20 or t.contains("[") or t.contains("{") or t.contains(" de les "):
+					return "rendu incorrect (%s) : %s" % [e["type"], t]
+				if t.contains(" les Raxi") or t.contains("les Verpha"):
+					return "nom singulier mis au pluriel (%s) : %s" % [e["type"], t]
+	if Procedural.event_key("divine_meteor") != "meteor" or Procedural.event_key("impact") != "meteor":
+		return "types réels non reconnus"
+	var w := gen.narrate({"type": "war", "summary": "Guerre : les Humains affrontent les Sauriens", "era": "Antiquité"})
+	if not w.contains("les Humains affrontent les Sauriens"):
+		return "le résumé de guerre devrait faire foi : " + w
+	return ""
+
+
+func test_nettoyage_resume() -> String:
+	var cases := {
+		"Guerre : les Humains affrontent les Sauriens": "les Humains affrontent les Sauriens",
+		"Les Humains maîtrisent le feu.": "les Humains maîtrisent le feu",
+		"Spéciation : Verpha moloum se sépare des Plésiadapiformes": "Verpha moloum se sépare des Plésiadapiformes",
+		"Fin de la glaciation : les glaces reculent": "Fin de la glaciation : les glaces reculent",
+	}
+	for k in cases:
+		if Procedural.clean_summary(k) != cases[k]:
+			return "%s -> %s" % [k, Procedural.clean_summary(k)]
+	return ""
+
+
+func test_prophetie_format_project_future() -> String:
+	var gen := Procedural.new(2)
+	var proj := {
+		"from_year": -66_000_000.0, "to_year": -65_000_000.0, "era": "Cénozoïque", "era_reached": "Cénozoïque",
+		"dominant_species": {"id": 3, "name": "Multituberculés", "clade": "mammifère"},
+		"extinct_species": [{"id": 0, "name": "Tyrannosauridés"}, {"id": 9, "name": "Verpha moloum"}],
+		"key_events": [{"summary": "Extinction : les Titanosaures disparaissent"}],
+	}
+	var v := Procedural.projection_visions(proj)
+	var joined := " | ".join(v)
+	for needle in ["dans 1 million", "la fin des Tyrannosauridés, de l'espèce Verpha moloum", "les Multituberculés régnant", "les Titanosaures disparaissent"]:
+		if not joined.contains(needle):
+			return "vision sans « %s » : %s" % [needle, joined]
+	var empty_dom := Procedural.projection_visions({"dominant_species": {"id": -1, "name": "", "clade": ""}})
+	if not empty_dom.is_empty():
+		return "espèce dominante vide racontée : %s" % str(empty_dom)
+	var p := gen.prophecy("Et si ?", proj)
+	return "" if p.length() > 30 and not p.contains(" de les ") else "prophétie invalide : " + p
+
+
+## Intégration : narre les vrais événements d'une vraie simulation, noms d'espèces compris.
+func test_narration_simulation_reelle() -> String:
+	var WorldSim: GDScript = load("res://src/sim/world_sim.gd")
+	var sim: RefCounted = WorldSim.new(1234)
+	var events: Array = []
+	events.append_array(sim.apply_divine_action({"type": "meteor", "region": Vector2i(60, 50), "species_id": -1, "radius": 12}))
+	var guard := 0
+	while events.size() < 40 and guard < 400:
+		guard += 1
+		events.append_array(sim.step(sim.ideal_step_years() * sim.max_substeps))
+	if events.is_empty():
+		return "la simulation n'a produit aucun événement"
+	var gen := Procedural.new(4)
+	for e in events:
+		var ctx: Dictionary = e.duplicate()
+		ctx["era"] = sim.current_era()
+		var sid := int(e.get("species_id", -1))
+		if sid >= 0 and sim.species.has(sid):
+			ctx["species_name"] = sim.species[sid].name
+		var t := gen.narrate(ctx)
+		if t.length() < 20 or t.contains("[") or t.contains("{") or t.contains(" de les "):
+			return "rendu incorrect pour %s : %s" % [e.get("type"), t]
+	return ""
+
+
 func test_formatage_dates() -> String:
 	var cases := {
 		-66_000_000.0: "il y a 66 millions d'années",
