@@ -49,12 +49,14 @@ const ROLE_LABELS := {
 	carnivore = "Prédateur",
 	omnivore = "Omnivore",
 	sapient = "Espèce intelligente",
+	autotrophe = "Producteur",
 }
 const ROLE_COLORS := {
 	herbivore = Color(0.55, 0.85, 0.35),
 	carnivore = Color(0.95, 0.38, 0.5),
 	omnivore = Color(0.98, 0.72, 0.3),
 	sapient = Color(0.68, 0.58, 1.0),
+	autotrophe = Color(0.35, 0.8, 0.7),
 }
 
 const TREND_UP_COLOR := Color(0.4, 0.9, 0.45)
