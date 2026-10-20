@@ -1,6 +1,6 @@
 extends RefCounted
 ## Tests du plan de l'écran (src/ui/layout.gd) : zones au repos sans chevauchement, interface
-## au repos ≤ 30 % de l'écran, places réservées à la couche stratégie, ancrage.
+## au repos ≤ 30 % de l'écran, tiroirs et outils à leur place, ancrage.
 ## Chaque test renvoie "" en cas de succès, sinon un message d'erreur.
 
 const Layout := preload("res://src/ui/layout.gd")
@@ -34,15 +34,22 @@ func test_screen_centre_is_free() -> String:
 	return ""
 
 
-func test_strategy_reservations() -> String:
-	if Layout.STRATEGY_THREATS.size.x < 240.0:
-		return "les cartes de menace ont besoin de 240 px de large"
-	var others := {stats = Layout.STATS, feed = Layout.FEED, dilemma = Layout.DILEMMA,
-		power_hint = Layout.POWER_HINT, chronicle = Layout.CHRONICLE_DRAWER, top_bar = Layout.TOP_BAR}
-	for zone in [Layout.STRATEGY_TRACKS, Layout.STRATEGY_THREATS]:
-		for name in others:
-			if (zone as Rect2).intersects(others[name]):
-				return "zone stratégie chevauchant %s" % name
+func test_drawers_and_tools_fit() -> String:
+	# Les panneaux ouverts à la demande ne débordent pas sur les éléments toujours visibles
+	# (le tiroir Monde se place au-dessus du fil, l'arbre et les réglages d'outil au centre).
+	var always := {stats = Layout.STATS, feed = Layout.FEED, tool_bar = Layout.TOOL_BAR, top_bar = Layout.TOP_BAR}
+	var opened := {world = Layout.WORLD_DRAWER, tree = Layout.TREE, tool_editor = Layout.TOOL_EDITOR,
+		chronicle = Layout.CHRONICLE_DRAWER}
+	for o in opened:
+		if not SCREEN.encloses(opened[o]):
+			return "zone hors de l'écran : %s" % o
+		for a in always:
+			if (opened[o] as Rect2).intersects(always[a]):
+				return "%s chevauche %s" % [o, a]
+	# Tous les panneaux peuvent être ouverts ensemble sans se recouvrir.
+	var clashes := Layout.overlaps(opened)
+	if not clashes.is_empty():
+		return "panneaux ouverts qui se chevauchent : %s" % str(clashes)
 	if Layout.STATS_MAX_BOTTOM > Layout.CHRONICLE_DRAWER.position.y:
 		return "les statistiques déborderaient sur le tiroir Chronique"
 	return ""

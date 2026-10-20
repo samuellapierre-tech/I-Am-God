@@ -1,24 +1,34 @@
 extends CanvasLayer
-## Interface divine, disposition sobre : la parcelle et ses créatures occupent le centre.
+## Interface calme (docs/GENESE.md) : le monde occupe l'écran, l'interface se fait discrète.
 ## - en haut, au centre : fine barre (année, ère, vitesse du temps, tiroirs) ;
-## - en bas, au centre : barre des pouvoirs compacte (+ indication flottante quand un pouvoir est armé) ;
-## - tiroirs fermés par défaut : « Espèces vivantes » du monde (touche E, choix de la cible) à droite,
-##   « Chronique » du monde (touche C) en bas à gauche.
-## Zones : src/ui/layout.gd (dont la bande et la colonne réservées à la couche stratégie).
-## Ailleurs, et hors de ce fichier : statistiques de la parcelle à gauche (S), fil d'Ézéchiel à droite,
-## dilemmes au centre-bas. La narration n'est affichée que par le fil (src/ui/chronicle/).
-## Construite en code pour rester lisible et sans dépendance à des ressources externes.
-## L'état joueur (pouvoir, rayon, cible) vit dans src/ui/parcel_powers.gd : voir bind_map().
+## - en bas, au centre : barre d'outils à deux onglets, « Semer » (palette de semences) et « Agir »
+##   (pouvoirs), chaque bouton montrant sa recharge ; au-dessus, les réglages de l'outil choisi ;
+## - tiroirs fermés par défaut, ouverts à la demande et jamais imposés :
+##   « Monde » (E : statistiques planétaires et espèces), « Arbre de la vie » (T), « Chronique » (C).
+## Ailleurs, hors de ce fichier : statistiques de la parcelle à gauche (S), fil d'Ézéchiel à droite.
+## Zones : src/ui/layout.gd. Outil et recharges : src/ui/tools/tool_state.gd (ToolState.shared).
+## L'état des pouvoirs de la vue (pouvoir, rayon, cible) reste synchronisé via bind_map().
+
+## Le joueur veut voir cette espèce sur le globe (arbre de la vie : bouton ou double-clic).
+signal focus_species(species_id: int)
 
 const MapMath := preload("res://src/map/map_math.gd")
 const Powers := preload("res://src/map/divine_powers.gd")
 const Layout := preload("res://src/ui/layout.gd")
+const ToolState := preload("res://src/ui/tools/tool_state.gd")
+const ToolButton := preload("res://src/ui/tools/tool_button.gd")
+const SeedCatalog := preload("res://src/ui/seeds/seed_catalog.gd")
+const SeedEditor := preload("res://src/ui/seeds/seed_editor.gd")
+const PlanetPanel := preload("res://src/ui/stats/planet_panel.gd")
+const TreePanel := preload("res://src/ui/tree/tree_panel.gd")
 
 ## Multiplicateurs de vitesse x1..x5 (appliqués à MapMath.base_years_per_second()).
 const SPEEDS := [1.0, 2.0, 3.0, 4.0, 5.0]
 const MAX_LOG_LINES := 200
-const SPECIES_KEY := KEY_E
+const WORLD_KEY := KEY_E
+const TREE_KEY := KEY_T
 const CHRONICLE_KEY := KEY_C
+const TOOL_TAB_KEY := KEY_G
 const GOLD := Color(1.0, 0.85, 0.5)
 const DIM := Color(0.62, 0.66, 0.78)
 
@@ -27,52 +37,57 @@ const DIM := Color(0.62, 0.66, 0.78)
 @export var request_narration := false
 
 var map: Node = null
+var tools: Node = null
 ## 0 = pause, 1..5 = vitesse.
 var speed_level := 1
+## "seed" (Semer) ou "power" (Agir).
+var tool_tab := "seed"
 
 var _year_label: Label
 var _era_label: Label
 var _rate_label: Label
 var _speed_buttons: Array[Button] = []
-var _power_buttons: Array[Button] = []
-var _hint_panel: PanelContainer
-var _hint_label: Label
-var _species_drawer: PanelContainer
-var _species_toggle: Button
-var _species_list: ItemList
-var _species_ids: Array[int] = []
-var _species_signature := ""
-var _species_timer := 0.0
-var _target_button: Button
+var _tab_buttons := {}
+var _seed_row: HBoxContainer
+var _power_row: HBoxContainer
+var _tool_buttons: Array[Button] = []
+var _editor: Control
+var _world_drawer: PanelContainer
+var _world_toggle: Button
+var _planet: Control
+var _tree_panel: Control
+var _tree_toggle: Button
 var _chronicle_drawer: PanelContainer
 var _chronicle_toggle: Button
 var _log: RichTextLabel
 var _log_lines := 0
-var _swatches := {}
 var _syncing := false
 
 
 func _ready() -> void:
 	layer = 10
+	tools = ToolState.shared(get_tree())
 	_build()
+	tools.tool_changed.connect(func(_t: Dictionary) -> void: _sync_from_tools())
 	GameState.event_occurred.connect(_on_event)
 	GameState.era_changed.connect(_on_era_changed)
 	GameState.divine_action_applied.connect(_on_divine_action)
 	if GameState.sim != null:
 		_era_label.text = GameState.sim.current_era()
 	_set_speed(1)
-	_refresh_species(true)
-	_add_log_line("[color=#e8c66a]Que la lumière soit.[/color] Vous veillez sur un monde jeune.")
+	_set_tool_tab("seed")
+	_add_log_line("[color=#e8c66a]Que la lumière soit.[/color] Une planète vierge attend ce que tu y sèmeras.")
 
 
-## Relie le HUD à l'état des pouvoirs (source de vérité du pouvoir, du rayon et de la cible).
+## Relie le HUD à l'état des pouvoirs de la vue (pouvoir, rayon, cible), tenu en phase avec ToolState.
 func bind_map(world_map: Node) -> void:
 	map = world_map
-	map.state_changed.connect(_sync_from_map)
+	if map.has_signal("state_changed"):
+		map.state_changed.connect(_sync_from_map)
 	_sync_from_map()
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	var sim = GameState.sim
 	if sim == null:
 		return
@@ -82,11 +97,6 @@ func _process(delta: float) -> void:
 				* SPEEDS[speed_level - 1] * GameState.pace_factor()
 	_rate_label.text = "%s ans/s" % MapMath.group_thousands(int(GameState.years_per_second)) \
 			if speed_level > 0 else "Temps suspendu"
-	# La liste mondiale n'est tenue à jour que tiroir ouvert.
-	_species_timer += delta
-	if _species_drawer.visible and _species_timer >= 1.0:
-		_species_timer = 0.0
-		_refresh_species(false)
 
 
 # --- Raccourcis clavier ---
@@ -104,28 +114,37 @@ func _unhandled_key_input(event: InputEvent) -> void:
 			_set_speed(clampi(speed_level + 1, 1, SPEEDS.size()))
 		KEY_MINUS, KEY_KP_SUBTRACT:
 			_set_speed(maxi(speed_level - 1, 1))
-		KEY_BRACKETLEFT:
-			if map: map.set_radius(map.radius - 1)
-		KEY_BRACKETRIGHT:
-			if map: map.set_radius(map.radius + 1)
+		KEY_BRACKETLEFT, KEY_BRACKETRIGHT:
+			if tools.has_tool():
+				var r := int(tools.selected_tool().params.get("radius", 4))
+				tools.set_param("radius", r + (1 if key == KEY_BRACKETRIGHT else -1))
 		KEY_ESCAPE:
-			if _species_drawer.visible or _chronicle_drawer.visible:
-				_set_drawer(_species_drawer, _species_toggle, false)
-				_set_drawer(_chronicle_drawer, _chronicle_toggle, false)
-			elif map:
-				map.set_power("")
-		SPECIES_KEY:
-			_set_drawer(_species_drawer, _species_toggle, not _species_drawer.visible)
+			if _world_drawer.visible or _chronicle_drawer.visible or _tree_panel.visible:
+				_close_drawers()
+			else:
+				tools.clear()
+		WORLD_KEY:
+			_set_drawer(_world_drawer, _world_toggle, not _world_drawer.visible)
+		TREE_KEY:
+			_set_drawer(_tree_panel, _tree_toggle, not _tree_panel.visible)
 		CHRONICLE_KEY:
 			_set_drawer(_chronicle_drawer, _chronicle_toggle, not _chronicle_drawer.visible)
+		TOOL_TAB_KEY:
+			_set_tool_tab("power" if tool_tab == "seed" else "seed")
 		_:
-			handled = false
-			for p in Powers.LIST:
-				if key == p.key and map:
-					map.set_power("" if map.power == p.id else p.id)
-					handled = true
+			handled = _select_by_key(key)
 	if handled:
 		get_viewport().set_input_as_handled()
+
+
+## 1..9 : outil de l'onglet courant (semence ou pouvoir).
+func _select_by_key(key: int) -> bool:
+	var list: Array = SeedCatalog.SEEDS if tool_tab == "seed" else Powers.LIST
+	for item in list:
+		if key == item.key:
+			_toggle_tool(tool_tab, item.id)
+			return true
+	return false
 
 
 # --- Construction de l'interface ---
@@ -138,8 +157,19 @@ func _build() -> void:
 	root.theme = _make_theme()
 	add_child(root)
 	_build_top_bar(root)
-	_build_power_bar(root)
-	_build_species_drawer(root)
+	_build_tool_bar(root)
+	_editor = SeedEditor.new()
+	_editor.tool_state = tools
+	_editor.target_name = _target_name
+	_editor.theme_type_variation = &"CompactPanel"
+	Layout.place(_editor, Layout.TOOL_EDITOR, Vector2(0.5, 1))
+	root.add_child(_editor)
+	_build_world_drawer(root)
+	_tree_panel = TreePanel.new()
+	_tree_panel.visible = false
+	Layout.place(_tree_panel, Layout.TREE, Vector2(0.5, 0))
+	_tree_panel.focus_species.connect(func(id: int) -> void: focus_species.emit(id))
+	root.add_child(_tree_panel)
 	_build_chronicle_drawer(root)
 
 
@@ -187,86 +217,79 @@ func _build_top_bar(root: Control) -> void:
 		_speed_buttons.append(b)
 
 	row.add_child(VSeparator.new())
-	_species_toggle = _drawer_button("Espèces  E", "Espèces vivantes du monde et cible des pouvoirs (E)")
-	_species_toggle.toggled.connect(func(on: bool) -> void: _set_drawer(_species_drawer, _species_toggle, on))
-	row.add_child(_species_toggle)
+	_world_toggle = _drawer_button("Monde  E", "Statistiques de la planète et espèces vivantes (E)")
+	_world_toggle.toggled.connect(func(on: bool) -> void: _set_drawer(_world_drawer, _world_toggle, on))
+	row.add_child(_world_toggle)
+	_tree_toggle = _drawer_button("Arbre  T", "Arbre de la vie : la généalogie de toutes les espèces (T)")
+	_tree_toggle.toggled.connect(func(on: bool) -> void: _set_drawer(_tree_panel, _tree_toggle, on))
+	row.add_child(_tree_toggle)
 	_chronicle_toggle = _drawer_button("Chronique  C", "Chronique des événements du monde (C)")
 	_chronicle_toggle.toggled.connect(func(on: bool) -> void: _set_drawer(_chronicle_drawer, _chronicle_toggle, on))
 	row.add_child(_chronicle_toggle)
 
 
-## Barre des pouvoirs compacte (une rangée) ; l'indication de rayon ne s'affiche que pouvoir armé.
-func _build_power_bar(root: Control) -> void:
+## Barre d'outils : onglets « Semer » / « Agir », puis les boutons de l'onglet (avec recharge).
+func _build_tool_bar(root: Control) -> void:
 	var bar := _panel(root)
 	bar.theme_type_variation = &"CompactPanel"
-	var bar_bottom := Layout.POWER_BAR.end.y - Layout.REF_SIZE.y
-	_place(bar, Vector4(0.5, 1, 0.5, 1), Vector4(0, bar_bottom, 0, bar_bottom))
+	var bottom := Layout.TOOL_BAR.end.y - Layout.REF_SIZE.y
+	_place(bar, Vector4(0.5, 1, 0.5, 1), Vector4(0, bottom, 0, bottom))
 	bar.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	bar.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	var power_row := HBoxContainer.new()
-	power_row.add_theme_constant_override("separation", 4)
-	bar.add_child(power_row)
-	var power_group := ButtonGroup.new()
-	power_group.allow_unpress = true
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	bar.add_child(row)
+	var tabs := VBoxContainer.new()
+	tabs.add_theme_constant_override("separation", 2)
+	row.add_child(tabs)
+	var tab_group := ButtonGroup.new()
+	for tab in [["seed", "Semer"], ["power", "Agir"]]:
+		var b := _toggle_button(tab[1], tab_group)
+		b.custom_minimum_size = Vector2(76, 24)
+		b.add_theme_font_size_override("font_size", 13)
+		b.tooltip_text = "Semer la vie ou agir sur le monde (G pour alterner)"
+		b.pressed.connect(_set_tool_tab.bind(tab[0]))
+		tabs.add_child(b)
+		_tab_buttons[tab[0]] = b
+	row.add_child(VSeparator.new())
+	_seed_row = HBoxContainer.new()
+	_seed_row.add_theme_constant_override("separation", 4)
+	row.add_child(_seed_row)
+	for s in SeedCatalog.SEEDS:
+		_seed_row.add_child(_tool_button("seed", s, 128))
+	_power_row = HBoxContainer.new()
+	_power_row.add_theme_constant_override("separation", 4)
+	row.add_child(_power_row)
 	for p in Powers.LIST:
-		var b := _toggle_button("%s\n%s" % [OS.get_keycode_string(p.key), p.label], power_group)
-		b.custom_minimum_size = Vector2(92, 50)
-		b.add_theme_font_size_override("font_size", 14)
-		b.tooltip_text = "%s — %s\nTouche %s, puis clic sur la parcelle." % [p.label, p.hint, OS.get_keycode_string(p.key)]
-		b.add_theme_color_override("font_pressed_color", p.color)
-		b.add_theme_color_override("font_hover_pressed_color", p.color.lightened(0.3))
-		b.toggled.connect(_on_power_toggled.bind(p.id))
-		power_row.add_child(b)
-		_power_buttons.append(b)
-
-	_hint_panel = _panel(root)
-	_hint_panel.theme_type_variation = &"CompactPanel"
-	var hint_bottom := Layout.POWER_HINT.end.y - Layout.REF_SIZE.y
-	_place(_hint_panel, Vector4(0.5, 1, 0.5, 1), Vector4(0, hint_bottom, 0, hint_bottom))
-	_hint_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	_hint_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	_hint_panel.visible = false
-	var hint_row := HBoxContainer.new()
-	hint_row.add_theme_constant_override("separation", 8)
-	_hint_panel.add_child(hint_row)
-	var minus := Button.new()
-	minus.text = " − "
-	minus.focus_mode = Control.FOCUS_NONE
-	minus.tooltip_text = "Réduire le rayon ( [ )"
-	minus.pressed.connect(_step_radius.bind(-1))
-	hint_row.add_child(minus)
-	_hint_label = Label.new()
-	_hint_label.add_theme_font_size_override("font_size", 15)
-	_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	hint_row.add_child(_hint_label)
-	var plus := Button.new()
-	plus.text = " + "
-	plus.focus_mode = Control.FOCUS_NONE
-	plus.tooltip_text = "Agrandir le rayon ( ] )"
-	plus.pressed.connect(_step_radius.bind(1))
-	hint_row.add_child(plus)
+		_power_row.add_child(_tool_button("power", p, 92))
 
 
-## Tiroir « Espèces vivantes » (monde entier) : choix de la cible des pouvoirs. Fermé par défaut.
-func _build_species_drawer(root: Control) -> void:
-	_species_drawer = _panel(root)
-	Layout.place(_species_drawer, Layout.SPECIES_DRAWER, Vector2(1, 0))
-	_species_drawer.visible = false
-	var box := VBoxContainer.new()
-	_species_drawer.add_child(box)
-	box.add_child(_title("Espèces vivantes — monde"))
-	_species_list = ItemList.new()
-	_species_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_species_list.focus_mode = Control.FOCUS_NONE
-	_species_list.item_selected.connect(_on_species_selected)
-	box.add_child(_species_list)
-	# Un seul élément pour la cible : il l'affiche et, cliqué, revient à l'espèce dominante.
-	_target_button = Button.new()
-	_target_button.focus_mode = Control.FOCUS_NONE
-	_target_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	_target_button.add_theme_font_size_override("font_size", 14)
-	_target_button.pressed.connect(_on_clear_target)
-	box.add_child(_target_button)
+func _tool_button(kind: String, item: Dictionary, width: float) -> Button:
+	var b := ToolButton.new()
+	b.tool = {kind = kind, id = item.id}
+	b.tool_state = tools
+	b.accent = item.color
+	b.text = "%s\n%s" % [OS.get_keycode_string(item.key), item.label]
+	b.custom_minimum_size = Vector2(width, 50)
+	b.add_theme_font_size_override("font_size", 14)
+	b.add_theme_color_override("font_pressed_color", item.color)
+	b.add_theme_color_override("font_hover_pressed_color", item.color.lightened(0.3))
+	b.tooltip_text = "%s — %s\nRecharge : %s" % [item.label, item.hint,
+		ToolState.Cooldowns.format_remaining(ToolState.cooldown_of({kind = kind, id = item.id}))]
+	b.pressed.connect(_toggle_tool.bind(kind, item.id))
+	_tool_buttons.append(b)
+	return b
+
+
+## Tiroir « Monde » : statistiques planétaires et espèces (cible des pouvoirs).
+func _build_world_drawer(root: Control) -> void:
+	_world_drawer = _panel(root)
+	Layout.place(_world_drawer, Layout.WORLD_DRAWER, Vector2(1, 0))
+	_world_drawer.visible = false
+	_planet = PlanetPanel.new()
+	_planet.species_selected.connect(_on_species_selected)
+	_planet.target_cleared.connect(func() -> void: _set_target(-1))
+	_world_drawer.add_child(_planet)
 
 
 ## Tiroir « Chronique » (journal du monde), en bas à gauche, sous les statistiques. Fermé par défaut.
@@ -323,6 +346,10 @@ func _make_theme() -> Theme:
 	list_bg.bg_color = Color(0, 0, 0, 0.25)
 	list_bg.set_corner_radius_all(4)
 	t.set_stylebox("panel", "ItemList", list_bg)
+	var tab_panel := StyleBoxFlat.new()
+	tab_panel.bg_color = Color(0, 0, 0, 0)
+	tab_panel.set_content_margin_all(4)
+	t.set_stylebox("panel", "TabContainer", tab_panel)
 	return t
 
 
@@ -377,28 +404,14 @@ func _drawer_button(text: String, tooltip: String) -> Button:
 func _set_drawer(drawer: Control, toggle: Button, open: bool) -> void:
 	drawer.visible = open
 	toggle.set_pressed_no_signal(open)
-	if open and drawer == _species_drawer:
-		_species_timer = 0.0
-		_refresh_species(true)
+	if open and drawer == _tree_panel:
+		_tree_panel.refresh(true)
 
 
-func _swatch(color: Color) -> Texture2D:
-	var key := color.to_html(false)
-	if not _swatches.has(key):
-		var img := Image.create(14, 14, false, Image.FORMAT_RGBA8)
-		img.fill(color)
-		_swatches[key] = ImageTexture.create_from_image(img)
-	return _swatches[key]
-
-
-func _on_clear_target() -> void:
-	if map:
-		map.set_target_species(-1)
-
-
-func _step_radius(step: int) -> void:
-	if map:
-		map.set_radius(map.radius + step)
+func _close_drawers() -> void:
+	_set_drawer(_world_drawer, _world_toggle, false)
+	_set_drawer(_chronicle_drawer, _chronicle_toggle, false)
+	_set_drawer(_tree_panel, _tree_toggle, false)
 
 
 # --- Vitesse du temps ---
@@ -410,124 +423,83 @@ func _set_speed(level: int) -> void:
 		_speed_buttons[i].set_pressed_no_signal(i == speed_level)
 
 
-# --- Synchronisation avec l'état des pouvoirs ---
+# --- Outils (semences et pouvoirs) ---
 
-func _sync_from_map() -> void:
-	if map == null:
+func _set_tool_tab(tab: String) -> void:
+	tool_tab = tab
+	_seed_row.visible = tab == "seed"
+	_power_row.visible = tab == "power"
+	for t in _tab_buttons:
+		_tab_buttons[t].set_pressed_no_signal(t == tab)
+
+
+## Choisit l'outil (ou le repose s'il est déjà choisi). Un pouvoir en recharge ne se choisit pas.
+func _toggle_tool(kind: String, id: String) -> void:
+	if tools.is_selected(kind, id):
+		tools.clear()
+		return
+	if kind == "power" and not tools.can_use({kind = kind, id = id}):
+		_sync_from_tools()  # le bouton reste levé : rien à viser pendant la recharge
+		return
+	if kind == "seed":
+		tools.select_seed(id)
+	else:
+		tools.select_power(id, map.target_species if map and "target_species" in map else -1)
+	_set_tool_tab(kind)
+
+
+## ToolState -> boutons et état des pouvoirs de la vue.
+func _sync_from_tools() -> void:
+	var tool: Dictionary = tools.selected_tool()
+	for b in _tool_buttons:
+		b.set_pressed_no_signal(not tool.is_empty() and b.tool.kind == tool.kind and b.tool.id == tool.id)
+	if map == null or _syncing:
 		return
 	_syncing = true
-	for i in _power_buttons.size():
-		_power_buttons[i].set_pressed_no_signal(Powers.LIST[i].id == map.power)
-	var p := Powers.get_power(map.power)
-	_hint_panel.visible = not p.is_empty()
-	if not p.is_empty():
-		var text := "%s — rayon %d" % [p.label, map.radius]
-		if p.get("needs_species", false):
-			text += " — vise : %s" % _target_name()
-		_hint_label.text = text + "   ([ ] ou Maj+molette, Échap pour annuler)"
-		# Recentre à la largeur du nouveau texte (grow_horizontal = BOTH depuis l'ancre centrale).
-		_hint_panel.offset_left = 0.0
-		_hint_panel.offset_right = 0.0
-	_update_target_button()
+	var power: String = tool.id if not tool.is_empty() and tool.kind == "power" else ""
+	if map.power != power:
+		map.set_power(power)
+	if power != "" and map.has_method("set_radius"):
+		map.set_radius(int(tool.params.get("radius", map.radius)))
 	_syncing = false
 
 
-func _on_power_toggled(on: bool, power_id: String) -> void:
+## État des pouvoirs de la vue -> ToolState (p. ex. Échap géré par la vue).
+func _sync_from_map() -> void:
 	if map == null or _syncing:
 		return
-	if on:
-		map.set_power(power_id)
-	elif map.power == power_id:
-		map.set_power("")
+	_syncing = true
+	var tool: Dictionary = tools.selected_tool()
+	var power := str(map.power) if "power" in map else ""
+	if power != "" and not tools.is_selected("power", power):
+		tools.select_power(power, int(map.target_species) if "target_species" in map else -1)
+	elif power == "" and not tool.is_empty() and tool.kind == "power":
+		tools.clear()
+	elif power != "" and "radius" in map and int(tool.params.get("radius", -1)) != int(map.radius):
+		tools.set_param("radius", int(map.radius))
+	var target := int(map.target_species) if "target_species" in map else -1
+	_planet.set_target(target, _target_name())
+	_syncing = false
+
+
+func _on_species_selected(id: int) -> void:
+	_set_target(id)
+
+
+func _set_target(id: int) -> void:
+	if map and map.has_method("set_target_species"):
+		map.set_target_species(id)
+	if tools.has_tool() and tools.selected_tool().kind == "power":
+		tools.set_param("species_id", id)
+	_planet.set_target(id, _target_name())
 
 
 func _target_name() -> String:
-	var id: int = map.target_species if map else -1
+	var id: int = int(map.target_species) if map and "target_species" in map else -1
 	if id < 0:
-		return "espèce dominante de la parcelle"
+		return "espèce dominante"
 	var info = GameState.sim.species.get(id) if GameState.sim else null
 	return str(info.get("name", "#%d" % id)) if info is Dictionary else "#%d" % id
-
-
-func _update_target_button() -> void:
-	var id: int = map.target_species if map else -1
-	_target_button.text = "Cible : %s" % _target_name()
-	_target_button.disabled = id < 0
-	_target_button.tooltip_text = "Cliquer pour revenir à l'espèce dominante de la parcelle." if id >= 0 \
-			else "Choisissez une espèce dans la liste pour la viser ; sinon les pouvoirs visent l'espèce dominante de la parcelle."
-	var idx := _species_ids.find(id)
-	if idx >= 0:
-		_species_list.select(idx)
-	else:
-		_species_list.deselect_all()
-
-
-# --- Espèces ---
-
-func _refresh_species(force: bool) -> void:
-	var sim = GameState.sim
-	if sim == null:
-		return
-	var rows := []
-	for id in sim.species:
-		var info = sim.species[id]
-		if not (info is Dictionary) or not info.get("alive", true):
-			continue
-		rows.append([int(id), info])
-	rows.sort_custom(func(a, b): return float(a[1].get("population", 0)) > float(b[1].get("population", 0)))
-	var sig := ""
-	for r in rows:
-		sig += "%d," % r[0]
-	if force or sig != _species_signature:
-		_species_signature = sig
-		_species_list.clear()
-		_species_ids.clear()
-		for r in rows:
-			var idx := _species_list.add_item("", _swatch(MapMath.species_color(r[0])))
-			_species_list.set_item_metadata(idx, r[0])
-			_species_ids.append(r[0])
-	for i in rows.size():
-		var info: Dictionary = rows[i][1]
-		var label := str(info.get("name", "Espèce #%d" % rows[i][0]))
-		if info.get("sapient", false):
-			label += "  (sapiente)"
-		label += "   pop. %s" % _format_population(float(info.get("population", 0)))
-		_species_list.set_item_text(i, label)
-		_species_list.set_item_tooltip(i, _traits_text(info))
-	if rows.is_empty() and _species_list.item_count == 0:
-		_species_list.add_item("Aucune espèce vivante")
-		_species_list.set_item_disabled(0, true)
-		_species_list.set_item_selectable(0, false)
-	if map:
-		_update_target_button()
-
-
-func _format_population(p: float) -> String:
-	if p >= 1_000_000_000.0:
-		return "%.1f Md" % (p / 1_000_000_000.0)
-	if p >= 1_000_000.0:
-		return "%.1f M" % (p / 1_000_000.0)
-	if p > 0.0 and p < 1.0:
-		return "%d %%" % int(p * 100.0)
-	return MapMath.group_thousands(int(p))
-
-
-func _traits_text(info: Dictionary) -> String:
-	var traits = info.get("traits", {})
-	if traits is Dictionary and not traits.is_empty():
-		var parts := []
-		for k in traits:
-			parts.append("%s : %s" % [k, str(traits[k])])
-		return ", ".join(parts)
-	if traits is Array and not traits.is_empty():
-		return ", ".join(traits.map(func(x): return str(x)))
-	return str(info.get("name", ""))
-
-
-func _on_species_selected(index: int) -> void:
-	if map == null or index >= _species_ids.size():
-		return
-	map.set_target_species(_species_ids[index])
 
 
 # --- Chronique ---
@@ -557,9 +529,22 @@ func _on_era_changed(era: String) -> void:
 
 
 func _on_divine_action(action: Dictionary, consequences: Array) -> void:
-	var p := Powers.get_power(str(action.get("type", "")))
-	var label: String = p.get("label", str(action.get("type", "?")))
-	_add_log_line("[color=#%s]» %s[/color] sur la parcelle" % [p.get("color", Color.WHITE).to_html(false), label])
+	# Recharge de l'outil, même si l'action a été appliquée ailleurs (vue, globe) ; l'outil se repose.
+	var used: Dictionary = tools.notify_applied(action)
+	if not used.is_empty() and tools.is_selected(str(used.kind), str(used.id)):
+		tools.clear()
+	var type := str(action.get("type", ""))
+	var label := type
+	var color := Color.WHITE
+	if type == "seed":
+		var s := SeedCatalog.get_seed(str(action.get("kind", "")))
+		label = "Semence : %s" % s.get("label", action.get("kind", "?"))
+		color = s.get("color", Color.WHITE)
+	else:
+		var p := Powers.get_power(type)
+		label = p.get("label", type)
+		color = p.get("color", Color.WHITE)
+	_add_log_line("[color=#%s]» %s[/color]" % [color.to_html(false), _escape(label)])
 	if request_narration:
 		var summary := "Dieu déchaîne le pouvoir « %s »." % label
 		if not consequences.is_empty() and consequences[0] is Dictionary:
