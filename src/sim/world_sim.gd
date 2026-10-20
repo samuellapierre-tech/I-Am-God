@@ -1228,6 +1228,11 @@ func _speciate(parent_id: int, out: Array[Dictionary], room := 1.0, crowd := {})
 	var founder: int = prt.sample
 	if founder < 0 or _eco.capacity_left() <= 0:
 		return -1
+	# Une lignée qui ne trouve plus de quoi vivre ne se divise plus (sinon des espèces fantômes
+	# renaîtraient à chaque pas d'un monde devenu inhabitable).
+	var goff0 := _global_offset()
+	if _eco.habitat_base(prt.idx, founder) * _eco.suitability(prt.idx, founder, goff0) <= 0.002:
+		return -1
 	var radiating: bool = prt.radiation_until >= year
 	var ftemp: float = _eco.region_temperature(founder, _global_offset())
 	var traits := Species.mutate(psp.traits, _rng, ftemp, 1.0 if radiating else 0.0, oxygen)
@@ -1760,9 +1765,14 @@ func _vicariance(cause: int, out: Array[Dictionary]) -> void:
 ## sinon d'un repli local (_seed_fallback).
 func _act_seed(a: Dictionary, action: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
 	var kind := String(action.get("kind", "spark"))
+	var custom: Dictionary = action.get("traits", {})
+	var region_temp: float = _eco.region_temperature(a.r, _global_offset())
+	# Rôle d'un germe d'animal : la Vie attend filtreur / brouteur / chasseur.
+	var role := String(custom.get("role", action.get("role", "brouteur")))
+	role = {"filter": "filtreur", "grazer": "brouteur", "hunter": "chasseur"}.get(role, role)
 	var env := {oxygen = oxygen, ozone = ozone, year = year, max_complexity = max_complexity,
-		temperature = _eco.region_temperature(a.r, _global_offset()), land = _eco.r_land[a.r] > 0.5,
-		traits = action.get("traits", {})}
+		temp = region_temp, temperature = region_temp, land = _eco.r_land[a.r] > 0.5,
+		role = role, traits = custom}
 	var tpl := {}
 	var life: Script = Species
 	for m in life.get_script_method_list():
@@ -1781,7 +1791,14 @@ func _act_seed(a: Dictionary, action: Dictionary, root: Dictionary, out: Array[D
 	var p_name := String(tpl.get("name", traits.get("name", "")))
 	traits.erase("name")
 	if p_name == "":
-		p_name = Species.make_name("", _rng, true)
+		var named := false
+		for m in life.get_script_method_list():
+			if m.name == "seed_name":
+				p_name = String(life.call("seed_name", traits, _rng))
+				named = true
+				break
+		if not named or p_name == "":
+			p_name = Species.make_name("", _rng, true)
 	var id := _create_species(p_name, traits, -1, -1)
 	if id < 0:
 		root.summary = "Dieu sème, mais la vie déborde déjà de toutes parts"
@@ -1820,7 +1837,8 @@ func _seed_fallback(kind: String, env: Dictionary) -> Dictionary:
 				diet = "autotrophe", temp_opt = clampf(t, 0.2, 0.85), temp_tol = 0.32, clade = "plante",
 				complexity = 2.0, habitat = "land", oxygenic = true}}
 		"animal_germ":
-			var role := String(env.traits.get("role", "filter"))
+			var role := String(env.get("role", "brouteur"))
+			role = {"filtreur": "filter", "brouteur": "grazer", "chasseur": "hunter"}.get(role, role)
 			var spec: Array = {"filter": ["Éponges primordiales", "éponge", "herbivore", 0.08],
 				"grazer": ["Brouteurs primordiaux", "mollusque", "herbivore", 0.12],
 				"hunter": ["Chasseurs primordiaux", "arthropode", "carnivore", 0.15]}.get(role, ["Éponges primordiales", "éponge", "herbivore", 0.08])
