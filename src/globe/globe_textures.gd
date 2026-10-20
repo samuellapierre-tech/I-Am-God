@@ -28,6 +28,13 @@ var prev_elevation_texture: ImageTexture
 ## 0 juste après un changement de géographie, 1 quand le fondu est terminé.
 var geography_fade := 1.0
 var geography_version := -1
+## Moyennes exactes des rangées polaires (nord = rangée 0, sud = dernière rangée), pour que le shader
+## fasse converger la texture vers une valeur unique à chaque pôle (pas d'étoile ni de rayons).
+## data : (élévation, température, population, tech) ; aux : (vie marine, vie terrestre, 0, 0) ;
+## prev : (élévation d'avant le changement de géographie, 0, 0, 0).
+var pole_data := [Vector4.ZERO, Vector4.ZERO]
+var pole_aux := [Vector4.ZERO, Vector4.ZERO]
+var pole_prev := [Vector4.ZERO, Vector4.ZERO]
 ## Compteurs (tests, diagnostic).
 var geography_uploads := 0
 var life_sweeps := 0
@@ -57,17 +64,21 @@ func pack(sim: Object) -> bool:
 		return false
 	if packer.width != width or packer.height != height:
 		_resize(packer.width, packer.height)
+		_update_data_poles(sim)
 		_snapshot_elevation(sim)
 		_write_plates(sim)
 		geography_version = read_geography_version(sim)
 		_upload_aux()
 		return true
+	_update_data_poles(sim)
 	var v := read_geography_version(sim)
 	if v != geography_version:
 		geography_version = v
 		# L'image d'avant devient la source du fondu, puis on mémorise la nouvelle géographie.
 		prev_elevation_image.set_data(width, height, false, Image.FORMAT_RF, _last_elevation.to_byte_array())
 		prev_elevation_texture.update(prev_elevation_image)
+		pole_prev = [Vector4(_row_mean(_last_elevation, 1, 0, 0), 0, 0, 0),
+			Vector4(_row_mean(_last_elevation, 1, height - 1, 0), 0, 0, 0)]
 		geography_fade = 0.0
 		_snapshot_elevation(sim)
 		_write_plates(sim)
@@ -125,11 +136,41 @@ func update_life(sim: Object, budget: int) -> bool:
 		_life_cursor = (k + 1) % total
 		if _life_cursor == 0:
 			_aux = a
+			_update_aux_poles()
 			_upload_aux()
 			life_sweeps += 1
 			return true
 	_aux = a
 	return false
+
+
+## Moyenne d'un canal sur une rangée d'un tampon entrelacé (`stride` valeurs par cellule).
+func _row_mean(buf: PackedFloat32Array, stride: int, row: int, channel: int) -> float:
+	if width == 0 or buf.size() < (row + 1) * width * stride:
+		return 0.0
+	var sum := 0.0
+	var j := row * width * stride + channel
+	for x in width:
+		sum += buf[j]
+		j += stride
+	return sum / width
+
+
+func _update_data_poles(sim: Object) -> void:
+	var fields := ["elevation", "temperature", "population", "tech"]
+	for k in 2:
+		var row := 0 if k == 0 else height - 1
+		var v := Vector4.ZERO
+		for c in 4:
+			var arr: PackedFloat32Array = sim.get(fields[c])
+			v[c] = _row_mean(arr, 1, row, 0)
+		pole_data[k] = v
+
+
+func _update_aux_poles() -> void:
+	for k in 2:
+		var row := 0 if k == 0 else height - 1
+		pole_aux[k] = Vector4(_row_mean(_aux, 4, row, 0), _row_mean(_aux, 4, row, 1), 0, 0)
 
 
 func has_plates() -> bool:
@@ -160,6 +201,8 @@ func _snapshot_elevation(sim: Object) -> void:
 	if geography_fade >= 1.0:
 		prev_elevation_image.set_data(width, height, false, Image.FORMAT_RF, _last_elevation.to_byte_array())
 		prev_elevation_texture.update(prev_elevation_image)
+		pole_prev = [Vector4(_row_mean(_last_elevation, 1, 0, 0), 0, 0, 0),
+			Vector4(_row_mean(_last_elevation, 1, height - 1, 0), 0, 0, 0)]
 
 
 func _write_plates(sim: Object) -> void:

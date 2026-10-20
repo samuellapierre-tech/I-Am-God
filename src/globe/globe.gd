@@ -98,6 +98,7 @@ func _ready() -> void:
 	atmosphere.material_override = _atmo_mat
 	_sky_mat.shader = SKY_SHADER
 	camera.environment = _make_environment()
+	_mat.set_shader_parameter("noise_tex", _make_noise())
 	_impacts.resize(MAX_IMPACTS * 5)
 	for i in MAX_IMPACTS:
 		_impacts[i * 5 + 4] = -1.0
@@ -386,6 +387,7 @@ func _process(delta: float) -> void:
 		_mat.set_shader_parameter("aux_tex", textures.aux_texture)
 		_mat.set_shader_parameter("aux_smooth", textures.aux_texture)
 	textures.advance_fade(delta)
+	_set_pole_uniforms()
 	_flash = maxf(_flash - delta * 2.5, 0.0)
 
 	var mouse := get_viewport().get_mouse_position()
@@ -464,6 +466,15 @@ func _update_uniforms(hover: Vector2i) -> void:
 	var cam_dir := GlobeMath.lat_lon_to_dir(orbit.lat, orbit.lon)
 	var low := 1.0 - smoothstep(0.04, 0.3, orbit.altitude)
 	_sky_mat.set_shader_parameter("daylight_mask", low * smoothstep(-0.1, 0.3, cam_dir.dot(sun)) * 0.95)
+
+
+func _set_pole_uniforms() -> void:
+	_mat.set_shader_parameter("pole_data_n", textures.pole_data[0])
+	_mat.set_shader_parameter("pole_data_s", textures.pole_data[1])
+	_mat.set_shader_parameter("pole_aux_n", textures.pole_aux[0])
+	_mat.set_shader_parameter("pole_aux_s", textures.pole_aux[1])
+	_mat.set_shader_parameter("pole_prev_n", textures.pole_prev[0])
+	_mat.set_shader_parameter("pole_prev_s", textures.pole_prev[1])
 
 
 func _pack_now() -> void:
@@ -617,6 +628,24 @@ func _setup_particles() -> void:
 	particles.explosiveness = 0.95
 	particles.emitting = false
 	particles.local_coords = false
+
+
+## Bruit 3D sans raccord pour le shader (nuages, relief fin, humidité) : 128³ texels, un motif tous les
+## 8 texels, soit 16 unités de bruit par période. Généré une fois, en tâche de fond par Godot.
+func _make_noise() -> NoiseTexture3D:
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_VALUE_CUBIC
+	noise.frequency = 1.0 / 8.0
+	noise.fractal_type = FastNoiseLite.FRACTAL_NONE
+	noise.seed = 1729
+	var tex := NoiseTexture3D.new()
+	tex.width = 128
+	tex.height = 128
+	tex.depth = 128
+	tex.seamless = true
+	tex.normalize = true
+	tex.noise = noise
+	return tex
 
 
 func _make_environment() -> Environment:
