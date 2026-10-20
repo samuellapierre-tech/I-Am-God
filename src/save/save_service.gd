@@ -43,7 +43,7 @@ func _process(delta: float) -> void:
 	if _track_timer >= TRACK_SECONDS:
 		_track_timer = 0.0
 		track(gs.sim)
-	if autosave and not gs.paused:
+	if autosave and gs.time_running():
 		_autosave_timer += delta
 		if _autosave_timer >= AUTOSAVE_SECONDS:
 			_autosave_timer = 0.0

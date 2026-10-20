@@ -1,7 +1,7 @@
 extends CanvasLayer
 ## Menu sobre (docs/GENESE.md) :
 ## - au lancement : Continuer (dernière sauvegarde), Nouvelle planète, Panthéon ;
-## - en jeu (bouton « Menu » en bas à gauche, ou F10) : Reprendre, Sauvegarder, Reprendre la dernière
+## - en jeu (bouton « Menu » dans le coin haut droit, ou F10) : Reprendre, Sauvegarder, Reprendre la dernière
 ##   sauvegarde, Panthéon, Renaître… (avec confirmation), Quitter ;
 ## - Panthéon : les espèces marquantes des mondes passés, consultables ; « Ressemer » pose l'espèce
 ##   choisie sur la parcelle comme semence façonnée ;
@@ -10,12 +10,14 @@ extends CanvasLayer
 ## Le monde est en pause tant qu'un écran est ouvert. Argument `-- --no-menu` : pas de menu au lancement.
 
 const SaveStore := preload("res://src/save/save_store.gd")
+const Layout := preload("res://src/ui/layout.gd")
 const Pantheon := preload("res://src/save/pantheon.gd")
 
 const GOLD := Color(1.0, 0.85, 0.5)
 const TEXT := Color(0.92, 0.93, 0.96)
 const DIM := Color(0.62, 0.66, 0.75)
 const MENU_KEY := KEY_F10
+const HOLD_KEY := "menu"
 
 var _dim: ColorRect
 var _start: Control
@@ -34,7 +36,6 @@ var _end_text: Label
 var _toast: Label
 var _toast_timer := 0.0
 var _menu_button: Button
-var _was_paused := false
 var _in_game := false
 
 
@@ -51,8 +52,6 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
-	if _screen_open():
-		GameState.paused = true
 	if _toast_timer > 0.0:
 		_toast_timer -= delta
 		_toast.modulate.a = clampf(_toast_timer, 0.0, 1.0)
@@ -84,18 +83,13 @@ func _build() -> void:
 	_dim.mouse_filter = Control.MOUSE_FILTER_STOP
 	_dim.visible = false
 	root.add_child(_dim)
-	# Bouton discret en bas à gauche (hors des zones du HUD).
+	# Bouton discret dans le coin haut droit (zone Layout.MENU_BUTTON).
 	_menu_button = Button.new()
 	_menu_button.text = "Menu"
 	_menu_button.tooltip_text = "Menu (F10) : sauvegarder, Panthéon, renaître"
 	_menu_button.focus_mode = Control.FOCUS_NONE
 	_menu_button.add_theme_font_size_override("font_size", 16)
-	_menu_button.anchor_top = 1.0
-	_menu_button.anchor_bottom = 1.0
-	_menu_button.offset_left = 12
-	_menu_button.offset_right = 112
-	_menu_button.offset_top = -52
-	_menu_button.offset_bottom = -12
+	Layout.place(_menu_button, Layout.MENU_BUTTON, Vector2(1.0, 0.0))
 	_menu_button.modulate.a = 0.75
 	_menu_button.pressed.connect(func(): _open(_ingame))
 	root.add_child(_menu_button)
@@ -203,15 +197,14 @@ func _build_end(root: Control) -> void:
 # =============================================================================================
 
 func _open(screen: Control) -> void:
-	if not _screen_open():
-		_was_paused = GameState.paused
 	for s in [_start, _ingame, _pantheon, _confirm, _end]:
 		s.visible = s == screen
 	_dim.visible = true
 	_menu_button.visible = false
 	if screen == _start:
 		_refresh_continue()
-	GameState.paused = true
+	# Le monde est suspendu tant qu'un écran est ouvert (sans toucher à la vitesse du HUD).
+	GameState.hold_time(HOLD_KEY, true)
 
 
 func _close_all() -> void:
@@ -220,7 +213,7 @@ func _close_all() -> void:
 	_dim.visible = false
 	_in_game = true
 	_menu_button.visible = true
-	GameState.paused = _was_paused
+	GameState.hold_time(HOLD_KEY, false)
 
 
 func _screen_open() -> bool:

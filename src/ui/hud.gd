@@ -96,7 +96,7 @@ func _process(_delta: float) -> void:
 		GameState.years_per_second = MapMath.base_years_per_second(sim.ideal_step_years()) \
 				* SPEEDS[speed_level - 1] * GameState.pace_factor()
 	_rate_label.text = "%s ans/s" % MapMath.group_thousands(int(GameState.years_per_second)) \
-			if speed_level > 0 else "Temps suspendu"
+			if speed_level > 0 and not GameState.time_held() else "Temps suspendu"
 
 
 # --- Raccourcis clavier ---

@@ -37,6 +37,9 @@ var parcel: ParcelSim
 ## Vue active : "globe" au lancement ; "ground" quand on est descendu au sol.
 var view_mode := "globe"
 var paused := false
+## Suspensions du temps par les écrans (menu, Panthéon, fin des temps…), indépendantes de la
+## vitesse choisie au HUD : le temps ne coule que si `paused` est faux ET qu'aucun écran ne le retient.
+var _holds := {}
 ## Années simulées par seconde réelle.
 var years_per_second := 1_000_000.0
 
@@ -109,7 +112,7 @@ func new_world(seed: int, params := {}) -> void:
 
 
 func _process(delta: float) -> void:
-	if paused or sim == null:
+	if paused or not _holds.is_empty() or sim == null:
 		return
 	play_time += delta
 	for event in sim.step(years_per_second * delta):
@@ -197,6 +200,24 @@ func _first_land_cell(start: Vector2i) -> Vector2i:
 # =============================================================================================
 # Sauvegarde, fin des temps, réincarnation (src/save/)
 # =============================================================================================
+
+## Un écran retient le temps (`on`) ou le relâche. Le HUD peut changer `paused` (sa vitesse) sans
+## relancer le temps tant qu'un écran le retient ; au relâchement, le temps reprend à la vitesse choisie.
+func hold_time(key: String, on: bool) -> void:
+	if on:
+		_holds[key] = true
+	else:
+		_holds.erase(key)
+
+
+func time_held() -> bool:
+	return not _holds.is_empty()
+
+
+## Le temps coule-t-il (vitesse non nulle et aucun écran ouvert) ?
+func time_running() -> bool:
+	return not paused and _holds.is_empty()
+
 
 ## Remplace le monde courant par un monde rechargé (src/save/save_service.gd).
 ## info : {world_name, world_index, planet, play_time, parcel_timer, pending_events}

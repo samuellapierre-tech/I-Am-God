@@ -133,3 +133,40 @@ func test_end_of_times_summary() -> String:
 	gs.free()
 	Base._clean(dir)
 	return out
+
+
+## Un écran ouvert (menu, Panthéon, fin des temps) retient le temps, même si le HUD remet sa vitesse ;
+## à la fermeture, le temps reprend à la vitesse choisie.
+func test_screens_hold_time() -> String:
+	var dir := Base._temp_dir("hold")
+	var gs := _game(dir)
+	gs.new_world(4)
+	gs.years_per_second = gs.sim.ideal_step_years() * 30.0
+	var out := ""
+	var y0: float = gs.sim.year
+	gs.hold_time("menu", true)
+	gs.paused = false  # le HUD réécrit sa vitesse
+	for i in 10:
+		gs._process(1.0 / 30.0)
+	if gs.sim.year != y0 or gs.time_running():
+		out = "le temps coule pendant le menu (%.0f -> %.0f)" % [y0, gs.sim.year]
+	else:
+		gs.hold_time("pantheon", true)
+		gs.hold_time("menu", false)
+		gs._process(1.0 / 30.0)
+		if gs.sim.year != y0:
+			out = "un second écran ouvert ne retient pas le temps"
+		else:
+			gs.hold_time("pantheon", false)
+			gs._process(1.0 / 30.0)
+			if gs.sim.year == y0 or not gs.time_running():
+				out = "le temps ne reprend pas à la fermeture"
+			else:
+				var y1: float = gs.sim.year
+				gs.paused = true  # vitesse nulle choisie au HUD : reste en pause
+				gs._process(1.0 / 30.0)
+				if gs.sim.year != y1:
+					out = "la pause du HUD n'est plus respectée"
+	gs.free()
+	Base._clean(dir)
+	return out
