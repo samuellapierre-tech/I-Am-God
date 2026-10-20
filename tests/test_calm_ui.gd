@@ -358,3 +358,24 @@ class RichSim:
 
 	func planet_history() -> Array:
 		return [{year = 0.0, oxygen = 0.5}, {year = 1.0, oxygen = 0.9}]
+
+
+func test_recharge_starts_when_action_applied_elsewhere() -> String:
+	# Une action appliquée par la vue ou le globe sans passer par use() lance quand même la recharge.
+	var ts: Node = ToolState.new()
+	var t: Dictionary = ts.notify_applied({type = "bless", region = Vector2i(1, 1), species_id = -1, radius = 8})
+	var s: Dictionary = ts.notify_applied(SeedCatalog.make_action("spore", {}, Vector2i(0, 0), 6))
+	var err := _first_error([
+		_expect(t.get("id"), "bless", "pouvoir reconnu"),
+		_expect(ts.can_use({kind = "power", id = "bless"}), false, "recharge du pouvoir lancée"),
+		_expect(s.get("id"), "spore", "semence reconnue"),
+		_expect(ts.can_use({kind = "seed", id = "spore"}), false, "recharge de la semence lancée"),
+		_expect(ts.notify_applied({type = "inconnu"}), {}, "action inconnue ignorée"),
+	])
+	var before: float = ts.remaining({kind = "power", id = "bless"})
+	ts._process(1.0)
+	ts.notify_applied({type = "bless"})
+	if err == "":
+		err = _near(ts.remaining({kind = "power", id = "bless"}), before - 1.0, "une recharge en cours n'est pas relancée")
+	ts.free()
+	return err

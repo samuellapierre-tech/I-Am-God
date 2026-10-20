@@ -162,6 +162,25 @@ func use(tool: Dictionary = {}, region := Vector2i(-1, -1)) -> Dictionary:
 	return action
 
 
+## Une action a été appliquée sans passer par use() (p. ex. clic traité ailleurs) : démarre la
+## recharge de l'outil correspondant s'il était prêt. Renvoie l'outil reconnu ({} sinon).
+func notify_applied(action: Dictionary) -> Dictionary:
+	var t := tool_for_action(action)
+	if t.is_empty() or not cooldowns.is_ready(key_of(t)):
+		return t
+	cooldowns.start(key_of(t), cooldown_of(t))
+	cooldowns_changed.emit()
+	return t
+
+
+## Outil qui produit cette action ({kind, id}, {} si inconnu).
+static func tool_for_action(action: Dictionary) -> Dictionary:
+	var type := str(action.get("type", ""))
+	if type == "seed":
+		return normalize({kind = "seed", id = str(action.get("kind", ""))})
+	return normalize({kind = "power", id = type})
+
+
 ## Action au format de GameState.apply_divine_action ({} si invalide).
 static func build_action(tool: Dictionary, region: Vector2i) -> Dictionary:
 	var params: Dictionary = tool.get("params", {})
