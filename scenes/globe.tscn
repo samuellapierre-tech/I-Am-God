@@ -1,0 +1,38 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://src/globe/globe.gd" id="1_globe"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_planet"]
+radius = 1.0
+height = 2.0
+radial_segments = 256
+rings = 128
+
+[sub_resource type="SphereMesh" id="SphereMesh_atmo"]
+radius = 1.06
+height = 2.12
+radial_segments = 128
+rings = 64
+
+[node name="Globe" type="Node3D"]
+script = ExtResource("1_globe")
+
+[node name="Camera" type="Camera3D" parent="."]
+fov = 45.0
+near = 0.002
+far = 40.0
+
+[node name="Planet" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_planet")
+cast_shadow = 0
+
+[node name="Atmosphere" type="MeshInstance3D" parent="."]
+mesh = SubResource("SphereMesh_atmo")
+cast_shadow = 0
+
+[node name="ImpactParticles" type="GPUParticles3D" parent="."]
+emitting = false
+amount = 240
+lifetime = 2.0
+one_shot = true
+explosiveness = 0.95
