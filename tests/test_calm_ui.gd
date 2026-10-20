@@ -379,3 +379,31 @@ func test_recharge_starts_when_action_applied_elsewhere() -> String:
 		err = _near(ts.remaining({kind = "power", id = "bless"}), before - 1.0, "une recharge en cours n'est pas relancée")
 	ts.free()
 	return err
+
+
+func test_real_planet_keys_are_normalized() -> String:
+	# Clés réelles de WorldSim.planet_stats() et de la propriété planet_history.
+	var sim := WorldLikeSim.new()
+	var s := PlanetMath.read_stats(sim, null)
+	var h := PlanetMath.read_history(sim)
+	return _first_error([
+		_near(s.get("temperature_c", -99.0), 12.5, "global_temperature_c -> temperature_c"),
+		_near(s.get("co2_ppm", -1.0), 4000.0, "co2 -> co2_ppm"),
+		_near(s.get("methane_ppm", -1.0), 3.0, "methane -> methane_ppm"),
+		_near(s.get("ice_fraction", -1.0), 0.1, "ice_cover -> ice_fraction"),
+		_expect(s.get("extinctions_recent"), 2, "recent_extinctions -> extinctions_recent"),
+		_expect(h.size(), 2, "propriété planet_history lue"),
+		_near(h[1].get("temperature_c", -99.0), 13.0, "historique normalisé"),
+		_expect(PlanetMath.normalize_keys({temperature_c = 1.0, global_temperature_c = 2.0}).temperature_c, 1.0,
+			"la clé de mesure l'emporte"),
+		_expect(PlanetMath.format_metric("biomass", 3.456), "3,46", "biomasse en indice"),
+	])
+
+
+class WorldLikeSim:
+	var planet_history: Array[Dictionary] = [{year = 0.0, global_temperature_c = 12.0},
+		{year = 1.0, global_temperature_c = 13.0}]
+
+	func planet_stats() -> Dictionary:
+		return {global_temperature_c = 12.5, co2 = 4000.0, methane = 3.0, ice_cover = 0.1,
+			recent_extinctions = 2, oxygen = 0.0, ozone = 0.0}
