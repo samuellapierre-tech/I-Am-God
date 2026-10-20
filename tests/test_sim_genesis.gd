@@ -35,11 +35,16 @@ func _seed(sim: RefCounted, kind: String, cell: Vector2i, traits := {}) -> Array
 	return sim.apply_divine_action({type = "seed", kind = kind, region = cell, species_id = -1, radius = 4, traits = traits})
 
 
-func _alive_named(sim: RefCounted, prefix: String) -> int:
-	for id in sim.get_alive_species():
-		if String(sim.species[id].name).begins_with(prefix):
-			return id
+## Espèce créée par une semence (l'événement « seeding » porte son id).
+static func _seeded_id(events: Array) -> int:
+	for e in events:
+		if e.type == "seeding":
+			return int(e.species_id)
 	return -1
+
+
+static func _alive(sim: RefCounted, id: int) -> bool:
+	return id >= 0 and sim.species.has(id) and bool(sim.species[id].alive)
 
 
 func test_virgin_planet_stays_lifeless_without_seeds() -> String:
@@ -101,25 +106,28 @@ func test_spore_needs_ozone_and_germ_needs_oxygen() -> String:
 	var sea := _cell(sim, -0.25, -0.02)
 	if land.x < 0 or sea.x < 0:
 		return "terres ou hauts-fonds introuvables"
-	_seed(sim, "spore", land)
-	_seed(sim, "animal_germ", sea, {role = "grazer"})
+	var spore := _seeded_id(_seed(sim, "spore", land))
+	var germ := _seeded_id(_seed(sim, "animal_germ", sea, {role = "brouteur"}))
+	if spore < 0 or germ < 0:
+		return "semences non créées (%d, %d)" % [spore, germ]
+	if sim.species[spore].traits.habitat != "land" or float(sim.species[germ].traits.complexity) < 3.0:
+		return "traits de semence inattendus : %s / %s" % [str(sim.species[spore].traits.habitat), str(sim.species[germ].traits.complexity)]
 	for k in 30:
 		sim.step(sim.ideal_step_years())
-	if _alive_named(sim, "Mousses") >= 0:
+	if _alive(sim, spore):
 		return "une spore a survécu sans couche d'ozone (ozone %.2f)" % sim.ozone
-	if _alive_named(sim, "Brouteurs") >= 0:
+	if _alive(sim, germ):
 		return "un germe d'animal a survécu sans oxygène"
 	for k in 3:
 		sim.apply_divine_action({type = "oxygenate", region = sea, species_id = -1, radius = 8})
 	sim.step(sim.ideal_step_years())
 	if sim.ozone < 0.5:
 		return "l'oxygène ne fait pas d'ozone (%.2f)" % sim.ozone
-	_seed(sim, "spore", land)
+	var spore2 := _seeded_id(_seed(sim, "spore", land))
 	# L'oxygène soufflé par Dieu retombe (rien ne l'entretient) : on juge la spore tant qu'il protège.
 	for k in 3:
 		sim.step(sim.ideal_step_years())
-	var id := _alive_named(sim, "Mousses")
-	if id < 0 or int(sim.species[id].regions) < 1:
+	if not _alive(sim, spore2) or int(sim.species[spore2].regions) < 1:
 		return "une spore n'a pas pris malgré la couche d'ozone"
 	return ""
 
