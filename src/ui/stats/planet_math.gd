@@ -19,6 +19,11 @@ const MapMath := preload("res://src/map/map_math.gd")
 ## Part d'oxygène dans l'air actuel (1 « niveau actuel » = 20,95 %).
 const O2_PRESENT_PERCENT := 20.95
 const HISTORY_SIZE := 512
+## Clés de WorldSim.planet_stats() / planet_history -> clés des mesures ci-dessous.
+const KEY_ALIASES := {
+	global_temperature_c = "temperature_c", co2 = "co2_ppm", methane = "methane_ppm",
+	ice_cover = "ice_fraction", recent_extinctions = "extinctions_recent",
+}
 
 ## Mesures dans l'ordre d'affichage. fmt : nom du formatage (format_metric) ; span : écart minimal
 ## des courbes ; trend : seuil de tendance.
@@ -31,7 +36,7 @@ const METRICS := [
 	{key = "methane_ppm", label = "Méthane (CH₄)", fmt = "ppm", span = 0.5, trend = 0.05, color = Color(0.8, 0.9, 0.5)},
 	{key = "sea_level_m", label = "Niveau des mers", fmt = "meters", span = 10.0, trend = 0.5, color = Color(0.35, 0.6, 1.0)},
 	{key = "ice_fraction", label = "Glace", fmt = "percent", span = 0.05, trend = 0.005, color = Color(0.85, 0.95, 1.0)},
-	{key = "biomass", label = "Biomasse", fmt = "percent", span = 0.05, trend = 0.005, color = Color(0.5, 0.85, 0.4)},
+	{key = "biomass", label = "Biomasse", fmt = "index", span = 0.05, trend = 0.005, color = Color(0.5, 0.85, 0.4)},
 	{key = "biodiversity", label = "Biodiversité", fmt = "species", span = 5.0, trend = 0.5, color = Color(0.7, 1.0, 0.6)},
 	{key = "extinctions_recent", label = "Extinctions récentes", fmt = "count", span = 3.0, trend = 0.5, color = Color(1.0, 0.45, 0.4)},
 	{key = "sun_luminosity", label = "Luminosité du Soleil", fmt = "sun", span = 0.02, trend = 0.001, color = Color(1.0, 0.9, 0.45)},
@@ -76,6 +81,8 @@ static func format_metric(key: String, value: Variant) -> String:
 			return MapMath.group_thousands(maxi(int(roundf(v)), 0))
 		"sun":
 			return format_percent(v) + " de l'actuel"
+		"index":
+			return StatsMath.format_decimal(v, 2 if absf(v) < 10.0 else 0)
 	return StatsMath.format_decimal(v, 2)
 
 
@@ -96,7 +103,7 @@ static func read_stats(sim: Object, parcel: Object) -> Dictionary:
 	if sim.has_method("planet_stats"):
 		var s = sim.call("planet_stats")
 		if s is Dictionary:
-			out = (s as Dictionary).duplicate()
+			out = normalize_keys(s)
 	if not out.has("oxygen") and "oxygen" in sim:
 		out.oxygen = float(sim.get("oxygen"))
 	if not out.has("biodiversity") and sim.has_method("get_alive_species"):
@@ -109,13 +116,36 @@ static func read_stats(sim: Object, parcel: Object) -> Dictionary:
 	return out
 
 
-## Historique planétaire : planet_history() si disponible, sinon [] (le panneau tient le sien).
+## Historique planétaire : planet_history() (méthode) ou planet_history (propriété) si disponible,
+## clés normalisées ; sinon [] (le panneau tient le sien).
 static func read_history(sim: Object) -> Array:
-	if sim != null and sim.has_method("planet_history"):
-		var h = sim.call("planet_history")
-		if h is Array:
-			return h
-	return []
+	if sim == null:
+		return []
+	var h = null
+	if sim.has_method("planet_history"):
+		h = sim.call("planet_history")
+	elif "planet_history" in sim:
+		h = sim.get("planet_history")
+	if not h is Array:
+		return []
+	var out := []
+	for sample in h:
+		if sample is Dictionary:
+			out.append(normalize_keys(sample))
+	return out
+
+
+## Copie de `d` dont les clés de la simulation sont renommées en clés de mesure (KEY_ALIASES) ;
+## une clé déjà présente sous son nom de mesure l'emporte.
+static func normalize_keys(d: Dictionary) -> Dictionary:
+	var out := {}
+	for k in d:
+		var key := str(k)
+		out[KEY_ALIASES.get(key, key)] = d[k]
+	for k in d:
+		if KEY_ALIASES.values().has(str(k)):
+			out[str(k)] = d[k]
+	return out
 
 
 ## Ajoute un échantillon à un historique borné (le plus ancien sort en premier).

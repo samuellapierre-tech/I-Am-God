@@ -4,6 +4,8 @@ extends CanvasLayer
 ## (une ligne animée par espèce) et courbes de température et de population tirées de
 ## parcel.history. Repliable avec la touche S.
 ##
+## Suit la vue (GameState.view_mode) : sur le globe, la planète entière (planet_summary.gd, accueil
+## qui invite à semer sur une planète vierge) ; au sol, le lieu visé (parcelle).
 ## Placé en haut de la colonne gauche (la barre du haut du HUD est centrée, le tiroir Chronique s'ouvre
 ## dessous, y > 664) : ne cache ni le centre de l'écran ni les panneaux de hud.gd.
 ## L'en-tête tient aussi lieu de fiche de la parcelle (cellule, technologie en infobulle). Ne lit que le contrat ParcelSim
@@ -17,6 +19,9 @@ const TemperatureGauge := preload("res://src/ui/stats/temperature_gauge.gd")
 const TrendArrow := preload("res://src/ui/stats/trend_arrow.gd")
 
 const Layout := preload("res://src/ui/layout.gd")
+const PlanetSummary := preload("res://src/ui/stats/planet_summary.gd")
+## Rafraîchissement du corps « planète » (vue globe).
+const PLANET_REFRESH := 0.25
 
 const PANEL_POS := Layout.STATS.position
 const PANEL_WIDTH := Layout.STATS.size.x
@@ -52,6 +57,10 @@ var _pop_chart: StatsChart
 ## species_id -> ligne (y compris les lignes d'espèces disparues en train de s'effacer)
 var _rows := {}
 var _tween: Tween
+## "globe" : la planète entière (PlanetSummary) ; "ground" : le lieu visé (corps de la parcelle).
+var mode := "ground"
+var _planet_body: PlanetSummary
+var _planet_timer := PLANET_REFRESH
 
 
 func _ready() -> void:
@@ -60,7 +69,48 @@ func _ready() -> void:
 	GameState.parcel_updated.connect(_refresh)
 	GameState.parcel_changed.connect(_on_parcel_changed)
 	GameState.era_changed.connect(func(_era: String) -> void: _refresh_header())
+	if GameState.has_signal("view_mode_changed"):
+		GameState.view_mode_changed.connect(_apply_mode)
+	_apply_mode(str(GameState.get("view_mode")) if "view_mode" in GameState else "ground")
 	_refresh()
+
+
+## Le panneau suit la vue : la planète sur le globe, le lieu visé au sol.
+func _apply_mode(view_mode: String) -> void:
+	mode = "globe" if view_mode == "globe" else "ground"
+	_planet_timer = PLANET_REFRESH
+	set_collapsed(collapsed)
+	if mode == "ground":
+		_refresh()
+	else:
+		_refresh_planet()
+
+
+func _active_body() -> Control:
+	return _planet_body if mode == "globe" else _body
+
+
+func _process(delta: float) -> void:
+	if mode != "globe":
+		return
+	_planet_timer += delta
+	if _planet_timer >= PLANET_REFRESH:
+		_refresh_planet()
+
+
+func _refresh_planet() -> void:
+	_planet_timer = 0.0
+	if _planet_body == null or GameState.sim == null:
+		return
+	_planet_body.refresh(GameState.sim)
+	_land_label.text = "Planète vierge" if _planet_body.barren else "La planète"
+	_land_label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.6) if _planet_body.barren
+		else Color(0.62, 0.9, 0.55))
+	_sub_label.text = "%s  ·  vue d'ensemble" % GameState.sim.current_era()
+	_sub_label.tooltip_text = "Statistiques de toute la planète. Descends au sol pour celles d'un lieu."
+	_land_label.tooltip_text = _sub_label.tooltip_text
+	_summary_label.text = _planet_body.summary
+	_panel.call_deferred("reset_size")
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -74,16 +124,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 
 func set_collapsed(value: bool) -> void:
 	collapsed = value
-	_body.visible = not collapsed
+	if _planet_body:
+		_body.visible = false
+		_planet_body.visible = false
+	var body := _active_body()
+	body.visible = not collapsed
 	_summary_label.visible = collapsed
 	_toggle_button.text = "+" if collapsed else "−"
 	_toggle_button.tooltip_text = ("Déplier" if collapsed else "Replier") + " les statistiques (S)"
 	if _tween:
 		_tween.kill()
 	if not collapsed:
-		_body.modulate.a = 0.0
+		body.modulate.a = 0.0
 		_tween = create_tween()
-		_tween.tween_property(_body, "modulate:a", 1.0, 0.2)
+		_tween.tween_property(body, "modulate:a", 1.0, 0.2)
 	# Le conteneur reprend la hauteur de son contenu.
 	_panel.reset_size()
 	_panel.call_deferred("reset_size")
@@ -142,6 +196,9 @@ func _build() -> void:
 	_body = VBoxContainer.new()
 	_body.add_theme_constant_override("separation", 4)
 	outer.add_child(_body)
+	_planet_body = PlanetSummary.new()
+	_planet_body.visible = false
+	outer.add_child(_planet_body)
 	_build_heat(_body)
 	_body.add_child(HSeparator.new())
 	_build_populations(_body)
@@ -328,7 +385,7 @@ func _on_parcel_changed(_cell: Vector2i) -> void:
 
 func _refresh() -> void:
 	var p = GameState.parcel
-	if p == null or _panel == null:
+	if p == null or _panel == null or mode == "globe":
 		return
 	_refresh_header()
 	var history: Array = p.history
@@ -402,7 +459,7 @@ func _refresh() -> void:
 
 func _refresh_header() -> void:
 	var p = GameState.parcel
-	if p == null:
+	if p == null or mode == "globe":
 		return
 	var use := String(p.land_use)
 	_land_label.text = StatsMath.land_use_label(use, String(p.biome))
