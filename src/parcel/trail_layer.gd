@@ -62,6 +62,13 @@ func set_ground(kind: int) -> void:
 			dust_color = Color(0.72, 0.64, 0.48)
 
 
+## Nouvelle cellule : on efface toutes les marques.
+func clear() -> void:
+	for i in CAPACITY:
+		_mm.set_instance_custom_data(i, Color(0, -1, 0, 0))
+	_next = 0
+
+
 func emit(kind: int, pos: Vector2, angle: float, size: float, life := -1.0) -> void:
 	var color := Color.WHITE
 	match kind:

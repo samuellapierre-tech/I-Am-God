@@ -2,23 +2,20 @@ extends RefCounted
 ## Fabriques de particules GPU (GPUParticles2D + ParticleProcessMaterial) pour la parcelle :
 ## fumée (incendies, cratère fumant), étincelles et débris (impacts).
 
-static var _puff: GradientTexture2D
-
-
-## Halo doux partagé (une seule texture pour toutes les fumées et étincelles).
+## Halo doux (pas de cache statique : une ressource gardée en variable statique survit à la
+## fermeture du jeu et serait signalée comme fuite ; on n'en crée qu'à chaque fumée ou gerbe).
 static func puff_texture() -> GradientTexture2D:
-	if _puff == null:
-		var g := Gradient.new()
-		g.set_color(0, Color(1, 1, 1, 1))
-		g.set_color(1, Color(1, 1, 1, 0))
-		_puff = GradientTexture2D.new()
-		_puff.gradient = g
-		_puff.fill = GradientTexture2D.FILL_RADIAL
-		_puff.fill_from = Vector2(0.5, 0.5)
-		_puff.fill_to = Vector2(1.0, 0.5)
-		_puff.width = 64
-		_puff.height = 64
-	return _puff
+	var g := Gradient.new()
+	g.set_color(0, Color(1, 1, 1, 1))
+	g.set_color(1, Color(1, 1, 1, 0))
+	var puff := GradientTexture2D.new()
+	puff.gradient = g
+	puff.fill = GradientTexture2D.FILL_RADIAL
+	puff.fill_from = Vector2(0.5, 0.5)
+	puff.fill_to = Vector2(1.0, 0.5)
+	puff.width = 64
+	puff.height = 64
+	return puff
 
 
 static func _ramp(colors: Array, offsets: PackedFloat32Array) -> GradientTexture1D:

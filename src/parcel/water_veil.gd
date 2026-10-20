@@ -7,6 +7,7 @@ const WATER_SHADER := preload("res://shaders/parcel_water.gdshader")
 
 var _mat := ShaderMaterial.new()
 var _level := 0.0
+var _coast := Vector2.ZERO
 
 
 func _ready() -> void:
@@ -21,6 +22,22 @@ func set_landmarks(lm: Dictionary) -> void:
 	_mat.set_shader_parameter("rock_radii", lm.rock_radii)
 
 
+## Côte (ParcelLogic.coast_vector) et milieu de la cellule.
+func set_coast(coast: Vector2, sea_cell: bool) -> void:
+	_coast = coast
+	_mat.set_shader_parameter("coast", coast)
+	_mat.set_shader_parameter("sea_cell", 1.0 if sea_cell else 0.0)
+
+
+func set_depth(depth_factor: float) -> void:
+	_mat.set_shader_parameter("depth_factor", depth_factor)
+
+
+## Voile coloré d'algues ou de microbes en suspension (a = intensité).
+func set_bloom(bloom: Color) -> void:
+	_mat.set_shader_parameter("bloom", Vector4(bloom.r, bloom.g, bloom.b, bloom.a))
+
+
 func set_cell(cell: Vector2i) -> void:
 	_mat.set_shader_parameter("seed_offset", Vector2(fposmod(cell.x * 0.137, 1.0), fposmod(cell.y * 0.291, 1.0)))
 
@@ -29,7 +46,7 @@ func set_cell(cell: Vector2i) -> void:
 ## light : lumière ambiante (jour/nuit).
 func update_water(level: float, tint: Color, light: Color) -> void:
 	_level = level
-	visible = level > 0.01
+	visible = level > 0.01 or _coast != Vector2.ZERO
 	if not visible:
 		return
 	_mat.set_shader_parameter("submerged", level)

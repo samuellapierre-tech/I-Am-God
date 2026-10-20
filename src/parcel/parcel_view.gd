@@ -21,6 +21,7 @@ const Atmosphere := preload("res://src/parcel/atmosphere.gd")
 const NightLights := preload("res://src/parcel/night_lights.gd")
 const ParcelParticles := preload("res://src/parcel/parcel_particles.gd")
 const WaterVeil := preload("res://src/parcel/water_veil.gd")
+const Appearance := preload("res://src/parcel/appearance.gd")
 
 ## Rayon visuel (unités monde) d'un pouvoir : base + par cellule de rayon.
 const FX_BASE_RADIUS := 90.0
@@ -30,6 +31,8 @@ var assets := ParcelAssets.new()
 var _cell := Vector2i(-999, -999)
 ## Repères permanents de la parcelle (rivière en S, rocher) : fixés pour toute la partie.
 var _landmarks := {}
+## Particularités de la cellule (rivière, rocher, sources hydrothermales, volcan).
+var _features := {}
 ## Pas plus d'un focus automatique de la caméra toutes les FOCUS_COOLDOWN secondes.
 const FOCUS_COOLDOWN := 12.0
 var _focus_cooldown := 0.0
@@ -58,6 +61,7 @@ func _ready() -> void:
 	structures.assets = assets
 	creatures.assets = assets
 	creatures.trail = trail
+	creatures.traits_of = _species_traits
 	structures.trail = trail
 	GameState.parcel_updated.connect(_on_parcel_updated)
 	GameState.divine_action_applied.connect(_on_divine_action)
@@ -76,26 +80,64 @@ func _on_parcel_updated() -> void:
 		return
 	var changed: bool = p.cell != _cell
 	if changed:
-		_cell = p.cell
-		creatures.clear()
-		structures.clear()
-		camera.reset_view()
-		var seed_value: int = GameState.sim.seed if GameState.sim != null else 0
-		_landmarks = ParcelLogic.landmarks(seed_value, p.cell)
-		terrain.set_landmarks(_landmarks)
-		structures.landmarks = _landmarks
-		creatures.set_landmarks(_landmarks)
-		water.set_landmarks(_landmarks)
-		water.set_cell(p.cell)
+		_enter_cell(p)
 	terrain.apply_parcel(p, changed)
 	structures.apply_parcel(p)
 	creatures.spots = structures.spots()
 	creatures.apply_parcel(p)
-	trail.set_ground(ParcelLogic.ground_kind(p.land_use, p.biome))
+	trail.set_ground(ParcelLogic.ground_kind(p.land_use, p.biome, bool(_features.get("volcanic", false))))
 	atmosphere.apply_parcel(p)
 	lights.land_use = p.land_use
 	lights.campfire = ParcelLogic.campfire_near(_landmarks)
 	ambient.apply_parcel(p, ParcelLogic.swarm_centers(p.cell, AmbientLayer.SWARMS, _landmarks.river), p.year)
+	_apply_flora(p)
+
+
+## Nouvelle cellule (on peut viser n'importe où, à tout moment) : tout ce qui est propre au lieu est
+## recalculé d'un coup, l'ancien est libéré immédiatement, sans recompiler aucun shader.
+func _enter_cell(p) -> void:
+	_cell = p.cell
+	creatures.clear()
+	structures.clear()
+	trail.clear()
+	camera.reset_view()
+	var sim = GameState.sim
+	var seed_value: int = sim.seed if sim != null else 0
+	var sea: bool = ParcelLogic.submerged(p.land_use, p.shore) > 0.5
+	_features = ParcelLogic.cell_features(seed_value, p.cell, not sea, p.biome)
+	var coast := Vector2.ZERO
+	if sim != null:
+		coast = ParcelLogic.coast_vector(sim.elevation, WorldSim.WIDTH, WorldSim.HEIGHT, p.cell, sim.sea_level)
+	_landmarks = ParcelLogic.landmarks(seed_value, p.cell, _features.river, _features.rock)
+	terrain.set_cell_info(_features, coast, sea)
+	terrain.set_landmarks(_landmarks)
+	structures.landmarks = _landmarks
+	creatures.set_landmarks(_landmarks)
+	creatures.set_coast(coast, sea)
+	water.set_landmarks(_landmarks)
+	water.set_cell(p.cell)
+	water.set_coast(coast, sea)
+
+
+## La vie productrice colore le paysage : tapis, mousses, lichens, prairies, canopée, voiles d'eau.
+func _apply_flora(p) -> void:
+	var colors := PackedColorArray()
+	var styles := PackedFloat32Array()
+	var bloom := Color(0, 0, 0, 0)
+	for f in p.fauna:
+		if String(f.get("role", "")) != "producer" or colors.size() >= 4:
+			continue
+		var id := int(f.species_id)
+		var traits: Dictionary = creatures.traits_of.call(id) if creatures.traits_of.is_valid() else {}
+		var layer := Appearance.flora_layer(traits, f)
+		var cover := clampf(float(f.get("density", 0.3)) * 1.2, 0.1, 0.9)
+		var c: Color = layer.color
+		colors.append(Color(c, cover))
+		styles.append(float(layer.style))
+		if bloom.a <= 0.0 and int(layer.style) in [Appearance.Flora.VEIL, Appearance.Flora.MAT]:
+			bloom = Color(c, cover * (1.0 if int(layer.style) == Appearance.Flora.VEIL else 0.6))
+	terrain.set_flora(colors, styles)
+	water.set_bloom(bloom)
 
 
 func _process(delta: float) -> void:
@@ -114,6 +156,7 @@ func _process(delta: float) -> void:
 		var rs := ParcelLogic.river_state(p.land_use, p.water, atmosphere.snow_cover)
 		creatures.set_river_open(rs.x > 0.5 and rs.y < 0.5 and terrain.submerged_level < 0.5)
 		water.update_water(terrain.submerged_level, ParcelLogic.sea_tint(p.year), atmosphere.sky)
+		water.set_depth(ParcelLogic.depth_factor(p.water_depth_m) if terrain.submerged_level > 0.5 else 0.0)
 
 	var powers := _powers()
 	var power := String(powers.get("power")) if powers != null and "power" in powers else ""
@@ -199,6 +242,14 @@ func _crater_smoke(at: Vector2, radius: float) -> void:
 	add_child(smoke)
 	get_tree().create_timer(25.0).timeout.connect(func() -> void: smoke.emitting = false)
 	get_tree().create_timer(33.0).timeout.connect(smoke.queue_free)
+
+
+## Génome d'une espèce (lecture seule dans la simulation) : l'apparence en découle.
+func _species_traits(species_id: int) -> Dictionary:
+	if GameState.sim == null:
+		return {}
+	var sp: Dictionary = GameState.sim.species.get(species_id, {})
+	return sp.get("traits", {})
 
 
 func _fx_radius(cells: int) -> float:

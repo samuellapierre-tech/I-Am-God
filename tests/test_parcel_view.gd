@@ -125,7 +125,7 @@ func test_slug() -> String:
 func test_ground_state() -> String:
 	var G: Dictionary = ParcelLogic.Ground
 	var cases := [
-		["wild", "Désert", G.SAND], ["wild", "Forêt tropicale", G.LUSH], ["ocean", "Savane", G.WATER],
+		["wild", "Désert", G.SAND], ["wild", "Forêt tropicale", G.LUSH], ["ocean", "Savane", G.SEABED], ["ocean", "Abysses", G.ABYSS],
 		["crater", "Toundra", G.CRATER], ["megacity", "Steppe", G.URBAN], ["farmland", "Steppe", G.DRY],
 		["rewild", "Inconnu", G.GRASS],
 	]
@@ -157,27 +157,6 @@ func test_transition() -> String:
 	if err != "":
 		return err
 	return _expect(ParcelLogic.next_transition(a, b, 0.2, c), [a, c, 0.0], "cible au début d'un fondu")
-
-
-func test_creature_appearance() -> String:
-	var S: Dictionary = ParcelLogic.Shape
-	var cases := [
-		["dinosaure", "carnivore", 0.95, S.BIPED], ["dinosaure", "herbivore", 1.0, S.LONG_NECK],
-		["dinosaure", "herbivore", 0.8, S.QUADRUPED], ["oiseau", "omnivore", 0.1, S.BIRD],
-		["ptérosaure", "carnivore", 0.5, S.BIRD], ["reptile", "carnivore", 0.6, S.REPTILE],
-		["dinosaure", "sapient", 0.3, S.HUMANOID], ["mammifère", "herbivore", 0.1, S.QUADRUPED],
-	]
-	for c in cases:
-		var err := _expect(ParcelLogic.shape_for(c[0], c[1], c[2]), c[3], "shape_for(%s, %s)" % [c[0], c[1]])
-		if err != "":
-			return err
-	if ParcelLogic.creature_length(1.0) <= ParcelLogic.creature_length(0.1):
-		return "les grosses espèces doivent être plus grandes"
-	if ParcelLogic.species_color("carnivore", 3) != ParcelLogic.species_color("carnivore", 3):
-		return "couleur non déterministe"
-	if ParcelLogic.species_color("carnivore", 3).is_equal_approx(ParcelLogic.species_color("herbivore", 3)):
-		return "rôles indiscernables"
-	return ""
 
 
 func test_camera_limits() -> String:
@@ -380,39 +359,6 @@ func test_avoid_landmarks() -> String:
 	return ""
 
 
-func test_prologue_shapes_and_motion() -> String:
-	var S: Dictionary = ParcelLogic.Shape
-	var L: Dictionary = ParcelLogic.Locomotion
-	var cases := [
-		# clade, rôle, taille, sous l'eau, forme attendue, déplacement attendu
-		["microbe", "herbivore", 0.02, true, S.MICROBE, L.SESSILE],
-		["algue", "herbivore", 0.1, true, S.ALGA, L.SESSILE],
-		["éponge", "herbivore", 0.1, true, S.SPONGE, L.SESSILE],
-		["arthropode", "herbivore", 0.15, true, S.ARTHROPOD, L.CRAWL],
-		["arthropode", "carnivore", 0.6, true, S.ARTHROPOD, L.SWIM],
-		["arthropode", "herbivore", 0.3, false, S.MYRIAPOD, L.CRAWL],
-		["mollusque", "carnivore", 0.4, true, S.MOLLUSK, L.SWIM],
-		["poisson", "omnivore", 0.2, true, S.FISH, L.SWIM],
-		["plante", "herbivore", 0.3, false, S.PLANT, L.SESSILE],
-		["amphibien", "carnivore", 0.3, false, S.AMPHIBIAN, L.WALK],
-		["insecte", "carnivore", 0.2, false, S.DRAGONFLY, L.FLY],
-		["synapside", "carnivore", 0.5, false, S.SYNAPSID, L.WALK],
-		["reptile", "carnivore", 0.4, false, S.REPTILE, L.WALK],
-		["méduse", "carnivore", 0.2, true, S.JELLY, L.SWIM],
-		["xénomorphe inconnu", "omnivore", 0.4, false, S.GENERIC, L.WALK],
-		["", "herbivore", 0.4, false, S.GENERIC, L.WALK],
-	]
-	for c in cases:
-		var shape := ParcelLogic.shape_for(c[0], c[1], c[2], c[3])
-		var err := _expect(shape, c[4], "forme de %s" % c[0])
-		if err != "":
-			return err
-		err = _expect(ParcelLogic.locomotion_for(shape, c[1], c[2]), c[5], "déplacement de %s" % c[0])
-		if err != "":
-			return err
-	return ""
-
-
 func test_prologue_ground_and_sea() -> String:
 	var G: Dictionary = ParcelLogic.Ground
 	for c in [["seabed", G.SEABED], ["microbial_mat", G.MAT], ["reef", G.REEF], ["barren", G.BARREN],
@@ -441,7 +387,7 @@ func test_prologue_ground_and_sea() -> String:
 func test_school_and_sessile_groups() -> String:
 	var ctx := {prey = PackedVector2Array(), prey_len = PackedFloat32Array(), hunters = PackedVector2Array(), spots = PackedVector2Array()}
 	var reef := CreatureGroup.new(11, Vector2i(2, 2))
-	reef.set_species({role = "herbivore", clade = "éponge", size = 0.1}, true)
+	reef.set_species({role = "producer", clade = "éponge", size = 0.1}, true)
 	reef.set_target(12)
 	var before := reef.pos.duplicate()
 	for i in 30:
@@ -468,4 +414,6 @@ func test_school_and_sessile_groups() -> String:
 	odd.set_species({role = "omnivore", clade = "clade_jamais_vu", size = 0.5})
 	odd.set_target(3)
 	odd.step(0.1, ctx)
-	return _expect(odd.shape, ParcelLogic.Shape.GENERIC, "clade inconnu")
+	if odd.app.is_empty() or odd.pos.size() != 3:
+		return "un clade inconnu doit quand même avoir une apparence"
+	return ""
