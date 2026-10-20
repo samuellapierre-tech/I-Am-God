@@ -354,6 +354,31 @@ static func _colors(t: Dictionary, species_id: int) -> Array:
 	return [c, c2]
 
 
+# --- Producteurs au sol ---
+
+enum Flora { MAT, VEIL, MOSS, LICHEN, MEADOW, CANOPY }
+
+## Comment un producteur (microbe, algue, plante…) colore le paysage : tapis microbien, voile dans
+## l'eau, mousse, lichen, prairie ou canopée, avec la couleur de son pigment.
+static func flora_layer(traits: Dictionary, row := {}) -> Dictionary:
+	var t := complete(traits, row)
+	var c: Color = _colors(t, -1)[0]
+	var style := Flora.MEADOW
+	var complexity: float = t.complexity
+	var size: float = t["size"]
+	if t.habitat == "marine":
+		style = Flora.MAT if complexity < 1.0 else Flora.VEIL
+	elif complexity < 1.5:
+		style = Flora.MAT if t.habitat == "amphibious" else Flora.LICHEN
+	elif size < 0.15:
+		style = Flora.MOSS
+	elif size < 0.45:
+		style = Flora.MEADOW
+	else:
+		style = Flora.CANOPY
+	return {style = style, color = c}
+
+
 # --- Comparaison (tests, arbre de la vie) ---
 
 ## Vecteur de forme normalisé ; la distance euclidienne entre deux vecteurs mesure la ressemblance.

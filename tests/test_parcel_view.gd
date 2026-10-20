@@ -125,7 +125,7 @@ func test_slug() -> String:
 func test_ground_state() -> String:
 	var G: Dictionary = ParcelLogic.Ground
 	var cases := [
-		["wild", "Désert", G.SAND], ["wild", "Forêt tropicale", G.LUSH], ["ocean", "Savane", G.WATER],
+		["wild", "Désert", G.SAND], ["wild", "Forêt tropicale", G.LUSH], ["ocean", "Savane", G.SEABED], ["ocean", "Abysses", G.ABYSS],
 		["crater", "Toundra", G.CRATER], ["megacity", "Steppe", G.URBAN], ["farmland", "Steppe", G.DRY],
 		["rewild", "Inconnu", G.GRASS],
 	]

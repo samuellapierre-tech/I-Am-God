@@ -64,7 +64,7 @@ func apply_parcel(p: ParcelSim) -> void:
 	_base_temp = p.temperature_c
 	_water = p.water
 	_land_use = p.land_use
-	_submerged = ParcelLogic.submerged(p.land_use) > 0.5
+	_submerged = ParcelLogic.submerged(p.land_use, p.shore) > 0.5
 	if _submerged and weather != "clear":
 		_set_weather("clear")
 	if p.cell != _cell:

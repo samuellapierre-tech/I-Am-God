@@ -40,6 +40,7 @@ var _flood_hold := 0.0
 ## 1 : parcelle sous la mer (prologue), 0 : terres émergées. Lissé : les terres émergent peu à peu.
 var submerged_level := 0.0
 var _submerged_target := 0.0
+var _volcanic := false
 
 
 func _ready() -> void:
@@ -73,7 +74,7 @@ func ignite(from_vegetation: float) -> void:
 
 ## snap : nouvelle parcelle, pas de fondu depuis l'ancienne.
 func apply_parcel(p: ParcelSim, snap := false) -> void:
-	var target := ParcelLogic.ground_state(p.land_use, p.biome)
+	var target := ParcelLogic.ground_state(p.land_use, p.biome, _volcanic)
 	snap = snap or not _has_state
 	if snap:
 		_state_a = target
@@ -91,7 +92,7 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 	if not snap and not no_fire and (p.vegetation < _targets.vegetation - FIRE_DROP or (p.land_use == "crater" and _land_use != "crater")):
 		ignite(_values.vegetation)
 	_land_use = p.land_use
-	_submerged_target = ParcelLogic.submerged(p.land_use)
+	_submerged_target = ParcelLogic.submerged(p.land_use, p.shore)
 	if snap:
 		submerged_level = _submerged_target
 	_targets = {vegetation = p.vegetation, water = p.water, temperature_c = p.temperature_c, tech = p.tech}
@@ -102,8 +103,36 @@ func apply_parcel(p: ParcelSim, snap := false) -> void:
 	_push()
 
 
-## Repères permanents (ParcelLogic.landmarks) : rivière en S et rocher.
+## Particularités de la cellule (ParcelLogic.cell_features) et côte (ParcelLogic.coast_vector).
+func set_cell_info(features: Dictionary, coast: Vector2, sea_cell: bool) -> void:
+	_volcanic = bool(features.get("volcanic", false))
+	_mat.set_shader_parameter("vents", 1.0 if features.get("vents", false) else 0.0)
+	_mat.set_shader_parameter("coast", coast)
+	_mat.set_shader_parameter("sea_cell", 1.0 if sea_cell else 0.0)
+
+
+## Vie productrice au sol : couleurs (alpha = couverture) et styles (Appearance.Flora).
+func set_flora(colors: PackedColorArray, styles: PackedFloat32Array) -> void:
+	var c := PackedVector4Array()
+	var st := PackedFloat32Array()
+	for i in 4:
+		var col: Color = colors[i] if i < colors.size() else Color(0, 0, 0, 0)
+		c.append(Vector4(col.r, col.g, col.b, col.a))
+		st.append(styles[i] if i < styles.size() else 0.0)
+	_mat.set_shader_parameter("flora_color", c)
+	_mat.set_shader_parameter("flora_style", st)
+
+
+## Repères permanents (ParcelLogic.landmarks) : rivière en S et rocher (s'ils existent ici).
 func set_landmarks(lm: Dictionary) -> void:
+	var river: PackedVector2Array = lm.river
+	_mat.set_shader_parameter("river_present", 1.0 if river.size() >= 2 else 0.0)
+	_mat.set_shader_parameter("rock_present", 1.0 if Vector2(lm.rock_radii).x > 0.0 else 0.0)
+	if river.size() < 2:
+		river = PackedVector2Array()
+		river.resize(ParcelLogic.RIVER_POINTS)
+		lm = lm.duplicate()
+		lm.river = river
 	_mat.set_shader_parameter("river_pts", lm.river)
 	_mat.set_shader_parameter("river_width", lm.river_width)
 	_mat.set_shader_parameter("rock_pos", lm.rock_pos)

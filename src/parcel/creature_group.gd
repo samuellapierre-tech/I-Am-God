@@ -76,6 +76,9 @@ var emits := PackedFloat32Array()
 var river := PackedVector2Array()
 var river_width := 44.0
 var river_wet := true ## eau libre (ni à sec, ni gelée)
+## Côte (ParcelLogic.coast_vector) : les marcheurs restent à terre, les nageurs dans l'eau.
+var coast := Vector2.ZERO
+var sea_cell := false
 
 var _rng := RandomNumberGenerator.new()
 
@@ -558,10 +561,30 @@ func _random_in_circle(r: float) -> Vector2:
 func _clamp(p: Vector2) -> Vector2:
 	var m := length * 0.5 + 8.0
 	p = Vector2(clampf(p.x, bounds.position.x + m, bounds.end.x - m), clampf(p.y, bounds.position.y + m, bounds.end.y - m))
-	if river_wet and not river.is_empty() and not _wades():
+	if river_wet and river.size() >= 2 and not _wades():
 		var q := ParcelLogic.nearest_on_polyline(p, river)
 		var keep := river_width * 0.5 + length * 0.3
 		var d := q.distance_to(p)
 		if d < keep:
 			p = q + ((p - q) / d if d > 0.01 else Vector2.LEFT) * keep
+	if coast != Vector2.ZERO and locomotion != ParcelLogic.Locomotion.FLY:
+		p = _coast_side(p)
+		p = Vector2(clampf(p.x, bounds.position.x + m, bounds.end.x - m), clampf(p.y, bounds.position.y + m, bounds.end.y - m))
 	return p
+
+
+## Garde chacun de son côté du rivage : dans l'eau ce qui nage (et ce qui vit fixé en mer),
+## sur la terre ce qui marche ou rampe.
+func _coast_side(p: Vector2) -> Vector2:
+	var marine: bool = locomotion == ParcelLogic.Locomotion.SWIM or str(app.get("habitat", "")) == "marine"
+	var uv := p / ParcelLogic.PARCEL_SIZE
+	if ParcelLogic.coast_is_water(uv, coast, sea_cell) == marine:
+		return p
+	var n := coast.normalized()
+	var s := (uv - Vector2(0.5, 0.5)).dot(n)
+	var edge := 0.5 - coast.length() * 0.38
+	# Côté eau : au-delà du rivage (cellule de terre) ou en deçà (cellule de mer).
+	var water_beyond := not sea_cell
+	var want_beyond: bool = marine == water_beyond
+	var target := edge + (0.04 if want_beyond else -0.04)
+	return p + n * (target - s) * ParcelLogic.PARCEL_SIZE

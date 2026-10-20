@@ -38,6 +38,18 @@ uniform float river_width = 44.0;
 uniform vec4 river_state = vec4(1.0, 0.0, 0.0, 0.0);
 // 0 tant que la parcelle est sous la mer (prologue) : la rivière n'existe pas encore.
 uniform float river_visible : hint_range(0.0, 1.0) = 1.0;
+// Repères propres à la cellule : toutes n'ont pas de rivière ni de rocher.
+uniform float river_present = 1.0;
+uniform float rock_present = 1.0;
+// Sources hydrothermales (abysses).
+uniform float vents = 0.0;
+// Côte : direction (écran) vers l'autre milieu × ampleur ; sea_cell : la cellule est en mer.
+uniform vec2 coast = vec2(0.0);
+uniform float sea_cell = 0.0;
+// Vie productrice au sol (jusqu'à 4 couches) : rgb + couverture, et style
+// (0 tapis microbien, 1 voile d'algues, 2 mousse, 3 lichen, 4 prairie, 5 canopée).
+uniform vec4 flora_color[4];
+uniform float flora_style[4];
 uniform vec2 rock_pos = vec2(500.0, 700.0);
 uniform vec2 rock_radii = vec2(100.0, 70.0);
 uniform float rock_angle = 0.0;
@@ -65,6 +77,8 @@ const int MAT = 16;
 const int REEF = 17;
 const int BARREN = 18;
 const int SWAMP = 19;
+const int ABYSS = 20;
+const int VOLCANIC = 21;
 
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -89,6 +103,11 @@ float fbm(vec2 p) {
 		a *= 0.5;
 	}
 	return s / 0.97;
+}
+
+// Relief lisse (3 octaves) pour l'ombrage des montagnes : sans le grain des petites échelles.
+float relief(vec2 p) {
+	return vnoise(p) * 0.57 + vnoise(p * 2.03 + 17.0) * 0.29 + vnoise(p * 4.1 + 5.0) * 0.14;
 }
 
 // Voronoï : (distance au germe, écart à la frontière, identifiant de cellule).
@@ -150,8 +169,17 @@ vec3 ground_color(int kind, vec2 p, vec2 uv, float n1, float n2, float wear) {
 		vec3 v = voronoi(p / 160.0);
 		col = mix(col, vec3(0.58, 0.72, 0.86), (1.0 - smoothstep(0.0, 0.05, v.y)) * 0.55);
 	} else if (kind == ROCK) {
-		col = mix(vec3(0.40, 0.38, 0.36), vec3(0.58, 0.55, 0.51), n1);
-		col *= 0.85 + 0.3 * smoothstep(0.45, 0.55, n2);
+		// Montagne : relief ombré (lumière du haut-gauche), crêtes, neiges des sommets.
+		float h0 = relief(p * 0.003 + 9.0);
+		float hx = relief((p + vec2(8.0, 0.0)) * 0.003 + 9.0);
+		float hy = relief((p + vec2(0.0, 8.0)) * 0.003 + 9.0);
+		float shade = clamp(0.5 - ((hx - h0) + (hy - h0)) * 22.0, 0.0, 1.0);
+		col = mix(vec3(0.36, 0.34, 0.32), vec3(0.62, 0.59, 0.55), n1) * (0.68 + 0.5 * shade);
+		col *= 0.9 + 0.2 * vnoise(p * 0.08); // éboulis
+		float crest = pow(1.0 - abs(relief(p * 0.006 + 3.0) * 2.0 - 1.0), 6.0);
+		col *= 0.85 + 0.35 * crest; // arêtes
+		float peak = h0 + (vnoise(p * 0.02) - 0.5) * 0.08;
+		col = mix(col, vec3(0.93, 0.95, 0.98) * (0.8 + 0.25 * shade), smoothstep(0.74, 0.78, peak));
 	} else if (kind == WATER) {
 		float waves = sin(p.x * 0.03 + TIME * 0.9 + n2 * 6.0) * sin(p.y * 0.025 - TIME * 0.7);
 		col = mix(vec3(0.06, 0.20, 0.36), vec3(0.11, 0.33, 0.50), n1) + waves * 0.025;
@@ -209,6 +237,18 @@ vec3 ground_color(int kind, vec2 p, vec2 uv, float n1, float n2, float wear) {
 		col = mix(vec3(0.2, 0.22, 0.12), vec3(0.28, 0.28, 0.16), n1);
 		float ch = 1.0 - smoothstep(0.0, 0.035, abs(n2 - 0.5));
 		col = mix(col, vec3(0.1, 0.18, 0.16) + 0.02 * sin(TIME + n1 * 30.0), ch);
+	} else if (kind == ABYSS) {
+		// Plaine abyssale : vase sombre, neige marine.
+		col = mix(vec3(0.16, 0.17, 0.2), vec3(0.22, 0.23, 0.26), n1);
+		col += vec3(0.25) * step(0.985, hash12(floor(p / 3.0)));
+	} else if (kind == VOLCANIC) {
+		// Basalte noir, fissures de lave qui pulsent.
+		vec3 v = voronoi(p / 90.0);
+		col = mix(vec3(0.12, 0.11, 0.11), vec3(0.22, 0.2, 0.19), n1) * (0.9 + 0.15 * v.z);
+		float crack = 1.0 - smoothstep(0.0, 0.035, v.y);
+		float hot = smoothstep(0.42, 0.66, n2);
+		col = mix(col, vec3(1.0, 0.35, 0.05) * (0.7 + 0.3 * sin(TIME * 2.0 + v.z * 20.0)), crack * hot);
+		col = mix(col, vec3(0.05), crack * (1.0 - hot) * 0.6);
 	} else { // TAIGA
 		col = mix(vec3(0.22, 0.31, 0.22), vec3(0.31, 0.39, 0.28), n1);
 	}
@@ -322,6 +362,15 @@ vec3 apply_rock(vec3 col, vec2 p, float paved, float urban, out float rock_mask)
 	// Sous la mer, le rocher se couvre d'algues et de tapis microbiens.
 	float algae = (1.0 - river_visible) * smoothstep(0.4, 0.7, vnoise(p * 0.04 + 7.0));
 	stone = mix(stone, vec3(0.36, 0.42, 0.24), algae * 0.7);
+	// Lichens et voiles microbiens colorés sur la roche.
+	for (int i = 0; i < 4; i++) {
+		int style = int(flora_style[i] + 0.5);
+		if ((style == 3 || style == 0) && flora_color[i].a > 0.01) {
+			vec3 v = voronoi(p / 7.0 + float(i) * 5.0);
+			float m = (1.0 - smoothstep(0.2, 0.42, v.x)) * step(1.0 - flora_color[i].a * 0.8, v.z);
+			stone = mix(stone, flora_color[i].rgb * 1.1, m * 0.8);
+		}
+	}
 	col = mix(col, stone, rock_mask);
 	return col;
 }
@@ -344,16 +393,61 @@ void fragment() {
 	// Herbe fine : petit grain qui casse les aplats.
 	col *= 0.93 + 0.14 * vnoise(sp * 0.35) * (1.0 - liquid);
 
+	// Vie productrice au sol : tapis microbiens, mousses, lichens, prairies (la canopée et les
+	// voiles d'algues sont traités plus bas et dans le voile d'eau).
+	for (int i = 0; i < 4; i++) {
+		float cover = flora_color[i].a;
+		if (cover <= 0.01) continue;
+		int style = int(flora_style[i] + 0.5);
+		vec3 fc = flora_color[i].rgb;
+		if (style == 0) {
+			float b = fract(fbm(sp * 0.003 + float(i) * 13.0) * 4.0);
+			float m = smoothstep(1.0 - cover, 1.0 - cover + 0.08, fbm(sp * 0.004 + float(i) * 7.0));
+			col = mix(col, fc * (0.75 + 0.35 * b), m * 0.85);
+		} else if (style == 2) {
+			float m = smoothstep(1.0 - cover * 0.8, 1.05 - cover * 0.8, fbm(sp * 0.008 + float(i) * 5.0));
+			col = mix(col, fc * (0.8 + 0.3 * vnoise(sp * 0.4)), m * 0.8);
+		} else if (style == 3) {
+			vec3 v = voronoi(sp / 9.0 + float(i) * 3.0);
+			float m = (1.0 - smoothstep(0.25, 0.4, v.x)) * step(1.0 - cover * 0.45, v.z);
+			col = mix(col, fc, m * 0.65);
+		} else if (style == 4) {
+			col = mix(col, fc * (0.85 + 0.25 * n1), cover * 0.55);
+		}
+	}
+
+	// Côte : sable mouillé le long du rivage (la mer elle-même est dessinée par le voile d'eau).
+	if (length(coast) > 0.01) {
+		float s = dot(uv - 0.5, normalize(coast)) + (fbm(sp * 0.003 + 21.0) - 0.5) * 0.12;
+		float edge = 0.5 - length(coast) * 0.38;
+		float beach = 1.0 - smoothstep(0.0, 0.06, abs(s - edge));
+		col = mix(col, mix(vec3(0.82, 0.74, 0.55), vec3(0.6, 0.55, 0.45), smoothstep(-0.02, 0.02, (s - edge) * (sea_cell > 0.5 ? -1.0 : 1.0))), beach * 0.85);
+	}
+
 	// Repères permanents : la rivière (sauf sous l'océan) et le rocher.
 	float paved = mix(kind_a == PAVED || kind_a == URBAN ? 1.0 : 0.0, kind_b == PAVED || kind_b == URBAN ? 1.0 : 0.0, t);
 	float urban = mix(kind_a == URBAN ? 1.0 : 0.0, kind_b == URBAN ? 1.0 : 0.0, t);
 	float river_mask = 0.0;
 	float river_d = 0.0;
 	vec3 with_river = apply_river(col, p, n1, urban, river_mask, river_d);
-	col = mix(with_river, col, max(liquid, 1.0 - river_visible));
-	river_mask *= (1.0 - liquid) * river_visible;
+	float river_on = river_visible * river_present;
+	col = mix(with_river, col, max(liquid, 1.0 - river_on));
+	river_mask *= (1.0 - liquid) * river_on;
 	float rock_mask = 0.0;
-	col = apply_rock(col, p, paved, urban, rock_mask);
+	if (rock_present > 0.5) {
+		col = apply_rock(col, p, paved, urban, rock_mask);
+	}
+
+	// Sources hydrothermales : cheminées noires, lueur, halos blancs de microbes.
+	if (vents > 0.5) {
+		vec3 v = voronoi(sp / 260.0);
+		if (v.z > 0.55) {
+			float r = v.x * 260.0;
+			col = mix(col, vec3(0.85, 0.85, 0.78), (1.0 - smoothstep(30.0, 60.0, r)) * smoothstep(18.0, 26.0, r) * 0.7);
+			col = mix(col, vec3(0.05, 0.04, 0.04), 1.0 - smoothstep(12.0, 18.0, r));
+			col += vec3(1.0, 0.45, 0.1) * (1.0 - smoothstep(0.0, 8.0, r)) * (0.6 + 0.4 * sin(TIME * 4.0 + v.z * 30.0));
+		}
+	}
 	float clear_ground = (1.0 - river_mask) * (1.0 - rock_mask);
 
 	// Mares et ruisseaux selon l'humidité.
@@ -361,7 +455,7 @@ void fragment() {
 	float wet = clamp((water - 0.35) / 0.65, 0.0, 1.0);
 	float pond_thr = mix(1.02, 0.74, wet);
 	// Pas de mares sous la mer (prologue) : seulement sur les terres émergées.
-	float pond = smoothstep(pond_thr, pond_thr + 0.015, pond_noise) * (1.0 - liquid) * clear_ground * river_visible;
+	float pond = smoothstep(pond_thr, pond_thr + 0.015, pond_noise) * (1.0 - liquid) * clear_ground * river_visible * (1.0 - sea_cell);
 	float shore = smoothstep(pond_thr - 0.03, pond_thr, pond_noise) * (1.0 - pond) * (1.0 - liquid) * clear_ground * river_visible;
 	vec3 pond_col = mix(vec3(0.10, 0.30, 0.44), vec3(0.16, 0.40, 0.52), n1)
 		+ 0.03 * sin(TIME * 1.4 + pond_noise * 60.0);
@@ -370,7 +464,7 @@ void fragment() {
 
 	// Végétation : couronnes d'arbres dont la couverture suit parcel.vegetation.
 	float near_landmark = smoothstep(0.0, 1.0, (river_d - river_width * 0.5 - 6.0) / 14.0);
-	float veg_mask = (1.0 - pond) * (1.0 - rock_mask) * mix(1.0, near_landmark, river_state.x * river_visible);
+	float veg_mask = (1.0 - pond) * (1.0 - rock_mask) * mix(1.0, near_landmark, river_state.x * river_on);
 	float density = clamp(vegetation * mix(veg_a, veg_b, t), 0.0, 1.0) * veg_mask;
 	vec2 sway = vec2(sin(TIME * 0.8 + p.y * 0.01), cos(TIME * 0.6 + p.x * 0.01)) * 1.2;
 	float canopy = fbm(sp * 0.021 + sway * 0.021 + 5.0);
@@ -378,6 +472,12 @@ void fragment() {
 	float tree = smoothstep(thr, thr + 0.05, canopy);
 	float shadow = smoothstep(thr, thr + 0.05, fbm((sp + vec2(-7.0, -9.0)) * 0.021 + 5.0)) * (1.0 - tree);
 	vec3 leaves = mix(tree_color(kind_a), tree_color(kind_b), t);
+	// Canopée : la couleur suit les producteurs dominants (style 5).
+	for (int i = 0; i < 4; i++) {
+		if (int(flora_style[i] + 0.5) == 5 && flora_color[i].a > 0.01) {
+			leaves = mix(leaves, flora_color[i].rgb, 0.75);
+		}
+	}
 	float fall = autumn * mix(deciduous(kind_a), deciduous(kind_b), t);
 	vec3 fall_col = mix(vec3(0.85, 0.45, 0.1), vec3(0.7, 0.18, 0.08), vnoise(sp * 0.03 + 3.0));
 	leaves = mix(leaves, fall_col, fall * smoothstep(0.3, 0.6, vnoise(sp * 0.015 + 9.0) + autumn * 0.4));

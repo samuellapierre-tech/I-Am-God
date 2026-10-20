@@ -11,7 +11,7 @@ const STRUCTURE_DIR := "res://assets/parcel/structures/"
 ## Types de sol dessinés par shaders/parcel_terrain.gdshader (mêmes indices côté shader).
 ## Les cinq derniers servent au prologue (de la première cellule aux premiers dinosaures).
 enum Ground { GRASS, LUSH, DRY, SAND, TUNDRA, SNOW, ROCK, WATER, MUD, CRATER, DIRT, PAVED, URBAN, RUBBLE, TAIGA,
-	SEABED, MAT, REEF, BARREN, SWAMP }
+	SEABED, MAT, REEF, BARREN, SWAMP, ABYSS, VOLCANIC }
 
 ## Façons de bouger : marcher, nager en banc, rester fixé (colonies, algues, éponges, plantes),
 ## ramper sur le fond, voler en zigzag.
@@ -40,7 +40,7 @@ const GROUND_VEGETATION := {
 	Ground.WATER: 0.0, Ground.SNOW: 0.05, Ground.CRATER: 0.0, Ground.ROCK: 0.35, Ground.SAND: 0.15,
 	Ground.TUNDRA: 0.35, Ground.MUD: 0.25, Ground.DIRT: 0.5, Ground.PAVED: 0.3, Ground.URBAN: 0.15,
 	Ground.RUBBLE: 0.9, Ground.SEABED: 0.3, Ground.MAT: 0.0, Ground.REEF: 0.35, Ground.BARREN: 0.04,
-	Ground.SWAMP: 1.0,
+	Ground.SWAMP: 1.0, Ground.ABYSS: 0.0, Ground.VOLCANIC: 0.08,
 }
 const LAND_USE_VEGETATION := {
 	"camp": 0.85, "pasture": 0.5, "farmland": 0.4, "village": 0.45, "town": 0.35, "city": 0.25,
@@ -56,15 +56,20 @@ const MAX_CREATURE_LENGTH := 110.0
 
 # --- Terrain ---
 
-static func ground_kind(land_use: String, biome: String) -> int:
+static func ground_kind(land_use: String, biome: String, volcanic := false) -> int:
+	# Vue rapprochée partout : l'océan se voit par le fond (plaine abyssale ou fond marin).
+	if land_use == "ocean":
+		return Ground.ABYSS if biome == "Abysses" else Ground.SEABED
+	if volcanic and land_use in ["wild", "barren", "rewild", "crater"]:
+		return Ground.VOLCANIC
 	if LAND_USE_GROUND.has(land_use):
 		return LAND_USE_GROUND[land_use]
 	return BIOME_GROUND.get(biome, Ground.GRASS)
 
 
 ## État de sol transmis au shader : (type, usure, part de végétation visible).
-static func ground_state(land_use: String, biome: String) -> Vector3:
-	var kind := ground_kind(land_use, biome)
+static func ground_state(land_use: String, biome: String, volcanic := false) -> Vector3:
+	var kind := ground_kind(land_use, biome, volcanic)
 	var veg: float = GROUND_VEGETATION.get(kind, 1.0) * LAND_USE_VEGETATION.get(land_use, 1.0)
 	return Vector3(kind, LAND_USE_WEAR.get(land_use, 0.0), veg)
 
@@ -98,9 +103,72 @@ static func creature_length(size: float) -> float:
 	return lerpf(MIN_CREATURE_LENGTH, MAX_CREATURE_LENGTH, clampf(size, 0.0, 1.0))
 
 
-## 1 si la parcelle est sous la mer (prologue), 0 sinon.
-static func submerged(land_use: String) -> float:
-	return 1.0 if land_use in SUBMERGED_USES else 0.0
+## 1 si la parcelle est sous la mer, 0 sinon. shore ("sea" | "intertidal" | "land", ParcelSim)
+## l'emporte quand il est connu : l'estran est à moitié couvert.
+static func submerged(land_use: String, shore := "") -> float:
+	if shore == "sea" or land_use == "ocean" or land_use in SUBMERGED_USES:
+		return 1.0
+	if shore == "intertidal":
+		return 0.55
+	return 0.0
+
+
+## Profondeur 0 (hauts-fonds) .. 1 (abysses) d'après la profondeur d'eau en mètres.
+static func depth_factor(water_depth_m: float) -> float:
+	return smoothstep(40.0, 3000.0, water_depth_m)
+
+
+## Repères et particularités propres à chaque cellule, stables pour toute la partie :
+## une cellule sur deux environ a une rivière, la plupart un gros rocher ; les abysses ont parfois
+## des sources hydrothermales, les montagnes parfois un volcan.
+static func cell_features(seed_value: int, cell: Vector2i, land: bool, biome: String) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash([seed_value, cell, "features"])
+	var r_river := rng.randf()
+	var r_rock := rng.randf()
+	var r_vent := rng.randf()
+	var r_volcano := rng.randf()
+	return {
+		river = land and r_river < 0.55,
+		rock = r_rock < (0.75 if land else 0.45),
+		vents = not land and biome == "Abysses" and r_vent < 0.6,
+		volcanic = land and biome == "Montagnes" and r_volcano < 0.3,
+	}
+
+
+## Côte : direction (écran, x vers la droite, y vers le bas) vers les cellules voisines de l'autre
+## milieu (la mer pour une cellule de terre, la terre pour une cellule de mer), pondérée par leur
+## nombre. Vecteur nul : pas de côte. elev : altitudes de la grille (bouclage en x).
+static func coast_vector(elev: PackedFloat32Array, width: int, height: int, cell: Vector2i, sea_level: float) -> Vector2:
+	if elev.size() < width * height or width <= 0:
+		return Vector2.ZERO
+	var here_sea := elev[cell.y * width + posmod(cell.x, width)] < sea_level
+	var sum := Vector2.ZERO
+	var count := 0
+	for dy in [-1, 0, 1]:
+		for dx in [-1, 0, 1]:
+			if dx == 0 and dy == 0:
+				continue
+			var y: int = cell.y + dy
+			if y < 0 or y >= height:
+				continue
+			var x := posmod(cell.x + dx, width)
+			if (elev[y * width + x] < sea_level) != here_sea:
+				sum += Vector2(dx, dy).normalized()
+				count += 1
+	if count == 0 or sum.length() < 0.01:
+		return Vector2.ZERO if count == 0 else Vector2(1, 0) * 0.3
+	return sum.normalized() * clampf(count / 5.0, 0.25, 1.0)
+
+
+## Le point (coordonnées 0..1 de la parcelle) est-il dans l'eau, d'après la côte ?
+## Même formule que shaders/parcel_water.gdshader (sans les ondulations du rivage).
+static func coast_is_water(uv: Vector2, coast: Vector2, sea_cell: bool) -> bool:
+	if coast == Vector2.ZERO:
+		return sea_cell
+	var s := (uv - Vector2(0.5, 0.5)).dot(coast.normalized())
+	var edge := 0.5 - coast.length() * 0.38
+	return s < edge if sea_cell else s > edge
 
 
 ## Teinte et turbidité de l'eau selon l'âge : rouge-orangé trouble avant la Grande Oxydation
@@ -135,7 +203,7 @@ static func visual_state(group_state: int) -> float:
 ## seulement du plancton.
 static func ambient_counts(land_use: String, vegetation: float, water: float, temperature_c: float,
 		pterosaurs: bool, year := 0.0) -> Dictionary:
-	if land_use in SUBMERGED_USES:
+	if land_use in SUBMERGED_USES or land_use == "ocean":
 		return {flocks = 0, swarms = 0, gliders = 0, plankton = 6}
 	var hostile := land_use in ["ocean", "crater", "ice", "barren"] or temperature_c < -5.0
 	var flocks := 0
@@ -171,7 +239,9 @@ static func swarm_centers(cell: Vector2i, count: int, water_pts: PackedVector2Ar
 const RIVER_POINTS := 24
 
 
-static func landmarks(seed_value: int, cell: Vector2i) -> Dictionary:
+## has_river / has_rock : la cellule n'a pas forcément de rivière ni de rocher (cell_features).
+## Absents : rivière vide, rocher de rayon nul.
+static func landmarks(seed_value: int, cell: Vector2i, has_river := true, has_rock := true) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash([seed_value, cell, "landmarks"])
 	var start := Vector2(rng.randf_range(0.12, 0.24), -0.06) * PARCEL_SIZE
@@ -186,10 +256,14 @@ static func landmarks(seed_value: int, cell: Vector2i) -> Dictionary:
 	var radii := Vector2(rng.randf_range(90.0, 115.0), rng.randf_range(62.0, 78.0))
 	var rock := Vector2(rng.randf_range(0.2, 0.3), rng.randf_range(0.55, 0.72)) * PARCEL_SIZE
 	# Le rocher ne touche jamais la rivière : on l'écarte vers la gauche si besoin.
-	while distance_to_polyline(rock, river) < width * 0.5 + radii.x + 50.0 and rock.x > radii.x + 20.0:
+	while has_river and distance_to_polyline(rock, river) < width * 0.5 + radii.x + 50.0 and rock.x > radii.x + 20.0:
 		rock.x -= 20.0
-	return {river = river, river_width = width, rock_pos = rock, rock_radii = radii,
-		rock_angle = rng.randf_range(-0.5, 0.5)}
+	var angle := rng.randf_range(-0.5, 0.5)
+	if not has_river:
+		river = PackedVector2Array()
+	if not has_rock:
+		radii = Vector2.ZERO
+	return {river = river, river_width = width, rock_pos = rock, rock_radii = radii, rock_angle = angle}
 
 
 static func nearest_on_polyline(p: Vector2, pts: PackedVector2Array) -> Vector2:
@@ -220,12 +294,12 @@ static func avoid_landmarks(p: Vector2, half: float, lm: Dictionary) -> Vector2:
 	for i in 2:
 		var q := nearest_on_polyline(p, river)
 		var d := q.distance_to(p)
-		if d < clear:
+		if river.size() >= 2 and d < clear:
 			var n := (p - q).normalized() if d > 0.01 else Vector2.LEFT
 			p = q + n * clear
 		var rock: Vector2 = lm.rock_pos
 		var r: float = Vector2(lm.rock_radii).x + half + 10.0
-		if p.distance_to(rock) < r:
+		if Vector2(lm.rock_radii).x > 0.0 and p.distance_to(rock) < r:
 			p = rock + (p - rock).normalized() * r if p != rock else rock + Vector2(0, r)
 	return p.clamp(Vector2(half, half), PARCEL_SIZE - Vector2(half, half))
 
@@ -244,6 +318,8 @@ static func river_state(land_use: String, water: float, snow: float) -> Vector4:
 ## Feu de camp des premiers sapients : à côté du rocher (lieu de rassemblement).
 static func campfire_near(lm: Dictionary) -> Vector2:
 	var r: Vector2 = lm.rock_radii
+	if r.x <= 0.0:
+		return PARCEL_SIZE * Vector2(0.4, 0.55)
 	return Vector2(lm.rock_pos) + Vector2(r.x + 45.0, r.y * 0.3)
 
 

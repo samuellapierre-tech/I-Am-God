@@ -34,6 +34,8 @@ var _quad: ArrayMesh
 var _rng := RandomNumberGenerator.new()
 var _landmarks := {}
 var _river_wet := true
+var _coast := Vector2.ZERO
+var _sea_cell := false
 
 
 func _ready() -> void:
@@ -44,7 +46,7 @@ func _ready() -> void:
 
 func apply_parcel(p: ParcelSim) -> void:
 	var seen := {}
-	var aquatic := ParcelLogic.submerged(p.land_use) > 0.5
+	var aquatic := ParcelLogic.submerged(p.land_use, p.shore) > 0.5
 	for f in p.fauna:
 		var id := int(f.species_id)
 		seen[id] = true
@@ -53,6 +55,8 @@ func apply_parcel(p: ParcelSim) -> void:
 			g = CreatureGroup.new(id, p.cell)
 			_groups[id] = g
 			_give_river(g)
+			g.coast = _coast
+			g.sea_cell = _sea_cell
 		var traits: Dictionary = traits_of.call(id) if traits_of.is_valid() else {}
 		if g.set_species(f, aquatic, traits) or g.mmi == null:
 			_refresh_look(g)
@@ -64,9 +68,11 @@ func apply_parcel(p: ParcelSim) -> void:
 
 ## Nouvelle parcelle : on repart de zéro.
 func clear() -> void:
+	# Libération immédiate (pas de queue_free) : changer de cellule ne laisse rien traîner.
 	for g in _groups.values():
 		if g.mmi:
-			g.mmi.queue_free()
+			g.mmi.free()
+			g.mmi = null
 	_groups.clear()
 
 
@@ -75,6 +81,14 @@ func set_landmarks(lm: Dictionary) -> void:
 	_landmarks = lm
 	for g: CreatureGroup in _groups.values():
 		_give_river(g)
+
+
+func set_coast(coast: Vector2, sea_cell: bool) -> void:
+	_coast = coast
+	_sea_cell = sea_cell
+	for g: CreatureGroup in _groups.values():
+		g.coast = coast
+		g.sea_cell = sea_cell
 
 
 func set_river_open(open: bool) -> void:
