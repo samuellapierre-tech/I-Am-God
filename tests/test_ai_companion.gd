@@ -327,3 +327,49 @@ func test_contrats_planete_et_sauvegarde() -> String:
 	var ok := narrator.has_method("save_state") and narrator.has_method("load_state")
 	narrator.free()
 	return "" if ok else "save_state / load_state absents"
+
+
+func test_sauvegarde_et_bilan_du_narrateur() -> String:
+	var n: Node = load("res://src/ai/narrator.gd").new()
+	n._build_memory()
+	var err := _check_narrator_memory(n)
+	n.free()
+	return err
+
+
+func _check_narrator_memory(n: Node) -> String:
+	n.chronicle.inventor.forgotten = 3
+	n.worlds.note_species("Trilobites", true)
+	n._divine_history.append({"type": "seed", "year": -5e8, "species_id": 4})
+	n._deeds[4] = "seed"
+	var saved: Dictionary = bytes_to_var(var_to_bytes(n.save_state()))
+	n.chronicle.inventor.forgotten = 0
+	n._divine_history.clear()
+	n._deeds.clear()
+	n.worlds.current = Worlds._blank()
+	n.load_state(saved)
+	if n.chronicle.inventor.forgotten != 3 or n._divine_history.size() != 1 or str(n._deeds.get(4, "")) != "seed" \
+			or not "Trilobites" in n.worlds.current["notable"]:
+		return "mémoire perdue au rechargement"
+	if var_to_bytes(n.save_state()) != var_to_bytes(saved):
+		return "sauvegarde différente après rechargement"
+	n.load_state({"inventor": {"profiles": 5, "archive": "x"}, "inconnu": 1, "variety": {"_ring": [1, 2]}})
+	n.load_state({})
+	var texts := []
+	var grab := func(t: String) -> void: texts.append(t)
+	n.world_ended.connect(grab)
+	n.world_reborn.connect(grab)
+	n._ended = false
+	n._on_end_of_times_signal({"world_name": "Gaïa", "species_total": 40, "cause": "Le Soleil a grossi",
+		"notable": [{"name": "Fileuses", "sapient": true}]})
+	n._on_end_of_times({"type": "end_of_times", "summary": "sun"})
+	n._on_reincarnation({"world_name": "Thalassa", "world_index": 2, "params": {"ocean_fraction": 0.9, "star_luminosity": 0.7}})
+	n.world_ended.disconnect(grab)
+	n.world_reborn.disconnect(grab)
+	if texts.size() != 2:
+		return "fin des temps racontée %d fois : %s" % [texts.size(), texts]
+	if not (str(texts[0]).contains("Gaïa") and str(texts[0]).contains("40 espèces") and str(texts[0]).contains("Fileuses")):
+		return "bilan ignoré : " + str(texts[0])
+	if not (str(texts[1]).contains("Thalassa") and str(texts[1]).contains("pâle") and str(texts[1]).contains("Fileuses")):
+		return "nouvelle planète mal décrite : " + str(texts[1])
+	return ""

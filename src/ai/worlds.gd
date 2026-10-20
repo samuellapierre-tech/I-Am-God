@@ -82,6 +82,52 @@ func note_seed() -> void:
 	current["seeds"] = int(current["seeds"]) + 1
 
 
+## Bilan fourni par GameState.end_of_times(summary) (contrat de la session Sauvegarde) :
+## {world_name, age_years, species_total, species_max_alive, extinctions, civilizations (nombre ou noms),
+## notable: [{name, description, clade, sapient}], cause}. Tout est facultatif ; il complète notre mémoire.
+func absorb_summary(summary: Dictionary) -> void:
+	if typeof(summary.get("species_total")) in [TYPE_INT, TYPE_FLOAT]:
+		current["species_born"] = maxi(int(current["species_born"]), int(summary["species_total"]))
+	for key in ["extinctions", "age_years"]:
+		if typeof(summary.get(key)) in [TYPE_INT, TYPE_FLOAT]:
+			current[key] = float(summary[key])
+	if str(summary.get("world_name", "")) != "":
+		current["name"] = str(summary["world_name"])
+	var notable: Variant = summary.get("notable", [])
+	if notable is Array:
+		for n in notable:
+			var nm := str(n.get("name", "")) if n is Dictionary else str(n)
+			if nm == "" or nm in current["notable"]:
+				continue
+			current["notable"].append(nm)
+			if n is Dictionary and bool(n.get("sapient", false)):
+				note_civilization(nm)
+		while (current["notable"] as Array).size() > MAX_NOTABLE:
+			(current["notable"] as Array).pop_front()
+	var civs: Variant = summary.get("civilizations", null)
+	if civs is Array:
+		for c in civs:
+			note_civilization(str(c.get("name", "")) if c is Dictionary else str(c))
+
+
+## Planète nouvelle d'après GameState.world_reborn(info) : {world_name, world_index, params: {ocean_fraction,
+## axial_tilt, star_luminosity, plates, seed}} -> {name, ocean_fraction, star, size} pour reincarnation().
+static func planet_from_info(info: Dictionary) -> Dictionary:
+	var p: Dictionary = info.get("params", {}) if info.get("params") is Dictionary else {}
+	var out := info.duplicate()
+	for k in p:
+		out[k] = p[k]
+	if str(info.get("world_name", "")) != "":
+		out["name"] = str(info["world_name"])
+	if typeof(out.get("star_luminosity")) in [TYPE_INT, TYPE_FLOAT] and str(out.get("star", "")) == "":
+		var l := float(out["star_luminosity"])
+		if l < 0.85:
+			out["star"] = "plus pâle que le Soleil"
+		elif l > 1.15:
+			out["star"] = "plus brillante que le Soleil"
+	return out
+
+
 ## La fin des temps : 2 à 4 phrases ; le monde en cours rejoint les mondes passés.
 func end_of_times(end := "", year: Variant = null) -> String:
 	_count += 1
@@ -115,6 +161,8 @@ func reincarnation(planet: Dictionary = {}) -> String:
 			souvenir += " C'est ta %s vie de dieu." % _ordinal(past.size() + forgotten + 1)
 	var text := str(REBIRTH_TEMPLATES[rng.randi() % REBIRTH_TEMPLATES.size()]).format({
 		"traits": _planet_traits(planet), "souvenir": souvenir})
+	if str(planet.get("name", "")) != "":
+		text += " Elle s'appelle %s." % str(planet["name"])
 	return Procedural.polish(Procedural.contract(" " + text).strip_edges())
 
 
@@ -126,6 +174,8 @@ static func summary(record: Dictionary) -> String:
 		parts.append("Aucune vie n'y a pris racine.")
 	else:
 		var s := "%d espèce%s y %s vécu" % [n, "s" if n > 1 else "", "ont" if n > 1 else "a"]
+		if str(record.get("name", "")) != "":
+			s = "Sur %s, %s" % [str(record["name"]), s]
 		var names: Array = record.get("notable", [])
 		if names.size() >= 2:
 			s += ", de %s à %s" % [Procedural.species_phrase(str(names[0]))["text"], Procedural.species_phrase(str(names[-1]))["text"]]

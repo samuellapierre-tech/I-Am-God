@@ -166,6 +166,21 @@ var _recent_events: Array[Dictionary] = []
 func _ready() -> void:
 	config = AiConfig.new()
 	config.load_or_create()
+	_build_memory()
+	client = LlmClient.new()
+	client.name = "LlmClient"
+	add_child(client)
+	client.setup(config)
+	client.backend_changed.connect(func(b: String) -> void: backend_changed.emit(b))
+	client.detect_backend()
+	_apply_narrator_config()
+	_connect_game_state.call_deferred()
+
+
+## Les mémoires et générateurs du narrateur (sans client LLM ni arbre de scène : utilisable en test).
+func _build_memory() -> void:
+	if config == null:
+		config = AiConfig.new()
 	procedural = Procedural.new()
 	parcel_narrator = ParcelNarrator.new()
 	chronicle = Chronicle.new()
@@ -178,14 +193,6 @@ func _ready() -> void:
 	chronicle.inventor.variety = variety
 	chronicle.explainer.variety = variety
 	_ambient_rng.randomize()
-	client = LlmClient.new()
-	client.name = "LlmClient"
-	add_child(client)
-	client.setup(config)
-	client.backend_changed.connect(func(b: String) -> void: backend_changed.emit(b))
-	client.detect_backend()
-	_apply_narrator_config()
-	_connect_game_state.call_deferred()
 
 
 # ---------------------------------------------------------------------------
@@ -863,6 +870,7 @@ func _on_end_of_times(event: Dictionary) -> void:
 	if _ended:
 		return
 	_ended = true
+	worlds.absorb_summary(event)
 	var text := worlds.end_of_times(end_cause(event), _current_year())
 	_priority.clear()
 	_pending.clear()
@@ -879,8 +887,7 @@ func _on_reincarnation(a: Variant = null, _b: Variant = null, _c: Variant = null
 		# Le monde précédent n'a pas eu de fin des temps racontée : on le range quand même.
 		worlds.remember(worlds.current)
 		worlds.current = Worlds._blank()
-	var planet: Dictionary = a if a is Dictionary else {}
-	var text := worlds.reincarnation(planet)
+	var text := worlds.reincarnation(Worlds.planet_from_info(a if a is Dictionary else {}))
 	_priority.clear()
 	_pending.clear()
 	_parcel_pending.clear()
@@ -894,46 +901,91 @@ func _on_reincarnation(a: Variant = null, _b: Variant = null, _c: Variant = null
 	world_reborn.emit(text)
 
 
-## Mémoire du narrateur pour la sauvegarde (contrat de la session Sauvegarde) : mondes passés, cultures
-## inventées, gestes de Dieu, espèces présentées. Que des types simples (pas de Callable ni de Node).
+## Mémoire du narrateur pour la sauvegarde (contrat de la session Sauvegarde, appelée via has_method) :
+## tout ce qu'il faut pour reprendre des semaines plus tard (chronique, inventions et cultures, variété,
+## lentille du monde, mondes passés, gestes de Dieu, dernière ère…). Uniquement des types sérialisables
+## par var_to_bytes (pas d'objet ni de Callable). load_state() tolère les clés absentes ou inconnues.
+const SAVE_VERSION := 1
+## Champs sauvegardés de chaque mémoire : {nom de la partie : [variables]}.
+const SAVE_FIELDS := {
+	"narrator": ["_divine_history", "_deeds", "_presented", "_seen_clades", "_last_era", "_ended", "_phenomena"],
+	"chronicle": ["_seed", "_count", "_recent_texts", "_recent_facts"],
+	"inventor": ["profiles", "archive", "forgotten", "fallen", "_lives", "_seed", "_count"],
+	"explainer": ["_seed", "_count", "_recent_facts", "_recent_phenomena"],
+	"bestiary": ["_seed", "_count"],
+	"worlds": ["past", "forgotten", "current", "_seed", "_count"],
+	"variety": ["window", "_ring", "_next", "_counts", "_clock", "_last_use"],
+	"lens": ["divergent", "criteria", "since_year", "_announced"],
+	"parcel": ["_seed", "_count", "_last_template", "_land_use", "_seen_uses", "_heat_ref", "_species"],
+}
+
+
 func save_state() -> Dictionary:
-	return {"worlds": worlds.snapshot(), "fallen": chronicle.inventor.fallen.duplicate(true),
-		"archive": chronicle.inventor.archive.duplicate(true), "forgotten": chronicle.inventor.forgotten,
-		"divine": _divine_history.duplicate(true), "deeds": _deeds.duplicate(), "presented": _presented.duplicate(),
-		"clades": _seen_clades.keys(), "last_era": _last_era, "ended": _ended}
+	var out := {"version": SAVE_VERSION}
+	for part in SAVE_FIELDS:
+		var obj: Object = _save_part(part)
+		if obj == null:
+			continue
+		var d := {}
+		for k in SAVE_FIELDS[part]:
+			if k in obj:
+				var v: Variant = obj.get(k)
+				d[k] = v.duplicate(true) if (v is Array or v is Dictionary) else v
+		out[part] = d
+	return out
 
 
 func load_state(data: Dictionary) -> void:
-	if data.get("worlds") is Dictionary:
-		worlds.restore(data["worlds"])
-	_divine_history.clear()
-	for d in data.get("divine", []):
-		if d is Dictionary:
-			_divine_history.append(d)
-	_deeds.clear()
-	var deeds: Variant = data.get("deeds", {})
-	if deeds is Dictionary:
-		for k in deeds:
-			_deeds[int(k)] = str(deeds[k])
-	_presented.clear()
-	for i in data.get("presented", []):
-		_presented.append(int(i))
-	_seen_clades.clear()
-	for c in data.get("clades", []):
-		_seen_clades[str(c)] = true
-	_last_era = str(data.get("last_era", _last_era))
-	_ended = bool(data.get("ended", false))
+	for part in SAVE_FIELDS:
+		var obj: Object = _save_part(part)
+		var d: Variant = data.get(part)
+		if obj == null or not (d is Dictionary):
+			continue
+		for k in SAVE_FIELDS[part]:
+			if (d as Dictionary).has(k) and k in obj:
+				_restore_field(obj, k, d[k])
+	# Les échantillons de la planète et la file d'attente ne survivent pas à un chargement.
 	_planet_history.clear()
-	var inv := chronicle.inventor
-	inv.fallen.clear()
-	for f in data.get("fallen", []):
-		if f is Dictionary:
-			inv.fallen.append(f)
-	inv.archive.clear()
-	for f in data.get("archive", []):
-		if f is Dictionary:
-			inv.archive.append(f)
-	inv.forgotten = int(data.get("forgotten", 0))
+	_priority.clear()
+	_pending.clear()
+	_parcel_pending.clear()
+
+
+func _save_part(part: String) -> Object:
+	match part:
+		"narrator": return self
+		"chronicle": return chronicle
+		"inventor": return chronicle.inventor if chronicle != null else null
+		"explainer": return chronicle.explainer if chronicle != null else null
+		"bestiary": return bestiary
+		"worlds": return worlds
+		"variety": return variety
+		"lens": return lens
+		"parcel": return parcel_narrator
+	return null
+
+
+## Recopie une valeur sauvegardée dans une variable, en respectant son type (tableaux typés, dictionnaires)
+## et en ignorant une valeur d'un autre type (sauvegarde d'une version future ou abîmée).
+static func _restore_field(obj: Object, k: String, v: Variant) -> void:
+	var cur: Variant = obj.get(k)
+	if cur is Array:
+		if not (v is Array):
+			return
+		var arr: Array = cur
+		arr.clear()
+		var item_type := arr.get_typed_builtin()
+		for x in v:
+			if item_type == TYPE_NIL or typeof(x) == item_type or (item_type == TYPE_INT and typeof(x) == TYPE_FLOAT):
+				arr.append(int(x) if item_type == TYPE_INT else x)
+	elif cur is Dictionary:
+		if not (v is Dictionary):
+			return
+		var dict: Dictionary = cur
+		dict.clear()
+		dict.merge(v)
+	elif cur == null or typeof(cur) == typeof(v) or (typeof(cur) in [TYPE_INT, TYPE_FLOAT] and typeof(v) in [TYPE_INT, TYPE_FLOAT]):
+		obj.set(k, v)
 
 
 func _push_priority(text: String, meta: Dictionary, system := "", prompt := "", required := "") -> void:
