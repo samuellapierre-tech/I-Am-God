@@ -593,6 +593,20 @@ func set_endless(on: bool) -> void:
 	endless = on
 
 
+## Fermeture propre : attend le recalcul de géographie en vol (il lit ce monde depuis un fil de
+## travail). Le résultat reste à appliquer au même sous-pas qu'avant : le déterminisme est intact.
+func shutdown() -> void:
+	if _geo_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_geo_task)
+		_geo_task = -2
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and _geo_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_geo_task)
+		_geo_task = -2
+
+
 ## Sauvegarde : à appeler avant de lire l'état par réflexion. Termine le recalcul de géographie en
 ## cours (il reste à appliquer, comme sans sauvegarde : son résultat est dans _geo_result).
 func prepare_save() -> void:
