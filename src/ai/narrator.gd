@@ -14,6 +14,12 @@ extends Node
 ## - Zéro anachronisme (epoch.gd) : prompts avec l'époque et la liste des interdits, sortie du LLM filtrée.
 ## - Variété (variety.gd) : mémoire anti-répétition bornée partagée par tous les générateurs ; plutôt
 ##   que de redire une phrase récente, le narrateur se tait.
+## - Il explique (explainer.gd, facts/phenomena.gd) : statistiques de la planète (planet_stats(),
+##   planet_history, lus via has_method / in), phénomènes en cours, faits vrais de la science.
+## - Il présente chaque espèce marquante à sa naissance et écrit l'épitaphe des espèces éteintes
+##   (bestiary.gd) ; l'IA locale enrichit ces portraits si elle est là.
+## - Il réagit aux semences du joueur (seeds.gd), avec réussite ou échec et la raison.
+## - Il raconte la fin des temps et la réincarnation (worlds.gd), et se souvient des mondes passés.
 ## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance.
 ##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
@@ -32,6 +38,15 @@ signal chronicle_line(text: String, meta: Dictionary)
 ## Qui parle : AiConfig.NARRATOR_NAME. Émis pour CHAQUE ligne du fil, en plus de
 ## narration_ready (compatibilité, sans orateur) et de chronicle_line (meta.speaker contient le même nom).
 signal speech_ready(speaker: String, text: String)
+## Une espèce marquante vient d'être présentée (pour le grand livre / Panthéon de l'interface).
+signal species_presented(species_id: int, text: String)
+## L'épitaphe d'une espèce éteinte.
+signal epitaph_written(species_id: int, text: String)
+## Réaction à une semence : kind ("spark", "light", "spore", "animal_germ", "shaped"), réussite, raison.
+signal seed_reaction(kind: String, success: bool, reason_code: String, text: String)
+## Fin des temps d'une planète, puis réincarnation : le texte du narrateur.
+signal world_ended(text: String)
+signal world_reborn(text: String)
 
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const LlmClient := preload("res://src/ai/llm_client.gd")
@@ -44,6 +59,10 @@ const Divergence := preload("res://src/ai/divergence.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 const Variety := preload("res://src/ai/variety.gd")
+const Explainer := preload("res://src/ai/explainer.gd")
+const Bestiary := preload("res://src/ai/bestiary.gd")
+const Seeds := preload("res://src/ai/seeds.gd")
+const Worlds := preload("res://src/ai/worlds.gd")
 
 ## Importance (0..1) par type d'événement canonique ; une clé "importance" dans l'événement l'emporte.
 const EVENT_IMPORTANCE := {
@@ -66,6 +85,27 @@ const PARCEL_RARE_MAX_AGE := 120.0
 const PARCEL_QUEUE_SIZE := 8
 ## Un événement compte comme « récent » pour le choix des faits pendant ce délai (s).
 const RECENT_EVENT_SEC := 60.0
+## Délai minimal (s) entre deux lignes prioritaires (présentations, épitaphes, semences, fin des temps).
+const PRIORITY_GAP := 2.0
+## Lignes prioritaires en attente au plus.
+const PRIORITY_QUEUE_SIZE := 10
+## Échantillonnage des statistiques de la planète (s réelles) et taille de l'historique gardé.
+const PLANET_SAMPLE_SEC := 5.0
+const PLANET_HISTORY_SIZE := 240
+## Comparaison pour reconnaître un phénomène : l'échantillon d'il y a PLANET_COMPARE_SAMPLES.
+const PLANET_COMPARE_SAMPLES := 12
+## Délai minimal (s) entre deux présentations d'espèces « ordinairement marquantes » (les espèces
+## conscientes et celles nées d'un geste du joueur passent toujours).
+const PRESENT_COOLDOWN := 25.0
+## Types d'événements qui font naître une espèce (tolérant : sous-chaînes).
+const BIRTH_TYPES := ["speciation", "spawn", "new_species", "radiation", "sapience", "seeded", "lazarus", "clade"]
+## Noms de signaux possibles pour la réincarnation (session Sauvegarde : à définir).
+## GameState.world_reborn(info) (contrat de la session Sauvegarde) d'abord ; les autres par tolérance.
+const REBIRTH_SIGNALS := ["world_reborn", "reincarnated", "reincarnation", "planet_reborn", "new_planet"]
+## Causes de la fin des temps reconnues dans un résumé libre (sous-chaînes) -> Worlds.ENDS.
+const END_CAUSES := {"sun": "sun", "soleil": "sun", "ocean": "oceans", "océan": "oceans", "player": "player",
+	"joueur": "player", "dieu": "player", "impact": "impact", "météor": "impact", "frozen": "frozen", "froid": "frozen",
+	"glac": "frozen", "ice": "frozen"}
 ## Lignes retenues par la mémoire anti-répétition (aucun texte narratif identique en deçà).
 const VARIETY_WINDOW := 200
 
@@ -78,6 +118,9 @@ var chronicle: Chronicle
 var lens: Divergence
 ## Mémoire anti-répétition partagée (bornée) : aucun texte identique à moins de VARIETY_WINDOW lignes.
 var variety: Variety
+var bestiary: Bestiary
+## Mondes passés et monde en cours (fin des temps, réincarnation).
+var worlds: Worlds
 ## Narration automatique des événements de GameState (désactivable par l'UI).
 var auto_narrate := true
 ## Chronique automatique de la parcelle (désactivable séparément).
@@ -101,6 +144,21 @@ var _next_ambient := 10.0
 var _ambient_rng := RandomNumberGenerator.new()
 ## Gestes divins déjà accomplis, du plus ancien au plus récent : [{type, year, species_id}].
 var _divine_history: Array[Dictionary] = []
+## Lignes prioritaires prêtes : [{text, meta, llm: {system, prompt, required}?}].
+var _priority: Array[Dictionary] = []
+## Phénomènes à expliquer, du plus récent au plus ancien (bornés).
+var _phenomena: Array[String] = []
+var _planet_history: Array[Dictionary] = []
+var _planet_clock := 0.0
+var _present_cooldown := 0.0
+var _seen_clades := {}
+## Espèces présentées (pour leur écrire une épitaphe), bornées.
+var _presented: Array[int] = []
+## Gestes du joueur par espèce (seed, bless, save, spawn_species), pour les épitaphes.
+var _deeds := {}
+var _sim_ref: WeakRef = null
+## La fin des temps a été racontée (le signal et l'événement peuvent arriver tous deux).
+var _ended := false
 ## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
 var _recent_events: Array[Dictionary] = []
 
@@ -113,9 +171,12 @@ func _ready() -> void:
 	chronicle = Chronicle.new()
 	lens = Divergence.new()
 	variety = Variety.new(VARIETY_WINDOW)
-	for gen in [chronicle, parcel_narrator, procedural]:
+	bestiary = Bestiary.new()
+	worlds = Worlds.new()
+	for gen in [chronicle, parcel_narrator, procedural, bestiary]:
 		gen.variety = variety
 	chronicle.inventor.variety = variety
+	chronicle.explainer.variety = variety
 	_ambient_rng.randomize()
 	client = LlmClient.new()
 	client.name = "LlmClient"
@@ -240,9 +301,13 @@ func _connect_game_state() -> void:
 		"parcel_updated": _on_parcel_updated,
 		"parcel_changed": _on_parcel_changed,
 	}
+	for sig in REBIRTH_SIGNALS:
+		links[sig] = _on_reincarnation
+	links["end_of_times"] = _on_end_of_times_signal
 	for sig in links:
 		if _game_state.has_signal(sig) and not _game_state.is_connected(sig, links[sig]):
 			_game_state.connect(sig, links[sig])
+	_sim_ref = weakref(_game_state.sim) if "sim" in _game_state and _game_state.sim != null else null
 	# GameState a déjà émis la première ère avant notre connexion : on ouvre la chronique.
 	var era := _current_era()
 	if era != "":
@@ -252,10 +317,24 @@ func _connect_game_state() -> void:
 
 
 func _on_event_occurred(event: Dictionary) -> void:
-	_note_event_type(str(event.get("type", "")))
-	if str(event.get("type", "")).begins_with("parcel_"):
+	var t := str(event.get("type", "")).to_lower()
+	_note_event_type(t)
+	if t.begins_with("parcel_"):
 		_on_parcel_event(event)
 		return
+	worlds.note_year(_current_year())
+	if t.contains("end_of_times") or t.contains("fin_des_temps"):
+		_on_end_of_times(event)
+		return
+	for p in Explainer.phenomena_for_event(event):
+		_queue_phenomenon(p)
+	var sid := int(event.get("species_id", -1))
+	if _is_birth(t) and sid >= 0:
+		if _on_species_born(sid, t):
+			return
+	elif t.contains("extinction") and sid >= 0:
+		if _on_species_extinct(sid, event):
+			return
 	if not auto_narrate:
 		return
 	if event.has("id") and _absorbed_ids.has(event["id"]):
@@ -276,6 +355,16 @@ func _on_era_changed(era: String) -> void:
 
 
 func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
+	var atype := str(action.get("type", ""))
+	var target_id := int(action.get("species_id", -1))
+	for c in consequences:
+		if c is Dictionary and target_id < 0 and int(c.get("species_id", -1)) >= 0:
+			target_id = int(c["species_id"])
+	if atype in ["seed", "bless", "save", "spawn_species"] and target_id >= 0:
+		_deeds[target_id] = atype
+	if atype == "seed":
+		_on_seed(action, consequences, target_id)
+		return
 	if not auto_narrate:
 		return
 	# Les conséquences arrivent aussi via event_occurred : on les fond dans ce récit.
@@ -296,7 +385,8 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 		"summary": "; ".join(summaries.slice(0, 3)), "action": action,
 	}
 	_note_event_type(str(action.get("type", "")))
-	_divine_history.append({"type": str(action.get("type", "")), "year": _current_year(), "species_id": int(target) if typeof(target) in [TYPE_INT, TYPE_FLOAT] else -1})
+	_divine_history.append({"type": str(action.get("type", "")), "year": _current_year(), "species_id": int(target) if typeof(target) in [TYPE_INT, TYPE_FLOAT] else -1,
+		"species_name": _species_name_for(target)})
 	if _divine_history.size() > 64:
 		_divine_history.pop_front()
 	_push(event, 1.1)  # le geste du joueur passe avant tout
@@ -465,6 +555,9 @@ func world_context() -> Dictionary:
 	var ctx := _base_context()
 	ctx["recent_events"] = recent
 	ctx["mode"] = lens.update(ctx)
+	ctx["planet"] = _planet_stats()
+	ctx["planet_history"] = _history_for_comment()
+	ctx["phenomena"] = _phenomena.duplicate()
 	return ctx
 
 
@@ -511,16 +604,18 @@ func _narrate_ambient() -> void:
 		return
 	_auto_in_flight = true
 	_cooldown = float(config.get_value("narrator", "min_interval_sec"))
+	if line.has("phenomenon"):
+		_phenomena.erase(str(line["phenomenon"]))
 	var on_text := func(text: String) -> void:
 		_auto_in_flight = false
 		var meta := {"source": "ambient", "kind": str(line.get("kind", ""))}
-		for k in ["fact_id", "species_id", "world_mode", "scene"]:
+		for k in ["fact_id", "species_id", "world_mode", "scene", "phenomenon", "stat"]:
 			if line.has(k):
 				meta[k] = line[k]
 		_emit_line(text, meta)
 	var fallback := func() -> String: return str(line["text"])
 	var kind := str(line.get("kind", ""))
-	var prompt := Prompts.build_invention_prompt(line, ctx) if kind in ["invention", "divergence"] else Prompts.build_ambient_prompt(line, ctx)
+	var prompt := Prompts.build_invention_prompt(line, ctx) if kind in ["invention", "divergence", "vision"] else Prompts.build_ambient_prompt(line, ctx)
 	_ask(Prompts.ambient_system(), prompt, fallback, on_text, 2, false, Epoch.current(ctx))
 	if kind == "invention":
 		_maybe_enrich(line, ctx)
@@ -563,6 +658,325 @@ func _emit_line(text: String, meta: Dictionary) -> void:
 	chronicle_line.emit(text, m)
 
 
+# ---------------------------------------------------------------------------
+# Le compagnon : planète, espèces, semences, fin des temps
+# ---------------------------------------------------------------------------
+
+## Statistiques de la planète, normalisées (Explainer.normalize). Source, dans l'ordre : planet_stats()
+## de la simulation ou de GameState (session Planète), sinon une estimation documentée à partir de la
+## simulation actuelle : oxygen (fraction du niveau actuel) x 0,21 ; ozone ~ oxygène / 10 % du niveau
+## actuel (la couche protège presque pleinement au-delà) ; boule de neige -> glaces 90 % ; espèces vivantes.
+func _planet_stats() -> Dictionary:
+	var sim: Object = _game_state.sim if _game_state != null and "sim" in _game_state else null
+	for src in [sim, _game_state]:
+		if src != null and src.has_method("planet_stats"):
+			var raw: Variant = src.planet_stats()
+			if raw is Dictionary:
+				var s := Explainer.normalize(_air_oxygen(raw))
+				if not s.has("year") and _current_year() != null:
+					s["year"] = float(_current_year())
+				return s
+	var out := {}
+	if sim == null:
+		return out
+	if "oxygen" in sim:
+		var pal := float(sim.get("oxygen"))
+		out["oxygen"] = pal * 0.21
+		out["ozone"] = clampf(pal / 0.1, 0.0, 1.0)
+	if "snowball" in sim and bool(sim.get("snowball")):
+		out["ice_cover"] = 0.9
+	if "year" in sim:
+		out["year"] = float(sim.get("year"))
+	var p := _parcel()
+	if p != null and "global_temperature_c" in p:
+		out["temperature_c"] = float(p.get("global_temperature_c"))
+	var alive := 0
+	for sp in _species_list():
+		if sp["alive"]:
+			alive += 1
+	out["biodiversity"] = float(alive)
+	return out
+
+
+## Contrat Planète : planet_stats().oxygen est une fraction du niveau ACTUEL (1 = 21 % de l'air) ;
+## Explainer attend une fraction de l'air. Un pourcentage (> 5) est laissé à normalize().
+static func _air_oxygen(raw: Dictionary) -> Dictionary:
+	var r := raw.duplicate()
+	if typeof(r.get("oxygen")) in [TYPE_INT, TYPE_FLOAT] and float(r["oxygen"]) <= 5.0:
+		r["oxygen"] = float(r["oxygen"]) * 0.21
+	return r
+
+
+## Historique des statistiques (planet_history() ou planet_history de la simulation, sinon nos échantillons).
+func _history_for_comment() -> Array:
+	var sim: Object = _game_state.sim if _game_state != null and "sim" in _game_state else null
+	var h: Variant = null
+	if sim != null and sim.has_method("planet_history"):
+		h = sim.planet_history()
+	elif sim != null and "planet_history" in sim:
+		h = sim.get("planet_history")
+	if h is Array and not (h as Array).is_empty():
+		var out := []
+		for rec in (h as Array).slice(maxi(0, (h as Array).size() - PLANET_HISTORY_SIZE)):
+			if rec is Dictionary:
+				out.append(Explainer.normalize(_air_oxygen(rec)))
+		return out
+	return _planet_history
+
+
+## Échantillonne la planète, reconnaît les phénomènes en cours, et repère une réincarnation.
+func _sample_planet() -> void:
+	if _game_state == null:
+		return
+	var sim: Object = _game_state.sim if "sim" in _game_state else null
+	if _sim_ref != null and sim != null and _sim_ref.get_ref() != sim:
+		# Nouvelle simulation (partie chargée ou planète nouvelle) : l'historique ne se compare plus.
+		_planet_history.clear()
+	_sim_ref = weakref(sim) if sim != null else null
+	var now := _planet_stats()
+	if now.is_empty():
+		return
+	_planet_history.append(now)
+	while _planet_history.size() > PLANET_HISTORY_SIZE:
+		_planet_history.pop_front()
+	var i := maxi(0, _planet_history.size() - 1 - PLANET_COMPARE_SAMPLES)
+	if i < _planet_history.size() - 1:
+		for p in Explainer.detect(_planet_history[i], now):
+			_queue_phenomenon(p)
+
+
+func _queue_phenomenon(p: String) -> void:
+	if p == "":
+		return
+	_phenomena.erase(p)
+	_phenomena.push_front(p)
+	while _phenomena.size() > 8:
+		_phenomena.pop_back()
+
+
+static func _is_birth(t: String) -> bool:
+	for b in BIRTH_TYPES:
+		if t.contains(b):
+			return true
+	return false
+
+
+## Une espèce naît : si elle est marquante, le narrateur la présente (true : l'événement est raconté).
+func _on_species_born(sid: int, t: String) -> bool:
+	var info: Variant = _species_info(sid)
+	if not (info is Dictionary):
+		return false
+	var sp: Dictionary = (info as Dictionary).duplicate()
+	# Description procédurale de la session Vie, si elle existe.
+	var sim: Object = _game_state.sim
+	if str(sp.get("description", "")) == "" and sim.has_method("describe_species"):
+		sp["description"] = str(sim.describe_species(sid))
+	if bool(sp.get("sown", false)) and not _deeds.has(sid):
+		_deeds[sid] = "seed"
+	var name := str(sp.get("name", ""))
+	var traits: Dictionary = sp.get("traits", {})
+	var clade := str(traits.get("clade", sp.get("clade", "")))
+	var player := _deeds.has(sid) or t.contains("seed") or t.contains("spawn")
+	var sapient := bool(sp.get("sapient", false)) or t.contains("sapience")
+	var new_clade := clade != "" and not _seen_clades.has(clade)
+	_seen_clades[clade] = true
+	var notable := player or sapient or ((new_clade or float(traits.get("size", 0.0)) >= 0.75) and _present_cooldown <= 0.0)
+	worlds.note_species(name, notable)
+	if sapient:
+		worlds.note_civilization(name)
+	if not notable or not auto_narrate:
+		return false
+	if not (player or sapient):
+		_present_cooldown = PRESENT_COOLDOWN
+	var ctx := _base_context()
+	var line := bestiary.present(_with_id(sp, sid), ctx)
+	_presented.append(sid)
+	while _presented.size() > 64:
+		_presented.pop_front()
+	_push_priority(str(line["text"]), {"source": "species", "kind": "presentation", "species_id": sid},
+		Prompts.species_system() if is_ai_available() else "",
+		Prompts.build_species_prompt(_with_id(sp, sid), ctx, str(line["text"]), "presentation") if is_ai_available() else "", name)
+	return true
+
+
+## Une espèce s'éteint : si elle comptait (présentée, consciente, grande, ou touchée par le joueur),
+## le narrateur écrit son épitaphe (true : l'événement est raconté).
+func _on_species_extinct(sid: int, event: Dictionary) -> bool:
+	var sp: Variant = _species_info(sid)
+	if not (sp is Dictionary):
+		return false
+	var traits: Dictionary = sp.get("traits", {})
+	if not (sid in _presented or _deeds.has(sid) or bool(sp.get("sapient", false)) or float(traits.get("size", 0.0)) >= 0.75):
+		return false
+	if not auto_narrate:
+		return true
+	var ctx := _base_context()
+	var summary := str(event.get("summary", "")).to_lower()
+	var cause := ""
+	if summary.contains("impact") or summary.contains("météor") or summary.contains("meteor"):
+		cause = "impact"
+	elif str(event.get("cause_type", "")) == "extinct" or summary.contains("dieu"):
+		cause = "divine"
+	var line := bestiary.epitaph(_with_id(sp, sid), ctx, cause, str(_deeds.get(sid, "")))
+	_push_priority(str(line["text"]), {"source": "species", "kind": "epitaph", "species_id": sid, "cause": str(line.get("cause", ""))},
+		Prompts.species_system() if is_ai_available() else "",
+		Prompts.build_species_prompt(_with_id(sp, sid), ctx, str(line["text"]), "epitaph") if is_ai_available() else "", str(sp.get("name", "")))
+	var c := str(line.get("cause", ""))
+	if c in ["climate", "predation", "competition"]:
+		_queue_phenomenon("decline_" + c)
+	return true
+
+
+## Semence du joueur : réussite ou échec, toujours avec la raison.
+func _on_seed(action: Dictionary, consequences: Array, target_id: int) -> void:
+	worlds.note_seed()
+	_divine_history.append({"type": "seed", "year": _current_year(), "species_id": target_id, "species_name": _species_name_for(target_id)})
+	if _divine_history.size() > 64:
+		_divine_history.pop_front()
+	for c in consequences:
+		if c is Dictionary and c.has("id"):
+			_absorbed_ids[c["id"]] = true
+	var r := Seeds.react(action, consequences, _planet_stats(), _base_context())
+	_push_priority(str(r["text"]), {"source": "seed", "kind": str(r["kind"]), "success": bool(r["success"]), "reason_code": str(r["reason_code"])})
+	seed_reaction.emit(str(r["kind"]), bool(r["success"]), str(r["reason_code"]), str(r["text"]))
+	if str(r.get("phenomenon", "")) != "":
+		_queue_phenomenon(str(r["phenomenon"]))
+	_since_line = maxf(_since_line, PRIORITY_GAP)
+
+
+## GameState.end_of_times(summary) : summary est la cause (texte libre) ou un bilan {cause|reason|summary}.
+func _on_end_of_times_signal(summary: Variant = null, _b: Variant = null) -> void:
+	_on_end_of_times(summary if summary is Dictionary else {"summary": str(summary) if summary != null else ""})
+
+
+## Cause de la fin des temps (clé de Worlds.ENDS) d'après l'événement ou le bilan.
+static func end_cause(event: Dictionary) -> String:
+	var raw := ("%s %s %s" % [event.get("cause", ""), event.get("reason", ""), event.get("summary", "")]).to_lower()
+	for k in END_CAUSES:
+		if raw.contains(k):
+			return END_CAUSES[k]
+	return ""
+
+
+## La fin des temps de cette planète (événement {type: "end_of_times", summary} ou signal) : une seule fois.
+func _on_end_of_times(event: Dictionary) -> void:
+	if _ended:
+		return
+	_ended = true
+	var text := worlds.end_of_times(end_cause(event), _current_year())
+	_priority.clear()
+	_pending.clear()
+	_parcel_pending.clear()
+	_emit_line(text, {"source": "world", "kind": "end_of_times"})
+	world_ended.emit(text)
+
+
+## Réincarnation (signal de la session Sauvegarde, ou nouvelle simulation) : arguments facultatifs,
+## le premier peut décrire la nouvelle planète {size, ocean_fraction, star, …}.
+func _on_reincarnation(a: Variant = null, _b: Variant = null, _c: Variant = null) -> void:
+	_ended = false
+	if not (worlds.current.get("species_born", 0) == 0 and worlds.current.get("first_year") == null):
+		# Le monde précédent n'a pas eu de fin des temps racontée : on le range quand même.
+		worlds.remember(worlds.current)
+		worlds.current = Worlds._blank()
+	var planet: Dictionary = a if a is Dictionary else {}
+	var text := worlds.reincarnation(planet)
+	_priority.clear()
+	_pending.clear()
+	_parcel_pending.clear()
+	_phenomena.clear()
+	_planet_history.clear()
+	_seen_clades.clear()
+	_presented.clear()
+	_deeds.clear()
+	parcel_narrator.reset(ParcelNarrator.snapshot(_parcel()))
+	_emit_line(text, {"source": "world", "kind": "reincarnation"})
+	world_reborn.emit(text)
+
+
+## Mémoire du narrateur pour la sauvegarde (contrat de la session Sauvegarde) : mondes passés, cultures
+## inventées, gestes de Dieu, espèces présentées. Que des types simples (pas de Callable ni de Node).
+func save_state() -> Dictionary:
+	return {"worlds": worlds.snapshot(), "fallen": chronicle.inventor.fallen.duplicate(true),
+		"archive": chronicle.inventor.archive.duplicate(true), "forgotten": chronicle.inventor.forgotten,
+		"divine": _divine_history.duplicate(true), "deeds": _deeds.duplicate(), "presented": _presented.duplicate(),
+		"clades": _seen_clades.keys(), "last_era": _last_era, "ended": _ended}
+
+
+func load_state(data: Dictionary) -> void:
+	if data.get("worlds") is Dictionary:
+		worlds.restore(data["worlds"])
+	_divine_history.clear()
+	for d in data.get("divine", []):
+		if d is Dictionary:
+			_divine_history.append(d)
+	_deeds.clear()
+	var deeds: Variant = data.get("deeds", {})
+	if deeds is Dictionary:
+		for k in deeds:
+			_deeds[int(k)] = str(deeds[k])
+	_presented.clear()
+	for i in data.get("presented", []):
+		_presented.append(int(i))
+	_seen_clades.clear()
+	for c in data.get("clades", []):
+		_seen_clades[str(c)] = true
+	_last_era = str(data.get("last_era", _last_era))
+	_ended = bool(data.get("ended", false))
+	_planet_history.clear()
+	var inv := chronicle.inventor
+	inv.fallen.clear()
+	for f in data.get("fallen", []):
+		if f is Dictionary:
+			inv.fallen.append(f)
+	inv.archive.clear()
+	for f in data.get("archive", []):
+		if f is Dictionary:
+			inv.archive.append(f)
+	inv.forgotten = int(data.get("forgotten", 0))
+
+
+func _push_priority(text: String, meta: Dictionary, system := "", prompt := "", required := "") -> void:
+	if text.strip_edges() == "":
+		return
+	var item := {"text": text, "meta": meta}
+	if system != "":
+		item["llm"] = {"system": system, "prompt": prompt, "required": required}
+	_priority.append(item)
+	while _priority.size() > PRIORITY_QUEUE_SIZE:
+		_priority.pop_front()
+
+
+func _emit_priority(item: Dictionary) -> void:
+	var meta: Dictionary = item["meta"]
+	var finish := func(text: String) -> void:
+		_emit_line(text, meta)
+		if text.strip_edges() == "":
+			return
+		match str(meta.get("kind", "")):
+			"presentation":
+				species_presented.emit(int(meta.get("species_id", -1)), text)
+			"epitaph":
+				epitaph_written.emit(int(meta.get("species_id", -1)), text)
+	if item.has("llm") and is_ai_available():
+		# L'IA locale enrichit le portrait en arrière-plan ; repli immédiat sur le texte procédural.
+		_auto_in_flight = true
+		var llm: Dictionary = item["llm"]
+		var on_text := func(text: String) -> void:
+			_auto_in_flight = false
+			finish.call(text)
+		_ask(str(llm["system"]), str(llm["prompt"]), func() -> String: return str(item["text"]), on_text, 3, false,
+			_current_epoch(), str(llm["required"]))
+	else:
+		finish.call(str(item["text"]))
+
+
+static func _with_id(sp: Dictionary, sid: int) -> Dictionary:
+	var d := sp.duplicate()
+	d["id"] = sid
+	return d
+
+
 func _parcel() -> Object:
 	if _game_state != null and "parcel" in _game_state:
 		return _game_state.parcel
@@ -597,6 +1011,15 @@ func _process(delta: float) -> void:
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
 	_world_cooldown = maxf(_world_cooldown - delta, 0.0)
+	_present_cooldown = maxf(_present_cooldown - delta, 0.0)
+	_planet_clock += delta
+	if _planet_clock >= PLANET_SAMPLE_SEC:
+		_planet_clock = 0.0
+		_sample_planet()
+	# Présentations, épitaphes, semences, fin des temps : elles passent avant le reste, à leur rythme.
+	if not _priority.is_empty() and not _auto_in_flight and _since_line >= PRIORITY_GAP:
+		_emit_priority(_priority.pop_front())
+		return
 	if _auto_in_flight or _cooldown > 0.0:
 		return
 	if not _parcel_pending.is_empty():
@@ -702,7 +1125,7 @@ func _request_narration(context: Dictionary, automatic: bool) -> void:
 ## Envoie au LLM ; en cas d'échec ou d'absence de serveur, utilise le générateur procédural.
 ## epoch >= 0 : le prompt reçoit l'époque et la liste des interdits, et une réponse anachronique est
 ## remplacée par le repli procédural.
-func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, max_sentences: int, priority: bool = true, epoch := -1) -> void:
+func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, max_sentences: int, priority: bool = true, epoch := -1, required := "") -> void:
 	if client == null or not (client.is_available() or client.detecting):
 		_emit_deferred(emit, fallback.call())
 		return
@@ -711,6 +1134,8 @@ func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, ma
 		full_prompt += "\n" + Prompts.epoch_rules(epoch)
 	var on_reply := func(ok: bool, text: String) -> void:
 		var out: String = Prompts.vet_output(text, max_sentences, epoch) if ok else ""
+		if required != "" and not out.contains(required):
+			out = ""
 		if out == "":
 			out = fallback.call()
 		emit.call(out)

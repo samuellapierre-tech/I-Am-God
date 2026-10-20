@@ -125,6 +125,41 @@ static func build_invention_prompt(line: Dictionary, ctx: Dictionary) -> String:
 	return "\n".join(lines)
 
 
+## Portrait d'une espèce (présentation à sa naissance, ou épitaphe) : c'est là que l'IA locale apporte le
+## plus. Elle n'invente rien de contraire aux traits réels ; le nom de l'espèce doit figurer dans la réponse
+## (sinon repli sur le texte procédural).
+static func species_system() -> String:
+	return ("%s Tu es aussi le naturaliste de ce monde : quand une espèce naît, tu la présentes comme dans un "
+		+ "carnet de terrain ; quand elle s'éteint, tu écris son épitaphe. 2 ou 3 phrases, au présent pour une "
+		+ "naissance et au passé pour une épitaphe, à la première personne, en tutoyant Dieu. Décris ce qu'on "
+		+ "VOIT (taille comparée à une chose familière de l'époque, forme du corps, peau, couleurs, façon de se "
+		+ "déplacer) puis comment elle vit (ce qu'elle mange, où, avec qui, ce qu'elle craint), en déduisant tout "
+		+ "des traits fournis, sans rien leur contredire. Écris le nom de l'espèce tel quel. Aucun mot d'une "
+		+ "époque plus tardive que celle indiquée. %s") % [AiConfig.persona_text(), STYLE_RULES]
+
+
+## sp : l'espèce (traits réels, génome étendu éventuel) ; base : le texte procédural ; kind : "presentation" | "epitaph".
+static func build_species_prompt(sp: Dictionary, ctx: Dictionary, base: String, kind: String) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	var keep := {}
+	for k in ["name", "clade", "traits", "genome", "body_plan", "locomotion", "covering", "colors", "habitat",
+			"diet", "sapient", "tech_level", "born_year", "extinct_year", "parent", "description"]:
+		if sp.has(k) and not (typeof(sp[k]) == TYPE_FLOAT and is_nan(float(sp[k]))):
+			keep[k] = sp[k]
+	lines.append("Espèce (données réelles de la simulation, JSON) : " + JSON.stringify(_jsonable(keep)))
+	lines.append("Nom à écrire tel quel : %s." % str(sp.get("name", "")))
+	lines.append("Traits : size 0 = microscopique, 1 = géant ; intelligence 0..1 ; aggression 0..1 ; temp_opt 0 = froid polaire, 1 = chaleur tropicale ; diet = régime.")
+	lines.append("")
+	lines.append("Texte de base, juste mais sec (garde ses faits, enrichis-le) : " + base)
+	if kind == "epitaph":
+		lines.append("Écris son ÉPITAPHE : ce qu'elle a été, ce qui l'a fait disparaître (garde la cause donnée), et ce qui reste d'elle. 2 ou 3 phrases, au passé, sobres.")
+	else:
+		lines.append("PRÉSENTE-la à Dieu, qui la voit pour la première fois : apparence, puis mode de vie. 2 ou 3 phrases, au présent, concrètes et vivantes.")
+	return "
+".join(lines)
+
+
 ## Demande d'enrichissement (JSON) d'un peuple inventé ; la réponse passe par Inventor.enrich_from_llm.
 static func build_enrich_prompt(profile: Dictionary, ctx: Dictionary) -> String:
 	var lines := PackedStringArray()
