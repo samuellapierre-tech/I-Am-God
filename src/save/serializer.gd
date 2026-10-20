@@ -10,6 +10,8 @@ extends RefCounted
 ## - Adaptateurs par classe (src/save/adapters.gd) : champs à ne pas sauver (références partagées,
 ##   mesures de temps), arguments de construction, reconstruction après chargement.
 ## - RandomNumberGenerator : graine et état exacts (déterminisme strict).
+## - Un objet peut exposer prepare_save() (appelée avant lecture : finir un calcul sur un fil de
+##   travail) et post_load() (appelée après remplissage : rebrancher ce qui n'est pas sauvé).
 ##
 ## Format : {objects: [{cls: chemin du script, f: {champ: valeur encodée}}], root: valeur encodée}.
 ## Référence d'objet : {"\u0001o": indice}. Objet non sérialisable (Thread, Mutex, nœud…) :
@@ -67,6 +69,9 @@ class Encoder:
 		var key := o.get_instance_id()
 		if ids.has(key):
 			return {REF: ids[key]}
+		# L'objet termine ses calculs en cours avant d'être lu (ex. WorldSim.prepare_save()).
+		if o.has_method("prepare_save"):
+			o.prepare_save()
 		var index := objects.size()
 		ids[key] = index
 		objects.append({})

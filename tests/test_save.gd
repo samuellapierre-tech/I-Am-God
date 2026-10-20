@@ -242,3 +242,26 @@ func test_planet_params_are_tolerant() -> String:
 	if Planet.world_name(params.seed) != Planet.world_name(params.seed) or Planet.world_name(1) == Planet.world_name(2):
 		return "nom de planète non déterministe ou constant"
 	return ""
+
+
+const Stub := preload("res://tests/save_stub_world.gd")
+
+
+## Contrat de la Planète : paramètres dans le dictionnaire `planet` de _init ; crochets
+## prepare_save() avant lecture et post_load() après chargement.
+func test_planet_dict_and_hooks() -> String:
+	var params := {seed = 9, ocean_fraction = 0.6, axial_tilt = 20.0, star_luminosity = 1.1, plates = 7, autre = 1}
+	var w: RefCounted = Planet.make_world(params, Stub)
+	if w.seed != 9 or w.planet != {ocean_fraction = 0.6, axial_tilt = 20.0, star_luminosity = 1.1, plates = 7}:
+		return "dictionnaire planet : %s" % [w.planet]
+	if not "ocean_fraction" in Planet.supported_params(Stub):
+		return "paramètres reconnus : %s" % [Planet.supported_params(Stub)]
+	w._pending = 3.5
+	var data := Serializer.encode({w = w})
+	if w.prepared != 1 or w.data.size() != 1:
+		return "prepare_save non appelée avant lecture"
+	var res := Serializer.decode(data)
+	var w2: RefCounted = res.value.w
+	if w2.loaded != 1 or w2.data != w.data or w2.planet != w.planet or w2.seed != 9:
+		return "rechargement : post_load %d, data %s, planet %s" % [w2.loaded, w2.data, w2.planet]
+	return ""

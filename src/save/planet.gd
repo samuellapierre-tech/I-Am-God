@@ -1,10 +1,15 @@
 extends RefCounted
 ## Nouvelle planète pour la réincarnation : paramètres tirés au hasard (graine, part d'océans,
-## inclinaison, luminosité de l'étoile, nombre de plaques) et nom procédural. La planète est
-## construite en passant ces paramètres à WorldSim._init par nom (préfixe « p_ » accepté) ; ceux que
-## la simulation ne connaît pas encore sont ignorés, ou transmis à configure_planet() si elle l'expose.
+## inclinaison, luminosité de l'étoile, nombre de plaques) et nom procédural.
+## Construction tolérante : si WorldSim._init a un argument `planet` (dictionnaire, contrat de la
+## Planète : {ocean_fraction, axial_tilt, star_luminosity, plates}, clés absentes = DEFAULT_PLANET),
+## les paramètres y passent ; sinon chacun par nom (préfixe « p_ » accepté). Le reste va à
+## configure_planet() si elle existe.
 
 const WorldSim := preload("res://src/sim/world_sim.gd")
+
+## Paramètres de planète (dictionnaire `planet` de WorldSim._init).
+const PLANET_KEYS := ["ocean_fraction", "axial_tilt", "star_luminosity", "plates"]
 
 const SYLLABLES := ["ka", "lo", "mi", "ra", "the", "u", "va", "sel", "or", "ny", "da", "el", "is",
 	"zo", "ar", "qui", "nae", "to", "bri", "an"]
@@ -43,7 +48,14 @@ static func make_world(params: Dictionary, script: Script = WorldSim) -> RefCoun
 	var first_default := n - defaults.size()
 	for i in n:
 		var name := String(info.args[i].name).trim_prefix("p_")
-		if params.has(name):
+		if name == "planet":
+			var planet := {}
+			for k in PLANET_KEYS:
+				if params.has(k):
+					planet[k] = params[k]
+					used[k] = true
+			args.append(planet)
+		elif params.has(name):
 			args.append(params[name])
 			used[name] = true
 		elif i >= first_default:
@@ -67,5 +79,9 @@ static func supported_params(script: Script = WorldSim) -> Array[String]:
 	for m in script.get_script_method_list():
 		if m.name == "_init":
 			for a in m.args:
-				out.append(String(a.name).trim_prefix("p_"))
+				var name := String(a.name).trim_prefix("p_")
+				if name == "planet":
+					out.append_array(PLANET_KEYS)
+				else:
+					out.append(name)
 	return out

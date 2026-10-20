@@ -319,7 +319,9 @@ Adaptateurs (`src/save/adapters.gd`) :
   (grilles partagées, rebranchées par `bind_grids`), `Causality._by_id` (index reconstruit) ;
 - construction : arguments de `_init` passés **par nom** (préfixe `p_` accepté) depuis les champs
   sauvés ; `WorldSim` est construit avec `generate = false` ;
-- après chargement, un objet peut exposer `post_load()` (appelée si elle existe).
+- avant lecture, un objet peut exposer `prepare_save()` (ex. `WorldSim` termine son recalcul de
+  géographie sur fil de travail) ; après chargement, `post_load()` (ex. `WorldSim` rebranche
+  l'écosystème et remet à zéro `_geo_task`) — appelées si elles existent.
 
 Garantie testée (`tests/test_save*.gd`) : sauver, recharger et avancer de N pas donne **exactement**
 le même état, octet pour octet, que sans sauvegarde (prologue et `SCENARIO_CRETACEOUS`, monde seul ou
@@ -350,9 +352,10 @@ propre d'un fichier corrompu (`check`) ou d'une version future, migration des ve
 
 - `save_game(slot := "quick") -> String`, `load_game(slot := "auto") -> String` ("" = réussi).
 - `world_name`, `world_index` (n-ième vie du joueur), `planet_params`, `saver`, `pantheon`.
-- `new_world(seed, params := {})` : `params` (réincarnation) transmis à `WorldSim._init` par nom
-  (`ocean_fraction`, `axial_tilt`, `star_luminosity`, `plates`…) s'il les accepte, le reste à
-  `configure_planet(params)` s'il existe.
+- `new_world(seed, params := {})` : `params` (réincarnation) passés à `WorldSim._init` dans son
+  dictionnaire `planet` (`{ocean_fraction, axial_tilt, star_luminosity, plates}`, clés absentes =
+  `WorldSim.DEFAULT_PLANET`) ; à défaut d'argument `planet`, chacun par nom ; le reste à
+  `configure_planet(params)` s'il existe (`src/save/planet.gd`).
 - `adopt_world(sim, parcel, info)` : remplace le monde courant (reprise d'une sauvegarde).
 - `reincarnate(params := {}) -> info` : les espèces marquantes rejoignent le Panthéon, puis nouvelle
   planète vierge (paramètres tirés au hasard si `params` est vide).
