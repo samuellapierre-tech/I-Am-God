@@ -3,10 +3,10 @@ extends RefCounted
 ## (environ toutes les 8 à 15 s, voir narrator.gd). Fonctions pures : le contexte est fourni par l'appelant.
 ##
 ## ctx : {era, year, snapshot (ParcelNarrator.snapshot), species: [{id, name, clade, diet, size,
-##        intelligence, sapient, alive}], divine: [{type, year, species_id}], choices: [...], mode: {...}}
+##        intelligence, sapient, alive}], divine: [{type, year, species_id}], mode: {...}}
 ## ambient(ctx) -> {text, kind, source: "ambient", ...} ; kind : "fact" (fait réel, facts/), "scene"
 ## (état de la parcelle), "invention" (monde divergent, inventor.gd), "divergence" (la bascule, dite une fois),
-## "memory" (rappel d'un choix passé de Dieu, ctx.choices de game_master.gd).
+## "memory" (rappel d'un geste passé de Dieu : ctx.divine, [{type, year, species_id, species_name?}]).
 ## ctx.mode (divergence.gd) : {real, label, reasons, just_diverged…} ; absent = monde réel.
 ## ctx.recent_events : types d'événements récents (bruts et canoniques), pour choisir des faits à propos.
 ## Le narrateur parle à la première personne (« je ») et tutoie Dieu.
@@ -16,12 +16,11 @@ const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
 const Inventor := preload("res://src/ai/inventor.gd")
-const GameMaster := preload("res://src/ai/game_master.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 
 ## Part des phrases d'ambiance consacrées aux visions des âges inventés (monde divergent, futur sans fin).
 const VISION_SHARE := 0.3
-## Part des phrases d'ambiance qui rappellent un choix passé de Dieu (quand il y en a).
+## Part des phrases d'ambiance qui rappellent un geste passé de Dieu (quand il y en a).
 const MEMORY_SHARE := 0.12
 
 ## Part des phrases d'ambiance consacrées aux faits réels quand il y en a (le reste : scènes).
@@ -108,7 +107,7 @@ func ambient(ctx: Dictionary) -> Dictionary:
 	var mode: Dictionary = ctx.get("mode", {})
 	inventor.variety = variety
 	var real := bool(mode.get("real", true))
-	var past: Array = ctx.get("choices", [])
+	var past: Array = ctx.get("divine", [])
 	# Sortes de phrases à essayer, la préférée d'abord, puis les autres en repli.
 	var kinds := []
 	if bool(mode.get("just_diverged", false)):
@@ -139,7 +138,9 @@ func ambient(ctx: Dictionary) -> Dictionary:
 			"memory":
 				if not past.is_empty():
 					var c: Dictionary = past[rng.randi() % past.size()]
-					line = {"text": GameMaster.memory_line(c), "kind": "memory", "source": "ambient", "species_id": int(c.get("species_id", -1))}
+					var t := deed_line(c, ctx)
+					if t != "":
+						line = {"text": t, "kind": "memory", "source": "ambient", "species_id": int(c.get("species_id", -1))}
 			"fact":
 				line = fact(ctx)
 			"scene":
@@ -177,6 +178,33 @@ func fact(ctx: Dictionary) -> Dictionary:
 	while _recent_facts.size() > FACT_MEMORY:
 		_recent_facts.pop_front()
 	return {"text": str(f["t"]), "kind": "fact", "fact_id": str(f["id"]), "source": "ambient"}
+
+
+## Gestes du joueur dont le narrateur se souvient (« Je n'oublie rien : au Mésozoïque, tu avais béni… »).
+const DEEDS := {
+	"bless": "tu avais béni {cible}", "save": "tu avais protégé {cible}", "extinct": "tu avais effacé {cible}",
+	"uplift": "tu avais éveillé {cible}", "spawn_species": "tu avais façonné {cible}", "plague": "tu avais frappé {cible} d'un fléau",
+	"meteor": "tu avais lancé une pierre du ciel", "flood": "tu avais ouvert les eaux", "ice_age": "tu avais appelé le froid",
+	"seed": "tu avais semé la vie ici", "volcano": "tu avais réveillé un volcan", "drift": "tu avais poussé les continents",
+}
+
+
+## Un souvenir de geste divin ("" si le geste n'en laisse pas de mémorable).
+static func deed_line(deed: Dictionary, ctx: Dictionary = {}) -> String:
+	var t := str(deed.get("type", ""))
+	if not DEEDS.has(t):
+		return ""
+	var name := str(deed.get("species_name", ""))
+	if name == "":
+		for sp in ctx.get("species", []):
+			if int(sp.get("id", -2)) == int(deed.get("species_id", -1)):
+				name = str(sp.get("name", ""))
+	var cible: String = Procedural.species_phrase(name)["text"] if name != "" else "la vie de ce monde"
+	var past := str(DEEDS[t]).format({"cible": cible})
+	var when := ""
+	if typeof(deed.get("year")) in [TYPE_INT, TYPE_FLOAT]:
+		when = Procedural.format_year(float(deed["year"])) + ", "
+	return Procedural.polish(Procedural.contract(" Je n'oublie rien : %s%s." % [when, past]).strip_edges())
 
 
 ## Ce que l'on voit, pour choisir les faits : clades présents, biome, usage du sol, événements récents.

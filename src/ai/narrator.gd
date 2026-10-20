@@ -1,29 +1,20 @@
 extends Node
-## Autoload « Narrator » : le Chroniqueur des dieux.
+## Autoload « Narrator » : le compagnon (AiConfig.NARRATOR_NAME, docs/GENESE.md). Il raconte et explique ; il ne
+## propose rien, n'impose rien et n'est jamais un adversaire. La simulation décide, il raconte.
 ## Contrat : narrate(context) émet narration_ready(text) de façon asynchrone.
 ##
 ## - Écoute GameState (événements, changements d'ère, actions divines), regroupe et limite le débit
 ##   des événements importants, puis raconte en 1 à 3 phrases.
-## - Utilise un LLM local (Ollama / llama.cpp, accéléré GPU) s'il est disponible,
-##   sinon un narrateur procédural : le jeu reste entièrement jouable sans IA.
+## - Utilise un LLM local (Ollama / llama.cpp, accéléré GPU) s'il est disponible, en arrière-plan,
+##   sinon un narrateur procédural complet : le jeu reste entièrement jouable sans IA.
 ## - Oracle (ask_oracle), Prières (generate_prayer) et décisions de civilisation (suggest_civilization_decision).
-## - Chronique de la parcelle suivie (parcel_narrator.gd) : événements « parcel_* » et changements
-##   marquants de GameState.parcel, au plus une fois toutes les parcel_min_interval_sec secondes ;
-##   les grands moments mondiaux (importance >= WORLD_PRIORITY, gestes divins) passent avant.
-## - Maître du jeu (game_master.gd) : de temps en temps, un dilemme (dilemma_ready) que l'interface
-##   affiche ; resolve_dilemma(id, option) applique le choix. Le narrateur ne met jamais le jeu en pause.
-## - Stratégie (strategy_narrator.gd) : manches, menaces, pistes et épilogue relayés par GameState
-##   (round_started, threat_revealed, threat_resolved, tracks_changed, game_over), s'ils existent.
-## - Adversaire (adversary.gd) : il prend la parole sur les signaux samael_move / samael_learned (et
-##   en début de manche, quand une menace frappe ou est contrée) ; au plus un échange avec le narrateur
-##   par manche.
+## - Vue rapprochée (parcel_narrator.gd) : événements « parcel_* » et changements marquants du lieu
+##   regardé ; les grands moments mondiaux (importance >= WORLD_PRIORITY, gestes divins) passent avant.
 ## - Chaque ligne a un orateur : speech_ready(speaker, text), et meta.speaker dans chronicle_line.
 ## - Zéro anachronisme (epoch.gd) : prompts avec l'époque et la liste des interdits, sortie du LLM filtrée.
-## - Mode Éternité (GameState.strategy.mode == "eternity") : ton contemplatif, chapitres ouverts et fermés
-##   par un bilan apaisé, adversaire en rival doux (défis) ; une « fin de partie » n'est qu'une fin de chapitre.
 ## - Variété (variety.gd) : mémoire anti-répétition bornée partagée par tous les générateurs ; plutôt
 ##   que de redire une phrase récente, le narrateur se tait.
-## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance sur la parcelle.
+## - Fil continu (chronicle.gd) : sans événement depuis 8 à 15 s, une phrase d'ambiance.
 ##   Chaque ligne du fil, quelle qu'elle soit, est émise par narration_ready ET chronicle_line.
 
 signal narration_ready(text: String)
@@ -35,17 +26,12 @@ signal backend_changed(backend: String)
 ## Émis EN PLUS de narration_ready pour une narration de la parcelle (l'UI peut la styler à part ;
 ## moment : {kind, type, importance, land_use, species_name…}). Ne pas afficher les deux.
 signal parcel_narration_ready(text: String, moment: Dictionary)
-## Chaque ligne du fil écrit (événement du monde, de la parcelle, ambiance, dilemme…), dans l'ordre.
-## meta : {source: "world"|"parcel"|"ambient"|"dilemma"|"manual", kind, speaker, era, year, world_mode…}.
+## Chaque ligne du fil écrit (événement du monde, du lieu regardé, ambiance…), dans l'ordre.
+## meta : {source: "world"|"parcel"|"ambient"|"manual", kind, speaker, era, year, world_mode…}.
 signal chronicle_line(text: String, meta: Dictionary)
-## Qui parle : AiConfig.NARRATOR_NAME ou AiConfig.ADVERSARY_NAME. Émis pour CHAQUE ligne du fil, en plus de
+## Qui parle : AiConfig.NARRATOR_NAME. Émis pour CHAQUE ligne du fil, en plus de
 ## narration_ready (compatibilité, sans orateur) et de chronicle_line (meta.speaker contient le même nom).
 signal speech_ready(speaker: String, text: String)
-## Le narrateur pousse Dieu à choisir. dilemma : {id, title, text, options: [{label, hint, action}],
-## timeout_s, speaker, trigger, species_id} (voir game_master.gd). Jamais deux à la fois.
-signal dilemma_ready(dilemma: Dictionary)
-## Le dilemme est tranché (par Dieu ou, timed_out, par le délai : « Ne rien faire »).
-signal dilemma_closed(id: int, option_index: int, timed_out: bool)
 
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const LlmClient := preload("res://src/ai/llm_client.gd")
@@ -55,10 +41,7 @@ const DecisionSchema := preload("res://src/ai/decision_schema.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const Chronicle := preload("res://src/ai/chronicle.gd")
 const Divergence := preload("res://src/ai/divergence.gd")
-const GameMaster := preload("res://src/ai/game_master.gd")
-const StrategyNarrator := preload("res://src/ai/strategy_narrator.gd")
 const FactBase := preload("res://src/ai/facts/fact_base.gd")
-const Adversary := preload("res://src/ai/adversary.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 const Variety := preload("res://src/ai/variety.gd")
 
@@ -83,16 +66,8 @@ const PARCEL_RARE_MAX_AGE := 120.0
 const PARCEL_QUEUE_SIZE := 8
 ## Un événement compte comme « récent » pour le choix des faits pendant ce délai (s).
 const RECENT_EVENT_SEC := 60.0
-## Délai minimal (s) entre deux lignes de règles de la stratégie (manche, menaces, pistes).
-const STORY_GAP := 2.0
 ## Lignes retenues par la mémoire anti-répétition (aucun texte narratif identique en deçà).
 const VARIETY_WINDOW := 200
-## Lignes de règles (et répliques) en attente au plus.
-const STORY_QUEUE_SIZE := 10
-## Répliques de l'adversaire par manche, en plus de sa provocation d'ouverture.
-const ADVERSARY_LINES_PER_ROUND := 4
-## Types d'événements qui peuvent déclencher un dilemme (voir GameMaster.trigger_from_event).
-const DILEMMA_EVENT_TYPES := ["sapience", "war", "discovery", "volcanism", "parcel_land_use", "parcel_heat", "parcel_cold"]
 
 var config: AiConfig
 var client: LlmClient
@@ -101,9 +76,6 @@ var parcel_narrator: ParcelNarrator
 var chronicle: Chronicle
 ## Le monde suit-il l'histoire réelle ? (définitivement « divergent » une fois l'un des critères atteint)
 var lens: Divergence
-var game_master: GameMaster
-## La voix de l'adversaire (il ne décide rien : src/strategy/ joue pour lui).
-var adversary: Adversary
 ## Mémoire anti-répétition partagée (bornée) : aucun texte identique à moins de VARIETY_WINDOW lignes.
 var variety: Variety
 ## Narration automatique des événements de GameState (désactivable par l'UI).
@@ -129,23 +101,6 @@ var _next_ambient := 10.0
 var _ambient_rng := RandomNumberGenerator.new()
 ## Gestes divins déjà accomplis, du plus ancien au plus récent : [{type, year, species_id}].
 var _divine_history: Array[Dictionary] = []
-var _meteor_offered := false
-## Étape datée de l'histoire (prologue…) où se trouve le monde, pour proposer son grand choix.
-var _last_stage := ""
-## Lignes de la stratégie prêtes à dire (règles : jamais réécrites par le LLM) : [{text, meta}].
-var _story_pending: Array[Dictionary] = []
-var _announced_threats := {}
-var _tracks := {}
-var _game_over := false
-## Manche en cours, répliques de l'adversaire dans cette manche, et dernière manche avec un échange.
-var _round_index := 0
-var _adversary_lines := 0
-var _exchange_round := -1
-var _habits_said := {}
-## Mode Éternité : chapitre en cours, et ce qui s'y est passé (pour le bilan apaisé de fin de chapitre).
-var _chapter := 0
-var _chapter_stats := {}
-var _chapter_vitality := -1.0
 ## Types des événements récents (bruts et canoniques) avec leur heure : [{type, t}].
 var _recent_events: Array[Dictionary] = []
 
@@ -157,10 +112,8 @@ func _ready() -> void:
 	parcel_narrator = ParcelNarrator.new()
 	chronicle = Chronicle.new()
 	lens = Divergence.new()
-	game_master = GameMaster.new()
-	adversary = Adversary.new()
 	variety = Variety.new(VARIETY_WINDOW)
-	for gen in [chronicle, parcel_narrator, procedural, adversary]:
+	for gen in [chronicle, parcel_narrator, procedural]:
 		gen.variety = variety
 	chronicle.inventor.variety = variety
 	_ambient_rng.randomize()
@@ -210,12 +163,6 @@ func narrate_parcel(event: Dictionary = {}) -> void:
 		_request_parcel_narration(moment, false)
 
 
-## Tranche le dilemme `id` (dilemma_ready) : applique l'action de l'option via GameState.apply_divine_action
-## (sauf « Ne rien faire »), raconte le choix et le mémorise pour la suite du récit.
-func resolve_dilemma(id: int, option_index: int) -> void:
-	_resolve_dilemma(id, option_index, false)
-
-
 ## Oracle « et si ? » : transforme le résumé de WorldSim.project_future() en prophétie. Émet oracle_answered.
 func ask_oracle(question: String, projection: Dictionary) -> void:
 	_ask(
@@ -225,23 +172,16 @@ func ask_oracle(question: String, projection: Dictionary) -> void:
 
 
 ## Prière d'une espèce sapiente. species : {id, name, traits, population} ; situation : {type, era, enemy, summary, region}.
-## Émet prayer_received(species_id, text). Les choix proposés au joueur : get_prayer_choices().
+## Émet prayer_received(species_id, text).
 func generate_prayer(species: Dictionary, situation: Dictionary) -> void:
 	var sit := situation.duplicate()
 	if not sit.has("era"):
 		sit["era"] = _current_era()
 	var sid := int(species.get("id", sit.get("species_id", -1)))
-	if game_master != null:
-		game_master.consider(GameMaster.trigger_from_prayer(species, sit, _gm_context()))
 	_ask(
 		Prompts.PERSONA_PRIERE, Prompts.build_prayer_prompt(species, sit),
 		func() -> String: return procedural.prayer(species, sit),
 		func(text: String) -> void: prayer_received.emit(sid, text), 3, true, _current_epoch())
-
-
-## Choix moraux associés à une prière : [{label: String, action: Dictionary}] ({} = ne rien faire).
-func get_prayer_choices(species: Dictionary, situation: Dictionary) -> Array:
-	return Procedural.prayer_choices(species, situation)
 
 
 ## Crochet pour de futures décisions de civilisation pilotées par l'IA.
@@ -282,9 +222,6 @@ func _apply_narrator_config() -> void:
 	auto_narrate = config.get_value("narrator", "enabled")
 	auto_narrate_parcel = config.get_value("narrator", "parcel_enabled")
 	_next_ambient = _draw_ambient_delay()
-	game_master.min_interval = config.get_value("narrator", "dilemma_min_interval_sec")
-	game_master.timeout_s = config.get_value("narrator", "dilemma_timeout_sec")
-	game_master.meteor_delay = config.get_value("narrator", "dilemma_first_delay_sec")
 	parcel_narrator.heat_drift_c = config.get_value("narrator", "parcel_heat_drift_c")
 
 
@@ -302,15 +239,6 @@ func _connect_game_state() -> void:
 		"divine_action_applied": _on_divine_action_applied,
 		"parcel_updated": _on_parcel_updated,
 		"parcel_changed": _on_parcel_changed,
-		# Stratégie (src/strategy/) : ces signaux n'existent que si le module est fusionné.
-		"round_started": _on_round_started,
-		"threat_revealed": _on_threat_revealed,
-		"threat_resolved": _on_threat_resolved,
-		"tracks_changed": _on_tracks_changed,
-		"game_over": _on_game_over,
-		# Adversaire (src/strategy/) : ses coups et ce qu'il apprend de toi.
-		"samael_move": _on_samael_move,
-		"samael_learned": _on_samael_learned,
 	}
 	for sig in links:
 		if _game_state.has_signal(sig) and not _game_state.is_connected(sig, links[sig]):
@@ -325,8 +253,6 @@ func _connect_game_state() -> void:
 
 func _on_event_occurred(event: Dictionary) -> void:
 	_note_event_type(str(event.get("type", "")))
-	if str(event.get("type", "")) == "sapience":
-		_note_chapter("sapience")
 	if str(event.get("type", "")).begins_with("parcel_"):
 		_on_parcel_event(event)
 		return
@@ -335,7 +261,6 @@ func _on_event_occurred(event: Dictionary) -> void:
 	if event.has("id") and _absorbed_ids.has(event["id"]):
 		_absorbed_ids.erase(event["id"])
 		return
-	_consider_event(event)
 	var importance := event_importance(event)
 	if importance < float(config.get_value("narrator", "min_importance")):
 		return
@@ -388,29 +313,14 @@ func _on_divine_action_applied(action: Dictionary, consequences: Array) -> void:
 func _on_parcel_event(event: Dictionary) -> void:
 	# Même sans narration, le suivi reste à jour : rien ne déferle d'un coup à la réactivation.
 	var moment := parcel_narrator.on_event(_enrich_parcel_event(event), ParcelNarrator.snapshot(_parcel()))
-	if not moment.is_empty():
-		_consider_event(moment)
-		var lu := str(moment.get("land_use", ""))
-		var label: String = ParcelNarrator.LAND_USE_LABELS.get(lu, "")
-		if label == "" and _parcel() != null and "land_use_label" in _parcel():
-			label = str(_parcel().get("land_use_label")).to_lower()
-		_note_chapter(str(moment.get("kind", "")), label)
 	if auto_narrate and auto_narrate_parcel:
 		_push_parcel(moment)
 
 
 func _on_parcel_updated() -> void:
 	for moment in parcel_narrator.observe(ParcelNarrator.snapshot(_parcel())):
-		_consider_event(moment)
 		if auto_narrate and auto_narrate_parcel:
 			_push_parcel(moment)
-	# Alertes de la parcelle (ParcelSim.alerts : [{kind, species_id, severity, summary}]).
-	var p := _parcel()
-	if p != null and "alerts" in p and p.get("alerts") is Array and not (p.get("alerts") as Array).is_empty():
-		var ctx := _gm_context()
-		for alert in p.get("alerts"):
-			if alert is Dictionary:
-				game_master.consider(GameMaster.trigger_from_alert(alert, ctx))
 
 
 func _on_parcel_changed(_cell: Vector2i) -> void:
@@ -552,18 +462,17 @@ func world_context() -> Dictionary:
 	for e in _recent_events:
 		if _clock - float(e["t"]) <= RECENT_EVENT_SEC:
 			recent.append(e["type"])
-	var ctx := _gm_context()
+	var ctx := _base_context()
 	ctx["recent_events"] = recent
 	ctx["mode"] = lens.update(ctx)
 	return ctx
 
 
-## Contexte sans effet de bord (ni bascule réel/divergent) : ère, date, parcelle, espèces, gestes, choix.
-func _gm_context() -> Dictionary:
+## Contexte sans effet de bord (ni bascule réel/divergent) : ère, date, lieu regardé, espèces, gestes.
+func _base_context() -> Dictionary:
 	return {
 		"era": _current_era(), "year": _current_year(), "snapshot": ParcelNarrator.snapshot(_parcel()),
 		"species": _species_list(), "divine": _divine_history.duplicate(),
-		"choices": game_master.choices.duplicate() if game_master != null else [],
 	}
 
 
@@ -654,289 +563,6 @@ func _emit_line(text: String, meta: Dictionary) -> void:
 	chronicle_line.emit(text, m)
 
 
-# ---------------------------------------------------------------------------
-# Maître du jeu : dilemmes
-# ---------------------------------------------------------------------------
-
-func _consider_event(event: Dictionary) -> void:
-	if game_master == null or not bool(config.get_value("narrator", "dilemma_enabled")):
-		return
-	# Filtre bon marché avant de construire le contexte (la simulation émet beaucoup d'événements).
-	var t := str(event.get("type", ""))
-	if not t in DILEMMA_EVENT_TYPES or (t == "discovery" and not str(event.get("summary", "")).contains("IA ")):
-		return
-	var trig := GameMaster.trigger_from_event(event, _gm_context())
-	if not trig.is_empty():
-		game_master.consider(trig)
-
-
-func _tick_game_master(delta: float) -> void:
-	if game_master == null or _game_state == null or _game_over or not bool(config.get_value("narrator", "dilemma_enabled")):
-		return
-	# Entrée dans une étape du prologue : son grand choix (docs/STRATEGIE.md §1).
-	var stage := FactBase.stage_for(_current_era(), _current_year())
-	if stage != _last_stage:
-		_last_stage = stage
-		game_master.consider(GameMaster.stage_trigger(stage, _gm_context()))
-	if not _meteor_offered and _clock >= game_master.meteor_delay:
-		var ctx := _gm_context()
-		if GameMaster.meteor_due(ctx, _clock, game_master.meteor_delay):
-			game_master.consider(GameMaster.meteor_trigger(ctx))
-		_meteor_offered = true
-	var r := game_master.tick(delta)
-	if r.has("timeout"):
-		_resolve_dilemma(int(r["timeout"]["id"]), int(r["timeout"]["option_index"]), true)
-	elif r.has("open"):
-		_open_dilemma(r["open"])
-
-
-func _open_dilemma(trigger: Dictionary) -> void:
-	var ctx := _gm_context()
-	var d := game_master.open_dilemma(trigger, ctx)
-	if d.is_empty():
-		return
-	if not is_ai_available():
-		_show_dilemma.call_deferred(d)
-		return
-	# Le LLM ne rédige que titre, texte, libellés et indices ; options et actions restent celles des règles.
-	var on_reply := func(ok: bool, raw: String) -> void:
-		_show_dilemma(Prompts.merge_dilemma_text(d, raw, int(d.get("epoch", -1))) if ok else d)
-	client.request(Prompts.dilemma_system(), Prompts.build_dilemma_prompt(d, ctx) + "\n" + Prompts.epoch_rules(int(d.get("epoch", -1))), on_reply,
-		{"json": true, "max_tokens": 400, "temperature": 0.8, "priority": true})
-
-
-func _show_dilemma(d: Dictionary) -> void:
-	game_master.mark_shown(int(d["id"]))
-	dilemma_ready.emit(d)
-	_emit_line(str(d["text"]), {"source": "dilemma", "kind": str(d.get("trigger", "")), "dilemma_id": int(d["id"])})
-
-
-func _resolve_dilemma(id: int, option_index: int, timed_out: bool) -> void:
-	var d := game_master.active
-	if d.is_empty() or int(d["id"]) != id or option_index < 0 or option_index >= (d["options"] as Array).size():
-		return
-	# Répondre à un dilemme coûte une action de la manche (STRATEGIE.md §2) : sans budget, rien ne se fait.
-	var strategy := _strategy()
-	var no_budget := false
-	if not (d["options"][option_index]["action"] as Dictionary).is_empty() and strategy != null \
-			and strategy.has_method("can_act") and not strategy.can_act():
-		no_budget = true
-		option_index = GameMaster.nothing_index(d)
-	var r := game_master.resolve(id, option_index, timed_out, _gm_context())
-	if not bool(r.get("ok", false)):
-		return
-	var text := str(r["text"])
-	if no_budget:
-		text = "Tu n'as plus d'action dans cette manche : ton geste reste suspendu, et le monde suit sa pente."
-	_emit_line(text, {"source": "dilemma", "kind": "choice", "dilemma_id": id, "timed_out": timed_out, "no_budget": no_budget})
-	var action: Dictionary = r["action"]
-	if not action.is_empty() and _game_state != null and _game_state.has_method("apply_divine_action"):
-		if strategy != null and strategy.has_method("spend_action"):
-			# Le pouvoir choisi est une action comme une autre : il peut contrer une menace en attente.
-			strategy.spend_action(str(action.get("type", "dilemma")))
-		_game_state.apply_divine_action(action)
-	dilemma_closed.emit(id, option_index, timed_out)
-
-
-# ---------------------------------------------------------------------------
-# Stratégie : le narrateur raconte les règles (manches, menaces, pistes, fin)
-# ---------------------------------------------------------------------------
-
-func _strategy() -> Object:
-	if _game_state != null and "strategy" in _game_state:
-		return _game_state.strategy
-	return null
-
-
-func _push_story(text: String, kind: String, extra: Dictionary = {}) -> void:
-	if text == "":
-		return
-	# Deux cartes identiques qui frappent ensemble : une seule ligne.
-	for s in _story_pending:
-		if str(s["text"]) == text:
-			return
-	var meta := {"source": "strategy", "kind": kind}
-	meta.merge(extra, true)
-	_story_pending.append({"text": text, "meta": meta})
-	_trim_story()
-
-
-## File des règles trop longue : on oublie d'abord les lignes secondaires, jamais l'annonce de manche.
-func _trim_story() -> void:
-	while _story_pending.size() > STORY_QUEUE_SIZE:
-		var dropped := false
-		for i in _story_pending.size():
-			if str(_story_pending[i]["meta"].get("kind", "")) != "round":
-				_story_pending.remove_at(i)
-				dropped = true
-				break
-		if not dropped:
-			_story_pending.pop_front()
-
-
-func _on_round_started(rd: Dictionary) -> void:
-	var actions := -1
-	var strategy := _strategy()
-	if strategy != null and "actions_per_round" in strategy:
-		actions = int(strategy.actions_per_round)
-	for t in rd.get("threats", []):
-		if t is Dictionary and t.has("id"):
-			_announced_threats[t["id"]] = true
-	var eternity := _is_eternity()
-	adversary.tone = "eternity" if eternity else "trial"
-	if eternity:
-		# Le narrateur ferme le chapitre précédent par un bilan apaisé, puis ouvre le suivant.
-		_close_chapter()
-		_chapter = int(rd.get("index", _chapter + 1))
-		_push_story(StrategyNarrator.chapter_open(rd), "round", {"round": _chapter, "chapter": true})
-	else:
-		_push_story(StrategyNarrator.round_line(rd, actions), "round", {"round": int(rd.get("index", 0))})
-	_round_index = int(rd.get("index", _round_index + 1))
-	_adversary_lines = 0
-	_habits_said = {}
-	# L'adversaire provoque en début de manche ; parfois, le narrateur lui répond (un échange par manche).
-	var epoch := _current_epoch()
-	var ctx := _gm_context()
-	if _exchange_round != _round_index and adversary.wants_exchange(_round_index):
-		_exchange_round = _round_index
-		if _round_index % 2 == 1:
-			# L'adversaire répond directement à l'annonce du narrateur.
-			_push_adversary(adversary.exchange_line(true, epoch), epoch, true)
-		else:
-			_push_adversary(adversary.round_taunt(rd, actions, epoch, ctx), epoch, true)
-			_push_adversary(adversary.exchange_line(false, epoch), epoch, true)
-	else:
-		# Épreuve : une provocation. Éternité : un défi facultatif.
-		_push_adversary(adversary.round_taunt(rd, actions, epoch, ctx), epoch, true)
-
-
-func _on_threat_revealed(threat: Dictionary) -> void:
-	if threat.has("id") and _announced_threats.has(threat["id"]):
-		return
-	if threat.has("id"):
-		_announced_threats[threat["id"]] = true
-	_push_story(StrategyNarrator.threat_line(threat, _current_year()), "threat", {"threat_id": threat.get("id", -1)})
-
-
-func _on_threat_resolved(threat: Dictionary, countered: bool) -> void:
-	var target: Variant = threat.get("target", {})
-	var sid := int(target.get("species_id", -1)) if target is Dictionary else -1
-	_push_story(StrategyNarrator.resolved_line(threat, countered, _species_name_for(sid)), "threat_countered" if countered else "threat_struck",
-		{"threat_id": threat.get("id", -1)})
-	var epoch := _current_epoch()
-	if countered:
-		_push_adversary(adversary.spite_line(threat, epoch), epoch)
-	elif _game_state == null or not _game_state.has_signal("samael_move"):
-		# Sans coups de la stratégie pour le dire, l'adversaire savoure quand même.
-		_push_adversary(adversary.strike_line(threat, epoch), epoch)
-
-
-## Un coup de l'adversaire (samael_move) : {kind: "reveal"|"strike"|"taunt_hook", threat, reason_code}.
-func _on_samael_move(move: Dictionary) -> void:
-	var epoch := _current_epoch()
-	var kind := str(move.get("kind", ""))
-	# Les révélations ordinaires sont déjà dans l'annonce de manche : il ne parle que si le coup a une raison à dire.
-	if kind == "reveal" and str(move.get("reason_code", "")) in ["", "random", "max_damage"]:
-		return
-	_push_adversary(adversary.move_line(move, epoch), epoch)
-
-
-## L'adversaire a remarqué une habitude du joueur (samael_learned) : {power|counter|kind, count?}.
-func _on_samael_learned(habit: Dictionary) -> void:
-	var power := str(habit.get("power", habit.get("counter", habit.get("kind", ""))))
-	if _habits_said.has(power):
-		return
-	_habits_said[power] = true
-	var epoch := _current_epoch()
-	_push_adversary(adversary.habit_line(habit, epoch), epoch)
-
-
-## Une réplique de l'adversaire (ou du narrateur dans un échange) dans la file des règles.
-## Au plus ADVERSARY_LINES_PER_ROUND répliques par manche, hors annonce : pas de spam.
-func _push_adversary(line: Dictionary, epoch: int, always := false) -> void:
-	if line.is_empty() or (not always and _adversary_lines >= ADVERSARY_LINES_PER_ROUND):
-		return
-	if not always:
-		_adversary_lines += 1
-	var l := line.duplicate()
-	l["epoch"] = epoch
-	var speaker := str(line.get("speaker", AiConfig.ADVERSARY_NAME))
-	_story_pending.append({"text": str(line["text"]), "adversary": l,
-		"meta": {"source": "adversary" if speaker == AiConfig.ADVERSARY_NAME else "exchange", "kind": str(line.get("kind", "")),
-			"speaker": speaker, "reason": str(line.get("reason", ""))}})
-	_trim_story()
-
-
-func _on_tracks_changed(tracks: Dictionary) -> void:
-	# Le premier relevé sert de référence : il n'y a encore rien à commenter.
-	if _tracks.is_empty():
-		_tracks = tracks.duplicate(true)
-		return
-	var calm := _is_eternity()
-	for line in StrategyNarrator.tracks_lines(_tracks, tracks, calm):
-		_push_story(str(line), "tracks")
-		if calm and str(line).begins_with("Jalon atteint"):
-			_chapter_stats["works"] = _chapter_stats.get("works", []) + [str(line).trim_prefix("Jalon atteint : ").split(".")[0]]
-	_tracks = tracks.duplicate(true)
-
-
-func _on_game_over(victory: bool, reason: String) -> void:
-	if _is_eternity():
-		# Éternité : pas de fin de partie, seulement la fin d'un chapitre ; la vie repart.
-		_close_chapter()
-		_push_story("Ce chapitre se referme sur une perte. La vie, elle, repart déjà quelque part.", "chapter_end")
-		return
-	var memory := ""
-	for i in range(game_master.choices.size() - 1, -1, -1):
-		if not bool(game_master.choices[i].get("timed_out", false)):
-			memory = GameMaster.memory_line(game_master.choices[i])
-			break
-	_game_over = true
-	_story_pending.clear()
-	_pending.clear()
-	_parcel_pending.clear()
-	# L'épilogue passe tout de suite, avant toute autre ligne.
-	_emit_line(StrategyNarrator.epilogue(victory, reason, memory), {"source": "strategy", "kind": "epilogue", "victory": victory})
-
-
-# ---------------------------------------------------------------------------
-# Mode Éternité
-# ---------------------------------------------------------------------------
-
-## Mode Éternité ? (GameState.strategy.mode, lu sans planter si le champ n'existe pas encore)
-func _is_eternity() -> bool:
-	var s := _strategy()
-	return s != null and str(s.get("mode")) == "eternity"
-
-
-## Note ce qui arrive pendant le chapitre (pour le bilan apaisé).
-func _note_chapter(kind: String, label := "") -> void:
-	match kind:
-		"arrival":
-			_chapter_stats["arrivals"] = int(_chapter_stats.get("arrivals", 0)) + 1
-		"departure":
-			_chapter_stats["departures"] = int(_chapter_stats.get("departures", 0)) + 1
-		"extinction":
-			_chapter_stats["extinctions"] = int(_chapter_stats.get("extinctions", 0)) + 1
-		"sapience":
-			_chapter_stats["births"] = int(_chapter_stats.get("births", 0)) + 1
-		"land_use":
-			if label != "":
-				_chapter_stats["land_uses"] = (_chapter_stats.get("land_uses", []) + [label]).slice(-4)
-
-
-## Bilan du chapitre en cours (s'il y en a un), puis remise à zéro.
-func _close_chapter() -> void:
-	var vitality := float(_tracks.get("vitality", -1.0))
-	if _chapter > 0:
-		var stats := _chapter_stats.duplicate(true)
-		if _chapter_vitality >= 0.0 and vitality >= 0.0:
-			stats["vitality_delta"] = vitality - _chapter_vitality
-		_push_story(StrategyNarrator.chapter_close(_chapter, stats), "chapter_end", {"round": _chapter, "chapter": true})
-	_chapter_stats = {}
-	_chapter_vitality = vitality
-
-
 func _parcel() -> Object:
 	if _game_state != null and "parcel" in _game_state:
 		return _game_state.parcel
@@ -968,30 +594,10 @@ func _push(event: Dictionary, importance: float) -> void:
 func _process(delta: float) -> void:
 	_clock += delta
 	_since_line += delta
-	_tick_game_master(delta)
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_parcel_cooldown = maxf(_parcel_cooldown - delta, 0.0)
 	_world_cooldown = maxf(_world_cooldown - delta, 0.0)
-	# Les règles d'abord (manche, menaces, pistes), à leur propre rythme, plus serré que le reste.
-	if not _story_pending.is_empty() and not _auto_in_flight and _since_line >= STORY_GAP:
-		var s: Dictionary = _story_pending.pop_front()
-		_cooldown = maxf(_cooldown, STORY_GAP)
-		if s.has("adversary") and is_ai_available():
-			# Le LLM ne fait que reformuler la réplique procédurale (et retombe dessus s'il dérape).
-			_auto_in_flight = true
-			var meta: Dictionary = s["meta"]
-			var on_text := func(text: String) -> void:
-				_auto_in_flight = false
-				_emit_line(text, meta)
-			var system := Prompts.adversary_system() if str(meta.get("speaker", "")) == AiConfig.ADVERSARY_NAME else Prompts.ambient_system()
-			_ask(system, Prompts.build_adversary_prompt(s["adversary"], world_context()), func() -> String: return str(s["text"]),
-				on_text, 2, false, int(s["adversary"].get("epoch", -1)))
-		else:
-			_emit_line(str(s["text"]), s["meta"])
-		return
 	if _auto_in_flight or _cooldown > 0.0:
-		return
-	if _game_over:
 		return
 	if not _parcel_pending.is_empty():
 		_parcel_pending = expire_parcel_moments(_parcel_pending, _clock)
@@ -1103,8 +709,6 @@ func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, ma
 	var full_prompt := prompt
 	if epoch >= 0:
 		full_prompt += "\n" + Prompts.epoch_rules(epoch)
-	if _is_eternity():
-		full_prompt += "\n" + Prompts.ETERNITY_TONE
 	var on_reply := func(ok: bool, text: String) -> void:
 		var out: String = Prompts.vet_output(text, max_sentences, epoch) if ok else ""
 		if out == "":
@@ -1115,7 +719,7 @@ func _ask(system: String, prompt: String, fallback: Callable, emit: Callable, ma
 
 ## Époque effective du monde (niveau technologique réel de la civilisation de tête, sinon ère et date).
 func _current_epoch() -> int:
-	return Epoch.current(_gm_context())
+	return Epoch.current(_base_context())
 
 
 func _emit_deferred(emit: Callable, text: String) -> void:

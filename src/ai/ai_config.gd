@@ -5,7 +5,7 @@ extends RefCounted
 const DEFAULT_PATH := "user://ai_settings.cfg"
 
 ## Le narrateur est un personnage. Son nom et sa personnalité ne sont définis QU'ICI : prompts LLM,
-## gabarits procéduraux et dilemmes les lisent tous depuis ces constantes.
+## gabarits procéduraux et le fil les lisent tous depuis ces constantes.
 const NARRATOR_NAME := "Ézéchiel"
 const PERSONA := {
 	"name": NARRATOR_NAME,
@@ -15,27 +15,6 @@ const PERSONA := {
 	"memory": "Il se souvient de tous les choix de Dieu et les lui rappelle quand ils pèsent sur le présent.",
 	"future": "Quand le monde quitte l'histoire réelle de la Terre (ou dépasse notre présent), ses visions se troublent : il le dit, et avoue découvrir lui-même ce qui arrive.",
 }
-
-
-## L'adversaire, second personnage : l'accusateur, celui qui éprouve Dieu. Comme pour le narrateur,
-## son nom et sa personnalité ne sont définis QU'ICI. Il ne décide rien (src/strategy/ joue pour lui) :
-## il parle.
-const ADVERSARY_NAME := "Samaël"
-const ADVERSARY_PERSONA := {
-	"name": ADVERSARY_NAME,
-	"role": "l'accusateur, celui qui éprouve Dieu et joue contre lui la pioche des menaces",
-	"voice": "Il tutoie Dieu, froid et élégant, jamais grossier, toujours provocateur.",
-	"character": "Persuadé que le monde échouera, il savoure chaque catastrophe et cache mal son dépit quand on le contre.",
-	"memory": "Il remarque les habitudes de Dieu et les lui jette au visage.",
-	"limits": "Il ne décide rien et n'invente aucune règle ni aucune carte : il commente ce que la partie lui donne.",
-}
-
-
-## La persona de l'adversaire en une description, pour les prompts du LLM.
-static func adversary_text() -> String:
-	return "Tu es %s, %s. %s %s %s %s" % [
-		ADVERSARY_PERSONA["name"], ADVERSARY_PERSONA["role"], ADVERSARY_PERSONA["voice"],
-		ADVERSARY_PERSONA["character"], ADVERSARY_PERSONA["memory"], ADVERSARY_PERSONA["limits"]]
 
 
 ## La persona en une description, pour les prompts du LLM.
@@ -91,13 +70,6 @@ const DEFAULTS := {
 		"ambient_enabled": true,
 		"ambient_min_sec": 8.0,
 		"ambient_max_sec": 15.0,
-		## Maître du jeu : dilemmes proposés à Dieu (au plus un toutes les dilemma_min_interval_sec).
-		"dilemma_enabled": true,
-		"dilemma_min_interval_sec": 180.0,
-		## Délai de réponse ; au-delà, « Ne rien faire ».
-		"dilemma_timeout_sec": 45.0,
-		## Délai avant de proposer (ou non) le météore de la fin du Crétacé.
-		"dilemma_first_delay_sec": 5.0,
 	},
 }
 
@@ -206,8 +178,6 @@ func _sanitize(section: String, key: String, value: Variant) -> Variant:
 			out = clampf(out, 0.0, 600.0)
 		"ambient_min_sec", "ambient_max_sec":
 			out = clampf(out, 1.0, 600.0)
-		"dilemma_min_interval_sec", "dilemma_timeout_sec", "dilemma_first_delay_sec":
-			out = clampf(out, 1.0, 3600.0)
 		"parcel_heat_drift_c":
 			out = clampf(out, 0.5, 50.0)
 		"model", "ollama_url", "llamacpp_url", "keep_alive":

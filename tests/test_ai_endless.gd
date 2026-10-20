@@ -1,12 +1,10 @@
 extends RefCounted
-## Tests du mode Éternité, du futur sans fin, de la mémoire bornée et de la variété sur la durée.
+## Tests du futur sans fin, de la mémoire bornée et de la variété sur la durée.
 ## Mode repli uniquement : aucun LLM. Chaque test renvoie "" si OK, sinon un message.
 
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 const Variety := preload("res://src/ai/variety.gd")
-const Adversary := preload("res://src/ai/adversary.gd")
-const StrategyNarrator := preload("res://src/ai/strategy_narrator.gd")
 const Inventor := preload("res://src/ai/inventor.gd")
 const Chronicle := preload("res://src/ai/chronicle.gd")
 const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
@@ -38,62 +36,12 @@ func _ctx(era: String, year: float, species: Array, land_use := "wild", divergen
 		if bool(s.get("alive", true)):
 			fauna.append({"species_id": s["id"], "name": s["name"], "role": "sapient" if s["sapient"] else "herbivore",
 				"count": 5 + int(s["id"]) % 9, "trend": int(s["id"]) % 3 - 1, "clade": s["clade"]})
-	var ctx := {"era": era, "year": year, "species": species, "divine": [], "choices": [], "recent_events": [],
+	var ctx := {"era": era, "year": year, "species": species, "divine": [], "recent_events": [],
 		"snapshot": {"cell": CELL, "year": year, "biome": "Forêt tempérée", "land_use": land_use, "temperature_c": 17.0,
 			"global_temperature_c": 15.0, "structures": {}, "fauna": fauna}}
 	if divergent:
 		ctx["mode"] = {"real": false, "label": "divergent", "reasons": ["le monde a dépassé notre présent"]}
 	return ctx
-
-
-# --- Mode Éternité ------------------------------------------------------------------
-
-func test_eternite_adversaire_rival_doux() -> String:
-	var adv := Adversary.new(3)
-	adv.tone = "eternity"
-	var ctx := _ctx("Mésozoïque", -100_000_000.0, [_sp(1, "Hadrosauridés", "dinosaure", false)], "wild", false)
-	var seen_species := false
-	for i in 12:
-		var d := adv.round_taunt({"index": i, "threats": [{}]}, 4, Epoch.MESOZOIC, ctx)
-		var t := str(d["text"])
-		if not bool(d.get("challenge", false)) or not (t.contains("parie") or t.contains("défi") or t.contains("pari")):
-			return "un défi est attendu en début de chapitre : %s" % t
-		if t.contains("Hadrosauridés"):
-			seen_species = true
-			if t.contains("Hadrosauridés ne verra ") or t.contains("Hadrosauridés aura "):
-				return "accord faux : " + t
-	if not seen_species:
-		return "les défis devraient nommer les espèces de la parcelle"
-	for t in [adv.spite_line({"title": "Sécheresse"}, 10)["text"], adv.strike_line({"title": "Sécheresse"}, 10)["text"],
-			adv.move_line({"kind": "strike", "reason_code": "uncounterable", "threat": {"title": "Sécheresse"}}, 10)["text"]]:
-		for harsh in ["défaite", "t'échappe", "tomber", "pas assez d'actions"]:
-			if str(t).contains(harsh):
-				return "ton trop dur en Éternité : " + str(t)
-	return ""
-
-
-func test_eternite_chapitres_apaises() -> String:
-	var open := StrategyNarrator.chapter_open({"index": 4, "name": "Sortie des eaux", "threats": [{"title": "Sécheresse"}, {"title": "Épidémie"}]})
-	if not (open.begins_with("Chapitre 4 : Sortie des eaux.") and open.contains("Sécheresse et Épidémie") and open.contains("Rien ne presse")):
-		return "ouverture de chapitre : " + open
-	var close := StrategyNarrator.chapter_close(4, {"arrivals": 2, "extinctions": 1, "land_uses": ["une friche"], "vitality_delta": 0.1, "births": 1})
-	var n := _sentences(close)
-	if not close.begins_with("Fin du chapitre 4.") or not close.ends_with("Je tourne la page.") or n < 2 or n > 4:
-		return "bilan de chapitre (%d phrases) : %s" % [n, close]
-	for needle in ["pensée nouvelle", "2 espèces sont venues", "1 lignée s'est éteinte"]:
-		if not close.contains(needle):
-			return "bilan sans « %s » : %s" % [needle, close]
-	var quiet := StrategyNarrator.chapter_close(5, {})
-	if not quiet.contains("très bien ainsi"):
-		return "bilan d'un chapitre tranquille : " + quiet
-	var before := {"collapses": 5, "collapse_limit": 8, "vitality": 0.5, "works": {"life": false}}
-	var after := {"collapses": 7, "collapse_limit": 8, "vitality": 0.2, "works": {"life": true}}
-	for l in StrategyNarrator.tracks_lines(before, after, true):
-		if str(l).contains("t'échappe") or str(l).contains("sur 8"):
-			return "alarme en mode Éternité : %s" % l
-	if StrategyNarrator.tracks_lines(before, after, true).size() != 3:
-		return "pistes apaisées attendues : %s" % str(StrategyNarrator.tracks_lines(before, after, true))
-	return ""
 
 
 # --- Futur sans fin ------------------------------------------------------------------
@@ -225,7 +173,7 @@ func test_variete_memoire_et_rotation() -> String:
 	return ""
 
 
-## 10 000 narrations simulées (fil, parcelle, monde, adversaire) avec une mémoire partagée :
+## 10 000 narrations simulées (fil, parcelle, monde) avec une mémoire partagée :
 ## aucun texte identique à moins de N lignes d'écart, et le fil ne se tait pas trop.
 func test_aucune_repetition_sur_10000_narrations() -> String:
 	var variety := Variety.new(200)
@@ -235,8 +183,6 @@ func test_aucune_repetition_sur_10000_narrations() -> String:
 	pn.variety = variety
 	var gen := Procedural.new(23)
 	gen.variety = variety
-	var adv := Adversary.new(24)
-	adv.variety = variety
 	var contexts := [
 		_ctx("Mésozoïque", -80_000_000.0, [_sp(1, "Hadrosauridés", "dinosaure", false), _sp(2, "Tyrannosauridés", "dinosaure", false)], "wild", false),
 		_ctx("Cénozoïque", -20_000_000.0, [_sp(3, "Multituberculés", "mammifère", false), _sp(4, "Ornithurés", "oiseau", false)], "wild", false),
@@ -264,10 +210,7 @@ func test_aucune_repetition_sur_10000_narrations() -> String:
 				text = gen.narrate({"type": Procedural.EVENT_TYPES[(i / 5) % Procedural.EVENT_TYPES.size()], "era": ctx["era"],
 					"year": ctx["year"], "epoch": Epoch.current(ctx)})
 			4:
-				adv.tone = "eternity" if (i / 3000) % 2 == 1 else "trial"
-				var l := adv.move_line({"kind": ["reveal", "strike", "taunt_hook"][(i / 5) % 3], "reason_code": Adversary.REASON_CODES[(i / 15) % 8],
-					"threat": {"title": ["Sécheresse", "Glaciation", "Épidémie"][(i / 45) % 3]}}, Epoch.current(ctx))
-				text = str(l.get("text", ""))
+				text = str(chron.ambient(ctx).get("text", ""))
 		if text == "":
 			continue
 		var k := out.size()

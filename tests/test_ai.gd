@@ -103,9 +103,6 @@ func test_repli_oracle_et_priere() -> String:
 			var t := gen.prayer({"id": 1, "name": "Humains"}, {"type": sit, "era": era, "enemy": "les Orques"})
 			if t.length() < 20 or t.contains("{"):
 				return "prière invalide (%s / %s) : %s" % [era, sit, t]
-	var choices := Procedural.prayer_choices({"id": 1}, {"type": "war", "region": Vector2i(5, 5)})
-	if choices.size() != 3 or not (choices[0]["action"] is Dictionary) or choices[0]["action"].get("type") != "save":
-		return "choix de prière invalides : %s" % str(choices)
 	return ""
 
 
