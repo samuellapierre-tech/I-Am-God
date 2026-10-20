@@ -10,7 +10,7 @@ signal divine_action_applied(action: Dictionary, consequences: Array)
 signal parcel_updated
 ## Le joueur suit une nouvelle parcelle.
 signal parcel_changed(cell: Vector2i)
-## "globe" (planète 3D) ou "parcel" (le terrain suivi, plein écran).
+## "globe" (la planète 3D) ou "ground" (vue rapprochée du lieu suivi, scenes/parcel_view.tscn).
 signal view_mode_changed(mode: String)
 const WorldSim := preload("res://src/sim/world_sim.gd")
 const ParcelSim := preload("res://src/sim/parcel_sim.gd")
@@ -22,7 +22,8 @@ const DEFAULT_PARCEL := Vector2i(70, 40)
 
 var sim: WorldSim
 var parcel: ParcelSim
-var view_mode := "parcel"
+## Vue active : "globe" au lancement ; "ground" quand on est descendu au sol.
+var view_mode := "globe"
 var paused := false
 ## Années simulées par seconde réelle.
 var years_per_second := 1_000_000.0
@@ -110,7 +111,7 @@ func select_parcel(cell: Vector2i) -> void:
 
 
 func set_view_mode(mode: String) -> void:
-	if mode == view_mode or not mode in ["globe", "parcel"]:
+	if mode == view_mode or not mode in ["globe", "ground"]:
 		return
 	view_mode = mode
 	view_mode_changed.emit(mode)
