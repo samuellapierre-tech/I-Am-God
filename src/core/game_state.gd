@@ -69,6 +69,12 @@ var _parcel_timer := 0.0
 var _pending_events: Array = []
 
 
+## Fermeture : aucun calcul de la simulation ne doit survivre au monde qu'il lit.
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_WM_CLOSE_REQUEST, NOTIFICATION_EXIT_TREE, NOTIFICATION_PREDELETE] and sim != null:
+		sim.shutdown()
+
+
 func _ready() -> void:
 	_ensure_save_services()
 	new_world(randi())
@@ -87,6 +93,8 @@ func _ensure_save_services() -> void:
 ## Nouvelle planète. `params` (réincarnation) : ocean_fraction, axial_tilt, star_luminosity,
 ## plates… transmis à WorldSim par nom s'il les accepte (src/save/planet.gd).
 func new_world(seed: int, params := {}) -> void:
+	if sim != null:
+		sim.shutdown()
 	if params.is_empty():
 		sim = WorldSim.new(seed)
 	else:
