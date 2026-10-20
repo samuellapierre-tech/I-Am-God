@@ -14,7 +14,9 @@ extends RefCounted
 ## d'intelligence fonde une civilisation. Sans météore, les dinosaures peuvent y parvenir.
 ## Le météore de Chicxulub n'est PAS automatique : c'est au joueur (Dieu) de le lancer… ou non.
 ##
-## Prologue (scénario par défaut) : la partie commence à -3,8 Ga avec des microbes marins. Oxygène,
+## Genèse (scénario par défaut) : une planète vierge à -4 Ga — roche, océans, atmosphère primitive
+## (CO2, méthane, pas d'oxygène), aucune vie ; le joueur sème (action « seed »), la tectonique fait
+## dériver les continents (tectonics.gd). Prologue : départ à -3,8 Ga avec des microbes marins. Oxygène,
 ## climat (soleil jeune, méthane, CO2, Terre boule de neige), complexité du vivant et conquête des
 ## terres évoluent d'eux-mêmes ; les étapes (Eras.ARCHEAN .. Eras.GREAT_DYING) se déclenchent
 ## quand l'état du monde les atteint (_prologue_stage). Le scénario « cretaceous » démarre
@@ -25,6 +27,10 @@ const Species := preload("res://src/sim/species.gd")
 const WorldGen := preload("res://src/sim/world_gen.gd")
 const Causality := preload("res://src/sim/causality.gd")
 const Ecosystem := preload("res://src/sim/ecosystem.gd")
+const Tectonics := preload("res://src/sim/tectonics.gd")
+
+## La géographie (relief, biomes, côtes) a été recalculée : la carte re-téléverse ses textures.
+signal geography_changed(version: int)
 
 const WIDTH := 256
 const HEIGHT := 128
@@ -32,9 +38,37 @@ const HEIGHT := 128
 const ERAS := Eras.NAMES
 
 ## Scénarios de départ (troisième argument du constructeur).
+const SCENARIO_GENESIS := "genesis"
 const SCENARIO_PROLOGUE := "prologue"
 const SCENARIO_CRETACEOUS := "cretaceous"
+const GENESIS_START_YEAR := -4.0e9
 const PROLOGUE_START_YEAR := -3.8e9
+## Paramètres de planète par défaut (proches de la Terre) ; la réincarnation en tire d'autres.
+const DEFAULT_PLANET := {ocean_fraction = 0.64, axial_tilt = 23.4, star_luminosity = 1.0, plates = 10}
+## Tectonique : intervalle (années) et sous-pas minimaux entre deux recalculs de la géographie ;
+## le calcul tourne sur un fil de travail, rejoint GEO_JOIN_SUBSTEPS sous-pas plus tard.
+const GEO_INTERVAL := 2.0e6
+const GEO_JOIN_SUBSTEPS := 12
+## Retard maximal (années simulées) de la géographie : au-delà, le calcul est rejoint aussitôt
+## (les grands pas du temps profond ne laissent pas les plaques se traverser).
+const GEO_MAX_LAG := 6.0e6
+## Bruit de fond des fonds océaniques (relief des abysses).
+const OCEAN_NOISE := 0.08
+## Semences : densité de départ dans les régions visées.
+const SEED_POPULATION := 0.2
+## Ozone : temps de cicatrisation (unités d'ère) et dégâts des gestes et de l'industrie.
+const OZONE_DAMAGE_VOLCANO := 0.15
+const OZONE_DAMAGE_METEOR := 0.3
+## Soleil : luminosité relative par milliard d'années, et effet sur l'échelle de température
+## (direct, puis emballement de la vapeur d'eau au-delà de la luminosité actuelle).
+const SUN_BRIGHTENING_PER_GA := 0.087
+const SUN_TEMPERATURE_GAIN := 0.66
+const SUN_RUNAWAY_GAIN := 2.6
+## Évaporation des océans (luminosité relative) : début, fin.
+const OCEAN_LOSS := Vector2(1.2, 1.4)
+## Statistiques planétaires : un échantillon tous les PLANET_SAMPLE_STEPS pas idéaux, au plus N.
+const PLANET_SAMPLE_STEPS := 3.0
+const PLANET_HISTORY_SIZE := 512
 const CRETACEOUS_START_YEAR := -66.0e6
 
 const BIOME_NAMES := WorldGen.BIOME_NAMES
@@ -61,6 +95,8 @@ const KEY_EVENT_WEIGHT := {
 	"plague": 4, "golden_age": 4, "ice_age": 6, "deluge": 5, "invasion": 3, "radiation": 3,
 	"discovery": 2, "lazarus": 6, "uplift": 6, "volcanism": 3, "decline": 3,
 	"clade": 5, "snowball": 7, "thaw": 5, "traps": 8, "oxygen": 4,
+	"seeding": 7, "supercontinent": 6, "breakup": 6, "orogeny": 3, "vicariance": 4, "drift": 3,
+	"end_of_times": 10,
 }
 
 # --- Prologue : oxygène, climat, conquête des terres -----------------------------------------
@@ -180,7 +216,25 @@ var species := {}
 var moisture := PackedFloat32Array()    # 0 (aride) .. 1 (humide)
 var biome := PackedByteArray()          # indice dans BIOME_NAMES
 ## "prologue" (départ à -3,8 Ga, microbes) ou "cretaceous" (départ à -66 Ma, roster du Crétacé).
-var scenario := SCENARIO_PROLOGUE
+var scenario := SCENARIO_GENESIS
+## Paramètres de la planète (DEFAULT_PLANET complété par ceux passés au constructeur).
+var planet := {}
+## Plaque de chaque cellule et frontières (0 aucune, 1 divergente, 2 convergente, 3 coulissante).
+var plate_id := PackedInt32Array()
+var plate_boundary := PackedByteArray()
+## Incrémenté à chaque recalcul de la géographie (voir le signal geography_changed).
+var geography_version := 0
+## Part des terres dans la plus grande masse connexe (supercontinent si ≥ ~0,7).
+var supercontinent_fraction := 0.0
+## Couche d'ozone (0..1), luminosité du Soleil (1 = actuelle), habitabilité (0..1).
+var ozone := 1.0
+var sun_luminosity := 1.0
+var habitability := 1.0
+var ice_cover := 0.0
+## Fin des temps : la planète est stérile et inhabitable (événement end_of_times émis une fois).
+var end_of_times := false
+## Statistiques planétaires échantillonnées en temps simulé (≤ PLANET_HISTORY_SIZE).
+var planet_history: Array[Dictionary] = []
 ## Oxygène atmosphérique, en fraction du niveau actuel (0 à l'Archéen, ~1 au Mésozoïque).
 var oxygen := 1.0
 ## Complexité maximale du vivant (0..6, Species.COMPLEXITY_NAMES).
@@ -254,17 +308,38 @@ var _planet_cause := -1
 ## planète entière (les supervolcans n'y suffisent pas). Décroît comme _climate_anom.
 var _ice_push := 0.0
 var _meso_dt := 0.0
+var _tect: Tectonics = null
+var _temp_lat := PackedFloat32Array()
+var _moist_lat := PackedFloat32Array()
+var _ocean_noise := PackedFloat32Array()
+var _coast_dist := PackedFloat32Array()
+var _geo_task := -1
+var _geo_result := {}
+var _geo_substeps := 0
+var _next_geo := 0.0
+var _craters: Array[Dictionary] = []
+var _ozone_damage := 0.0
+var _evaporation := 0.0
+var _ext_years: Array[float] = []
+var _next_planet_sample := -INF
+var _last_geo_year := 0.0
 var _peak_complexity := 0.0
 var _lifeless_since := NAN
 var _had_civilization := false
 
 
-func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_PROLOGUE) -> void:
+## p_planet : ocean_fraction, axial_tilt (degrés), star_luminosity (1 = Soleil), plates (nombre).
+func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_GENESIS, p_planet := {}) -> void:
 	seed = p_seed
 	scenario = p_scenario
+	planet = DEFAULT_PLANET.duplicate()
+	planet.merge(p_planet, true)
 	var n := WIDTH * HEIGHT
-	for a in [elevation, temperature, population, tech, moisture, _base_temp]:
+	for a in [elevation, temperature, population, tech, moisture, _base_temp, _temp_lat, _moist_lat,
+			_ocean_noise, _coast_dist]:
 		a.resize(n)
+	plate_id.resize(n)
+	plate_boundary.resize(n)
 	biome.resize(n)
 	dominant_species.resize(n)
 	dominant_species.fill(-1)
@@ -274,7 +349,11 @@ func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_PROLOGUE) -> 
 	_eco = Ecosystem.new()
 	if not p_generate:
 		return
-	WorldGen.generate(seed, WIDTH, HEIGHT, elevation, _base_temp, moisture, biome)
+	WorldGen.generate(seed, WIDTH, HEIGHT, elevation, _base_temp, moisture, biome,
+		{land_fraction = 1.0 - float(planet.ocean_fraction), axial_tilt = float(planet.axial_tilt)},
+		_temp_lat, _moist_lat)
+	for i in n:
+		_ocean_noise[i] = clampf(-elevation[i] - 0.5, -1.0, 1.0) if elevation[i] < 0.0 else 0.0
 	_eco.bind_grids(self)
 	_eco.build_static()
 	_land_regions = 0
@@ -287,7 +366,26 @@ func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_PROLOGUE) -> 
 		if _eco.r_sea[r] > 0.0:
 			_sea_regions += 1
 	_sea_regions = maxi(_sea_regions, 1)
-	if scenario == SCENARIO_PROLOGUE:
+	if scenario == SCENARIO_GENESIS:
+		year = GENESIS_START_YEAR
+		_era_idx = Eras.ARCHEAN
+		oxygen = 0.0
+		max_complexity = 0.0
+		land_flora = 0.0
+		land_fauna = 0.0
+		_iron = 1.0
+		_sink = 1.0
+		_amniote_year = INF
+		_eco.explicit_flora = 1
+		var none: Array[Dictionary] = []
+		_climate_step(0.0, none)
+		_update_sea_level(0.0)
+		_tect = Tectonics.new()
+		_tect.setup(seed, elevation, int(planet.plates), year)
+		_last_geo_year = year
+		_apply_geography(_geo_work(_tect.snapshot(), sea_level, []), none)
+		_next_geo = year + GEO_INTERVAL
+	elif scenario == SCENARIO_PROLOGUE:
 		year = PROLOGUE_START_YEAR
 		_era_idx = Eras.ARCHEAN
 		oxygen = 0.0
@@ -309,8 +407,11 @@ func _init(p_seed: int, p_generate := true, p_scenario := SCENARIO_PROLOGUE) -> 
 		_dino_ruled = true
 		_seed_roster()
 	era_years[_era_idx] = year
-	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED)
+	var none0: Array[Dictionary] = []
+	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED, _complex_room(), _land_room())
 	_refresh_view()
+	_update_planet_state(0.0, none0)
+	_record_planet()
 
 
 # =============================================================================================
@@ -373,6 +474,8 @@ func apply_divine_action(action: Dictionary) -> Array[Dictionary]:
 		"volcano": _act_volcano(a, root, out)
 		"oxygenate": _act_oxygenate(a, root, out)
 		"soothe": _act_soothe(a, root, out)
+		"seed": _act_seed(a, action, root, out)
+		"drift": _act_drift(a, action, root, out)
 		_: root.summary = "Dieu fait un geste que le monde ne comprend pas (%s)" % type
 	_refresh_view(out)
 	_update_era(out)
@@ -411,9 +514,26 @@ func fork() -> RefCounted:
 	for prop in ["scenario", "oxygen", "max_complexity", "land_flora", "land_fauna", "snowball",
 			"_iron", "_sink", "_co2", "_proto", "_methane", "_trap_clock", "_great_dying_year",
 			"_amniote_year", "_dino_ruled", "_land_regions", "_sea_regions", "_planet_cause", "_ice_push", "_meso_dt", "endless", "sea_level", "cycles", "rebirths",
-			"_peak_complexity", "_lifeless_since", "_had_civilization"]:
+			"_peak_complexity", "_lifeless_since", "_had_civilization", "geography_version",
+			"supercontinent_fraction", "ozone", "sun_luminosity", "habitability", "ice_cover",
+			"end_of_times", "_geo_substeps", "_next_geo", "_ozone_damage", "_evaporation",
+			"_next_planet_sample", "_last_geo_year"]:
 		f.set(prop, get(prop))
 	f.era_years = era_years.duplicate()
+	f.planet = planet.duplicate()
+	for prop in ["plate_id", "plate_boundary", "_temp_lat", "_moist_lat", "_ocean_noise", "_coast_dist"]:
+		f.set(prop, get(prop).duplicate())
+	f._craters = _craters.duplicate(true)
+	f._ext_years = _ext_years.duplicate()
+	f.planet_history = planet_history.duplicate(true)
+	if _tect != null:
+		# Le calcul en cours est terminé (pur) avant la copie : les deux mondes le rejoindront au même sous-pas.
+		if _geo_task >= 0:
+			WorkerThreadPool.wait_for_task_completion(_geo_task)
+			_geo_task = -2
+		f._tect = _tect.copy()
+		f._geo_result = _geo_result.duplicate(true)
+		f._geo_task = _geo_task
 	f._recent_ext = _recent_ext.duplicate()
 	f._groups = _groups.duplicate()
 	f._rule_ready = _rule_ready.duplicate()
@@ -473,12 +593,110 @@ func set_endless(on: bool) -> void:
 	endless = on
 
 
+## Sauvegarde : à appeler avant de lire l'état par réflexion. Termine le recalcul de géographie en
+## cours (il reste à appliquer, comme sans sauvegarde : son résultat est dans _geo_result).
+func prepare_save() -> void:
+	if _geo_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_geo_task)
+		_geo_task = -2
+
+
+## Après un chargement par réflexion : rebranche les grilles partagées de l'écosystème et oublie
+## l'identifiant de tâche (volatil).
+func post_load() -> void:
+	_eco.bind_grids(self)
+	if _geo_task != -1:
+		_geo_task = -2 if not _geo_result.is_empty() else -1
+
+
+## Statistiques planétaires pour l'interface (lecture seule).
+func planet_stats() -> Dictionary:
+	var biomass := 0.0
+	for id in _alive:
+		biomass += float(species[id].population)
+	var window := Eras.time_unit(_era_idx) * 5.0
+	var recent := 0
+	for y in _ext_years:
+		if year - y <= window:
+			recent += 1
+	return {
+		year = year, global_temperature_c = global_temperature_c(), ozone = ozone, oxygen = oxygen,
+		co2 = co2_ppm(), methane = methane_ppm(), sea_level = sea_level, sea_level_m = sea_level * 6000.0,
+		ice_cover = ice_cover, biomass = biomass, biodiversity = _alive.size(),
+		recent_extinctions = recent, sun_luminosity = sun_luminosity, habitability = habitability,
+		supercontinent_fraction = supercontinent_fraction,
+	}
+
+
+## Température moyenne (°C) de la grille (échantillonnée).
+func global_temperature_c() -> float:
+	var s := 0.0
+	var k := 0
+	for i in range(0, temperature.size(), 37):
+		s += temperature[i]
+		k += 1
+	return -30.0 + 75.0 * s / maxf(1.0, k)
+
+
+## Effet de serre exprimé en concentrations (ordres de grandeur plausibles, pour l'affichage).
+func co2_ppm() -> float:
+	return 280.0 * pow(2.0, clampf(_co2, -0.15, 0.5) / 0.03) if _deep_time() else 280.0
+
+
+func methane_ppm() -> float:
+	if not _deep_time():
+		return 0.7
+	var ch4 := METHANE_MAX * maxf(_methane, 0.6 * smoothstep(0.1, 0.25, _sink) * _life_present()) * (1.0 - smoothstep(0.03, 0.08, oxygen))
+	return minf(0.7 * pow(2.0, ch4 / 0.02), 5000.0)
+
+
+## Ancre de croûte d'une cellule : la parcelle la suit quand les plaques bougent (anchor_cell).
+func make_anchor(cell: Vector2i) -> Dictionary:
+	var c := Vector2i(posmod(cell.x, WIDTH), clampi(cell.y, 0, HEIGHT - 1))
+	if _tect == null:
+		return {cell = c}
+	return _tect.make_anchor(c, plate_id[c.y * WIDTH + c.x])
+
+
+func anchor_cell(anchor: Dictionary) -> Vector2i:
+	if _tect == null or not anchor.has("plate"):
+		return anchor.get("cell", Vector2i.ZERO)
+	return _tect.anchor_cell(anchor)
+
+
+## Où se trouve, `years` années plus tard au rythme actuel des plaques, la croûte qui est en `cell` ?
+func track_cell(cell: Vector2i, years: float) -> Vector2i:
+	if _tect == null:
+		return cell
+	var a := make_anchor(cell)
+	var k: int = a.plate
+	var dm := years / 1.0e6
+	var p := _tect.plate_position(k, float(a.ox), float(a.oy)) + Vector2(_tect.p_vx[k], _tect.p_vy[k]) * dm
+	return Vector2i(posmod(int(round(p.x)), WIDTH), clampi(int(round(p.y)), 0, HEIGHT - 1))
+
+
+## Profondeur d'eau (unités d'altitude, > 0 sous la mer) d'une cellule, niveau marin compris.
+func water_depth(i: int) -> float:
+	return -elevation[i] if _tect != null else sea_level - elevation[i]
+
+
+## Altitude de la croûte au-dessus du niveau marin de référence (0), quel que soit le niveau actuel.
+func crust_elevation(i: int) -> float:
+	return elevation[i] + (sea_level if _tect != null else 0.0)
+
+
+func tectonics_phase() -> String:
+	return _tect.phase if _tect != null else ""
+
+
 ## Tailles des structures qui croissent avec la partie (mémoire bornée).
 func memory_report() -> Dictionary:
 	var r: Dictionary = causal_log.size_report()
 	r.species_records = species.size()
 	r.alive = _alive.size()
 	r.runtime_records = _rt.size()
+	r.planet_history = planet_history.size()
+	r.craters = _craters.size()
 	return r
 
 
@@ -773,6 +991,18 @@ func _refresh_species(id: int) -> void:
 # Pas de simulation
 # =============================================================================================
 
+## Luminosité relative du Soleil (1 = aujourd'hui) : ~0,65 à -4 Ga, +8,7 % par milliard d'années.
+func _luminosity() -> float:
+	return float(planet.get("star_luminosity", 1.0)) * (1.0 + SUN_BRIGHTENING_PER_GA * year / 1.0e9)
+
+
+## Effet du Soleil sur l'échelle de température : direct, et emballement au-delà de la
+## luminosité actuelle (vapeur d'eau). Vaut -0,22 à -3,8 Ga (soleil jeune et pâle).
+func _sun_term() -> float:
+	var dl := _luminosity() - 1.0
+	return SUN_TEMPERATURE_GAIN * dl + SUN_RUNAWAY_GAIN * maxf(0.0, dl)
+
+
 func _global_offset() -> float:
 	# Refroidissement du Cénozoïque (+0.06 au Crétacé -> 0 à -3 Ma) + réchauffement industriel.
 	var baseline := clampf((-3.0e6 - year) / 63.0e6, 0.0, 1.0) * 0.06
@@ -784,19 +1014,33 @@ func _global_offset() -> float:
 ## Le Soleil vieillit : après l'an 0, la Terre se réchauffe (~0,3 de l'échelle de température par
 ## milliard d'années) ; vers +1 Ga, la vie complexe n'y tient plus.
 func _sun_warming() -> float:
-	return SUN_WARMING_PER_GA * clampf(year / 1.0e9, 0.0, 1.5)
+	if _deep_time():
+		return 0.0  # déjà compté dans le climat du temps profond (_climate_step)
+	return maxf(0.0, _sun_term())
 
 
 func _complex_room() -> float:
-	return 1.0 - smoothstep(SUN_COMPLEX_LIMIT.x, SUN_COMPLEX_LIMIT.y, _sun_warming())
+	return 1.0 - smoothstep(SUN_COMPLEX_LIMIT.x, SUN_COMPLEX_LIMIT.y, maxf(0.0, _sun_term()))
+
+
+## Part des terres encore habitables : couche d'ozone (UV) et eau (océans qui s'évaporent).
+func _land_room() -> float:
+	var shield := ozone if _deep_time() else 1.0
+	return shield * (1.0 - _evaporation)
 
 
 ## Niveau marin : émergence lente des continents puis climat (glaciations basses, serre haute).
 func _update_sea_level(dt: float) -> void:
-	var frac := clampf((LAND_EMERGENCE_YEAR - year) / (LAND_EMERGENCE_YEAR - PROLOGUE_START_YEAR), 0.0, 1.0)
+	var start := GENESIS_START_YEAR if scenario == SCENARIO_GENESIS else PROLOGUE_START_YEAR
+	var frac := clampf((LAND_EMERGENCE_YEAR - year) / (LAND_EMERGENCE_YEAR - start), 0.0, 1.0)
 	var freeboard := SEA_FREEBOARD * pow(frac, SEA_FREEBOARD_POWER)
 	var climate := clampf(_global_offset() - 0.06, -0.3, 0.15) * SEA_CLIMATE_GAIN
-	var target := freeboard + climate
+	# Tectonique : un supercontinent laisse peu de dorsales jeunes (mers basses), une dispersion
+	# beaucoup (mers hautes). Puis les océans s'évaporent sous le vieux Soleil.
+	var tect := 0.0
+	if _tect != null:
+		tect = -0.01 if _tect.phase == "supercontinent" else (0.008 if _tect.phase == "dispersal" else 0.0)
+	var target := freeboard + climate + tect - _evaporation * 1.2
 	sea_level = target if dt <= 0.0 else target + (sea_level - target) * exp(-dt / SEA_LEVEL_TAU)
 
 
@@ -805,13 +1049,16 @@ func _substep(dt: float, out: Array[Dictionary]) -> void:
 	year += dt
 	if year > _mig_until:
 		_mig_mult = 1.0
-	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED, _complex_room())
+	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED, _complex_room(), _land_room())
 	_eco.prepare(dt, _mig_mult)
 	_run_ecosystem()
 	_update_species_stats(out)
-	if scenario == SCENARIO_PROLOGUE:
+	if _deep_time():
 		_planet_step(dt, out)
 		_update_sea_level(dt)
+	_update_planet_state(dt, out)
+	if _tect != null:
+		_geo_step(dt, out)
 	_life_cycle_step(dt, out)
 	_evolve(dt, out)
 	_advance_civilisations(dt, out)
@@ -819,6 +1066,16 @@ func _substep(dt: float, out: Array[Dictionary]) -> void:
 	_process_scheduled(out)
 	_decay(dt)
 	_update_era(out)
+	_record_planet()
+
+
+## 1 s'il existe de la vie (les méthanogènes cachés des eaux profondes en font partie), 0 sinon.
+func _life_present() -> float:
+	return 0.0 if _alive.is_empty() else 1.0
+
+
+func _deep_time() -> bool:
+	return scenario != SCENARIO_CRETACEOUS
 
 
 func _run_ecosystem() -> void:
@@ -898,6 +1155,9 @@ func _extinguish(id: int, cause: int, out: Array[Dictionary], how := "") -> Dict
 	_eco.release_index(rt.idx)
 	_alive.erase(id)
 	_recent_ext.append(year)
+	_ext_years.append(year)
+	if _ext_years.size() > 256:
+		_ext_years = _ext_years.slice(_ext_years.size() - 256)
 	var text := "Extinction : les %s disparaissent" % sp.name
 	if how != "":
 		text += " (%s)" % how
@@ -913,7 +1173,7 @@ func _evolve(dt: float, out: Array[Dictionary]) -> void:
 	var n_alive := _alive.size()
 	var diversity := clampf(1.0 - float(n_alive) / DIVERSITY_TARGET, 0.0, 1.0)
 	var per_clade := {}
-	if scenario == SCENARIO_PROLOGUE:
+	if _deep_time():
 		diversity = clampf(1.0 - float(n_alive) / PROLOGUE_DIVERSITY, MIN_DIVERSITY, 1.0)
 		for id in _alive:
 			var key := _niche_key(species[id].traits)
@@ -978,7 +1238,7 @@ func _speciate(parent_id: int, out: Array[Dictionary], room := 1.0, crowd := {})
 	if not rule.is_empty():
 		Species.apply_transition(traits, rule, _rng)
 		child_name = _group_name(rule)
-	if scenario == SCENARIO_PROLOGUE:
+	if _deep_time():
 		traits.intelligence = lerpf(float(traits.intelligence), BRAIN_BASELINE, BRAIN_RECALL)
 	traits.intelligence = minf(float(traits.intelligence), maxf(_brain_cap(traits), float(psp.traits.intelligence)))
 	if child_name == "":
@@ -1094,7 +1354,7 @@ func _brain_cap(t: Dictionary) -> float:
 
 ## 0..1 : maturité des cerveaux d'amniotes (1 dans le scénario du Crétacé).
 func _brain_maturity() -> float:
-	if scenario != SCENARIO_PROLOGUE:
+	if not _deep_time():
 		return 1.0
 	var m := clampf((year - _amniote_year) / BRAIN_YEARS, 0.0, 1.0)
 	return m * m * m
@@ -1267,6 +1527,340 @@ func _exodus(id: int, out: Array[Dictionary]) -> void:
 	_planet_cause = ev.id
 
 
+## Ozone, glaces, Soleil, habitabilité, fin des temps.
+func _update_planet_state(dt: float, out: Array[Dictionary]) -> void:
+	sun_luminosity = _luminosity()
+	_evaporation = smoothstep(OCEAN_LOSS.x, OCEAN_LOSS.y, sun_luminosity)
+	if _deep_time():
+		# L'oxygène fait l'ozone ; les UV d'un Soleil vieilli et l'industrie l'abîment.
+		var heal := exp(-dt / maxf(Eras.time_unit(_era_idx), 1.0))
+		_ozone_damage *= heal
+		var lead := _leading_tech()
+		if lead >= 5.0:
+			_ozone_damage = maxf(_ozone_damage, 0.15 * (lead - 5.0))
+		_ozone_damage = maxf(_ozone_damage, 0.6 * smoothstep(1.15, 1.35, sun_luminosity))
+		ozone = smoothstep(0.08, 0.3, oxygen) * (1.0 - clampf(_ozone_damage, 0.0, 1.0))
+	else:
+		ozone = 1.0
+	var iced := 0
+	var k := 0
+	for i in range(0, temperature.size(), 23):
+		k += 1
+		if temperature[i] < (0.08 if elevation[i] < 0.0 else 0.12):
+			iced += 1
+	ice_cover = float(iced) / maxf(1.0, k)
+	habitability = clampf(0.6 * _complex_room() + 0.4 * (1.0 - _evaporation), 0.0, 1.0)
+	if _evaporation >= 0.999:
+		habitability = 0.0
+	if not end_of_times and habitability <= 0.0 and _alive.is_empty() and dt > 0.0:
+		end_of_times = true
+		_event("end_of_times", Vector2i(-1, -1), -1,
+			"Fin des temps : les océans se sont évaporés sous le vieux Soleil ; la planète est stérile à jamais",
+			_planet_cause, out)
+
+
+func _record_planet() -> void:
+	if year < _next_planet_sample and not planet_history.is_empty():
+		return
+	var st := planet_stats()
+	planet_history.append({year = year, global_temperature_c = st.global_temperature_c, ozone = ozone,
+		oxygen = oxygen, co2 = st.co2, sea_level = sea_level, ice_cover = ice_cover, biomass = st.biomass,
+		biodiversity = st.biodiversity})
+	if planet_history.size() > PLANET_HISTORY_SIZE:
+		planet_history.pop_front()
+	_next_planet_sample = year + ideal_step_years() * PLANET_SAMPLE_STEPS
+
+
+# =============================================================================================
+# Tectonique
+# =============================================================================================
+
+## Fait avancer les plaques ; lance le recalcul de la géographie sur un fil de travail et le
+## rejoint GEO_JOIN_SUBSTEPS sous-pas plus tard (déterministe : les points de rendez-vous ne
+## dépendent que du nombre de sous-pas).
+func _geo_step(dt: float, out: Array[Dictionary]) -> void:
+	for change in _tect.advance(dt, year):
+		_tectonic_event(change, out)
+	_geo_substeps += 1
+	var lagging := year - _last_geo_year >= GEO_MAX_LAG
+	if _geo_task != -1 and (_geo_substeps >= GEO_JOIN_SUBSTEPS or lagging):
+		_join_geography(out)
+	if _geo_task == -1 and year >= _next_geo and (_geo_substeps >= GEO_JOIN_SUBSTEPS or lagging):
+		_next_geo = year + GEO_INTERVAL
+		_geo_substeps = 0
+		var snap: Dictionary = _tect.snapshot()
+		snap.erosion = exp(-(year - _last_geo_year) / Tectonics.EROSION_YEARS)
+		_last_geo_year = year
+		var craters := _crater_list()
+		var sl := sea_level
+		if _eco.threaded:
+			_geo_result = {}
+			_geo_task = WorkerThreadPool.add_task(func(): _geo_result = _geo_work(snap, sl, craters), false, "WorldSim.tectonique")
+		else:
+			_geo_result = _geo_work(snap, sl, craters)
+			_geo_task = -2
+
+
+func _join_geography(out: Array[Dictionary]) -> void:
+	if _geo_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(_geo_task)
+	_geo_task = -1
+	if not _geo_result.is_empty():
+		_apply_geography(_geo_result, out)
+	_geo_result = {}
+
+
+## Calcul pur (fil de travail) : relief, climat de base, biomes, agrégats de l'écosystème.
+func _geo_work(snap: Dictionary, sl: float, craters: Array) -> Dictionary:
+	var res: Dictionary = _tect.raster(snap, _ocean_noise, sl, craters)
+	var count := WIDTH * HEIGHT
+	var bt := PackedFloat32Array()
+	var mo := PackedFloat32Array()
+	var bi := PackedByteArray()
+	bt.resize(count)
+	mo.resize(count)
+	bi.resize(count)
+	WorldGen.derive_climate(res.elevation, _temp_lat, _moist_lat, res.coast_dist, bt, mo, bi)
+	res.base_temp = bt
+	res.moisture = mo
+	res.biome = bi
+	res.eco = Ecosystem.compute_static(res.elevation, bt, bi)
+	return res
+
+
+func _apply_geography(res: Dictionary, out: Array[Dictionary]) -> void:
+	elevation = res.elevation
+	_base_temp = res.base_temp
+	moisture = res.moisture
+	biome = res.biome
+	plate_id = res.plate_id
+	plate_boundary = res.boundary
+	_coast_dist = res.coast_dist
+	_eco.apply_static(res.eco)
+	_eco.bind_grids(self)
+	_land_regions = 0
+	_sea_regions = 0
+	for r in Ecosystem.NR:
+		if _eco.r_land[r] > 0.0:
+			_land_regions += 1
+		if _eco.r_sea[r] > 0.0:
+			_sea_regions += 1
+	_land_regions = maxi(_land_regions, 1)
+	_sea_regions = maxi(_sea_regions, 1)
+	_goff_written = 1e9
+	_biome_goff = 1e9
+	supercontinent_fraction = res.supercontinent_fraction
+	_tect.supercontinent_fraction = supercontinent_fraction
+	_tect.crust_fraction = float(res.crust_fraction)
+	var sutures := _tect.apply_contacts(res.contacts, year)
+	if not sutures.is_empty():
+		# Une seule annonce par recalcul, même si plusieurs plaques se soudent à la fois.
+		var cause := -1
+		for c in sutures:
+			cause = maxi(cause, maxi(int(_tect.p_cause[c.a]), int(_tect.p_cause[c.b])))
+		var first: Dictionary = sutures[0]
+		var mid := _tect.plate_position(first.a, 0.0, 0.0).lerp(_tect.plate_position(first.b, 0.0, 0.0), 0.5)
+		var ev := _event("orogeny", Vector2i(int(mid.x), int(mid.y)), -1,
+			"Collision : des continents se soudent, une chaîne de montagnes se soulève" if sutures.size() == 1
+			else "Collisions : %d continents se soudent, des chaînes de montagnes se soulèvent" % (sutures.size() + 1), cause, out)
+		for c in sutures:
+			_tect.p_cause[c.a] = ev.id
+			_tect.p_cause[c.b] = ev.id
+	geography_version += 1
+	geography_changed.emit(geography_version)
+
+
+func _tectonic_event(change: Dictionary, out: Array[Dictionary]) -> void:
+	match String(change.kind):
+		"supercontinent":
+			_event("supercontinent", Vector2i(int(_tect.target.x), int(_tect.target.y)), -1,
+				"Supercontinent : toutes les terres se soudent en une seule, %s" % change.name, _max_plate_cause(), out)
+		"breakup":
+			var ev := _event("breakup", Vector2i(int(_tect.target.x), int(_tect.target.y)), -1,
+				"Fracture : %s se déchire, un océan nouveau s'ouvre entre ses morceaux" % change.name, _max_plate_cause(), out)
+			for k in _tect.n:
+				_tect.p_cause[k] = ev.id
+			# Les terres séparées font diverger leurs espèces (spéciation par isolement).
+			causal_log.schedule(year + 20.0e6, "vicariance", ev.id, ev.region, -1, 1.0)
+
+
+func _max_plate_cause() -> int:
+	var best := -1
+	for k in _tect.n:
+		best = maxi(best, int(_tect.p_cause[k]))
+	return best
+
+
+func _crater_list() -> Array:
+	var keep: Array[Dictionary] = []
+	var out := []
+	for c in _craters:
+		var age := year - float(c.year)
+		if age > Tectonics.CRATER_FADE_YEARS:
+			continue
+		keep.append(c)
+		out.append({cell = anchor_cell(c.anchor), radius = int(c.radius), fade = 1.0 - age / Tectonics.CRATER_FADE_YEARS})
+	_craters = keep
+	return out
+
+
+## Spéciation par isolement : sur chaque plaque séparée, les espèces terrestres largement
+## répandues donnent une espèce sœur (bornée : quelques espèces par fracture).
+func _vicariance(cause: int, out: Array[Dictionary]) -> void:
+	# Une passe sur les niches : régions de chaque espèce terrestre, rangées par plaque.
+	var by_species := {}
+	for r in Ecosystem.NR:
+		var c: Vector2i = _eco.region_center_cell(r)
+		var p: int = plate_id[c.y * WIDTH + c.x]
+		for kk in Ecosystem.K:
+			var idx: int = _eco.cur_sp[r * Ecosystem.K + kk]
+			if idx < 0 or _eco.t_hab[idx] == 0:
+				continue
+			if not by_species.has(idx):
+				by_species[idx] = {}
+			var plates: Dictionary = by_species[idx]
+			if not plates.has(p):
+				plates[p] = []
+			plates[p].append(r)
+	var made := 0
+	var keys := by_species.keys()
+	keys.sort()
+	for idx in keys:
+		if made >= 6:
+			break
+		var id: int = _eco.t_id[idx]
+		if not species.has(id) or not species[id].alive or species[id].sapient:
+			continue
+		var by_plate: Dictionary = by_species[idx]
+		if by_plate.size() < 2:
+			continue
+		var plates := by_plate.keys()
+		plates.sort_custom(func(a, b): return by_plate[a].size() > by_plate[b].size() or (by_plate[a].size() == by_plate[b].size() and a < b))
+		var regions: Array = by_plate[plates[1]]
+		if regions.size() < 3:
+			continue
+		var t: Dictionary = species[id].traits
+		var traits := Species.mutate(t, _rng, _eco.region_temperature(regions[0], _global_offset()), 0.5, oxygen)
+		var child_name := Species.make_name(_rt[id].scientific_name, _rng, false)
+		var child := _create_species(child_name, traits, id, -1)
+		if child < 0:
+			break
+		var ev := _event("vicariance", _cell_of(regions[0]), child,
+			"Isolement : séparés par l'océan, les %s d'un continent deviennent les %s" % [species[id].name, child_name], cause, out)
+		_rt[child].origin_event = ev.id
+		var cidx: int = _rt[child].idx
+		for r in regions:
+			_eco.place_species(cidx, r, 0, 0.1, idx)
+		made += 1
+
+
+## Semence (geste divin) : une forme de vie déposée dans la région visée. La simulation juge si
+## elle prend : une spore sans ozone, un germe d'animal sans oxygène dépérissent d'eux-mêmes.
+## Les traits viennent de Species.seed_template(kind, rng, env) quand la session Vie l'aura écrite,
+## sinon d'un repli local (_seed_fallback).
+func _act_seed(a: Dictionary, action: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	var kind := String(action.get("kind", "spark"))
+	var env := {oxygen = oxygen, ozone = ozone, year = year, max_complexity = max_complexity,
+		temperature = _eco.region_temperature(a.r, _global_offset()), land = _eco.r_land[a.r] > 0.5,
+		traits = action.get("traits", {})}
+	var tpl := {}
+	var life: Script = Species
+	for m in life.get_script_method_list():
+		if m.name == "seed_template":
+			tpl = life.call("seed_template", kind, _rng, env)
+			break
+	if tpl.is_empty():
+		tpl = _seed_fallback(kind, env)
+	var traits: Dictionary = tpl.get("traits", tpl)
+	var defaults := Species.traits_from_def({size = 0.05, intelligence = 0.0, adaptability = 0.6,
+		aggression = 0.3, diet = "autotrophe", temp_opt = float(env.temperature), temp_tol = 0.35,
+		clade = "microbe", complexity = 0.0, habitat = "marine"})
+	for key in defaults:
+		if not traits.has(key):
+			traits[key] = defaults[key]
+	var p_name := String(tpl.get("name", traits.get("name", "")))
+	traits.erase("name")
+	if p_name == "":
+		p_name = Species.make_name("", _rng, true)
+	var id := _create_species(p_name, traits, -1, -1)
+	if id < 0:
+		root.summary = "Dieu sème, mais la vie déborde déjà de toutes parts"
+		return
+	var ev := _event("seeding", a.cell, id, "Semence : les %s sont déposés %s" % [p_name,
+		"dans les eaux" if traits.habitat == "marine" else "sur les terres"], root.id, out)
+	_rt[id].origin_event = ev.id
+	_rt[id].lineage_cause = ev.id
+	var idx: int = _rt[id].idx
+	var placed: int = _eco.place_species(idx, a.r, a.rrad, SEED_POPULATION)
+	if placed == 0:
+		# Pas de milieu adéquat ici : la semence dérive jusqu'au plus proche (côte, mer, terre).
+		for rad in range(1, 6):
+			placed = _eco.place_species(idx, a.r, a.rrad + rad, SEED_POPULATION)
+			if placed > 0:
+				break
+	max_complexity = maxf(max_complexity, float(traits.complexity))
+	if traits.complexity >= 6.0 and is_inf(_amniote_year):
+		_amniote_year = year
+	_eco.set_oxygen(oxygen, Species.OXYGEN_NEED, _complex_room(), _land_room())
+
+
+func _seed_fallback(kind: String, env: Dictionary) -> Dictionary:
+	var t: float = env.temperature
+	match kind:
+		"spark":
+			return {name = "Archées des sources", traits = {size = 0.01, adaptability = 0.75, aggression = 0.2,
+				diet = "autotrophe", temp_opt = clampf(t + 0.1, 0.4, 0.95), temp_tol = 0.42, clade = "microbe",
+				complexity = 0.0, habitat = "marine", anaerobic = true, oxygenic = false}}
+		"light":
+			return {name = "Cyanobactéries", traits = {size = 0.011, adaptability = 0.7, aggression = 0.3,
+				diet = "autotrophe", temp_opt = clampf(t, 0.3, 0.9), temp_tol = 0.38, clade = "microbe",
+				complexity = 0.0, habitat = "marine", anaerobic = false, oxygenic = true}}
+		"spore":
+			return {name = "Mousses pionnières", traits = {size = 0.2, adaptability = 0.7, aggression = 0.2,
+				diet = "autotrophe", temp_opt = clampf(t, 0.2, 0.85), temp_tol = 0.32, clade = "plante",
+				complexity = 2.0, habitat = "land", oxygenic = true}}
+		"animal_germ":
+			var role := String(env.traits.get("role", "filter"))
+			var spec: Array = {"filter": ["Éponges primordiales", "éponge", "herbivore", 0.08],
+				"grazer": ["Brouteurs primordiaux", "mollusque", "herbivore", 0.12],
+				"hunter": ["Chasseurs primordiaux", "arthropode", "carnivore", 0.15]}.get(role, ["Éponges primordiales", "éponge", "herbivore", 0.08])
+			return {name = spec[0], traits = {size = spec[3], adaptability = 0.6, aggression = 0.4 if spec[2] == "carnivore" else 0.2,
+				diet = spec[2], temp_opt = clampf(t, 0.3, 0.9), temp_tol = 0.3, clade = spec[1], complexity = 3.0,
+				habitat = "marine"}}
+	# « shaped » : les traits du joueur sur un socle d'animal marin simple.
+	var base := {size = 0.2, intelligence = 0.05, adaptability = 0.6, aggression = 0.4, diet = "omnivore",
+		temp_opt = clampf(t, 0.2, 0.9), temp_tol = 0.3, clade = "chimère", complexity = 3.0, habitat = "marine"}
+	var custom: Dictionary = env.traits
+	for key in custom:
+		if key != "role":
+			base[key] = custom[key]
+	return {name = String(custom.get("name", "")), traits = base}
+
+
+## Pousser une plaque (geste divin) : vers `target` si l'action en donne une, sinon elle se
+## détache de sa masse soudée (rift) ou file vers la croûte la plus proche.
+func _act_drift(a: Dictionary, action: Dictionary, root: Dictionary, out: Array[Dictionary]) -> void:
+	if _tect == null:
+		root.summary = "Dieu pousse la croûte, mais ce monde-ci n'a pas de plaques mobiles"
+		return
+	var k: int = plate_id[a.cell.y * WIDTH + a.cell.x]
+	var here: Vector2 = _tect.plate_position(k, 0.0, 0.0)
+	var dir := Vector2.ZERO
+	var sutured := false
+	for o in _tect.n:
+		if o != k and _tect.group_of(o) == _tect.group_of(k):
+			sutured = true
+	if action.has("target"):
+		var tgt: Vector2i = action.target
+		dir = Vector2(Tectonics._wrap_dx(float(tgt.x) - here.x), float(tgt.y) - here.y)
+	else:
+		var c: Vector2 = _tect._crust_centroid(-1)
+		dir = Vector2(Tectonics._wrap_dx(here.x - c.x), here.y - c.y) * (1.0 if sutured else -1.0)
+	var ev := _event("drift", a.cell, -1, ("Rift : Dieu fend la croûte, une plaque se détache de son continent"
+		if sutured else "Dérive : Dieu pousse une plaque à travers l'océan"), root.id, out)
+	_tect.push(k, dir, 0.25, ev.id, year)
+
+
 ## Cycles de la vie (après le prologue) : fin d'un cycle de civilisation, glaciations naturelles,
 ## renaissance depuis les microbes après la mort de la vie complexe, vie qui renaît d'un monde
 ## stérile (mode Éternité).
@@ -1274,7 +1868,7 @@ func _life_cycle_step(dt: float, out: Array[Dictionary]) -> void:
 	var cmax := 0.0
 	for id in _alive:
 		cmax = maxf(cmax, float(species[id].traits.get("complexity", 6.0)))
-	if scenario != SCENARIO_PROLOGUE:
+	if not _deep_time():
 		max_complexity = cmax
 	if cmax >= 4.0:
 		_peak_complexity = maxf(_peak_complexity, cmax)
@@ -1289,7 +1883,7 @@ func _life_cycle_step(dt: float, out: Array[Dictionary]) -> void:
 	if _alive.is_empty():
 		if is_nan(_lifeless_since):
 			_lifeless_since = year
-		elif endless and year - _lifeless_since >= ABIOGENESIS_YEARS:
+		elif endless and scenario == SCENARIO_PROLOGUE and year - _lifeless_since >= ABIOGENESIS_YEARS:
 			_lifeless_since = NAN
 			_rule_ready.clear()
 			rebirths += 1
@@ -1300,7 +1894,7 @@ func _life_cycle_step(dt: float, out: Array[Dictionary]) -> void:
 			_seed_prologue()
 		return
 	_lifeless_since = NAN
-	if _era_idx >= Eras.MESOZOIC and (scenario == SCENARIO_PROLOGUE or _had_civilization) 			and _chance(dt, NATURAL_ICE_AGE_RATE):
+	if _era_idx >= Eras.MESOZOIC and (_deep_time() or _had_civilization) 			and _chance(dt, NATURAL_ICE_AGE_RATE):
 		var unit := Eras.time_unit(_era_idx)
 		var ev := _event("ice_age", Vector2i(-1, -1), -1, "Glaciation : les calottes polaires s'étendent", -1, out)
 		_add_climate_shock(NATURAL_ICE_AGE_COLD, unit * 3.0, ev.id)
@@ -1411,6 +2005,8 @@ func _process_scheduled(out: Array[Dictionary]) -> void:
 						if id != sid:
 							_rt[id].harm_cause = ev.id
 							_rt[id].harm_until = year + unit * 4.0
+			"vicariance":
+				_vicariance(e.cause_id, out)
 			"niche_freed":
 				_radiation(e.cause_id, e.region, out, int(e.data.get("near", -1)))
 
@@ -1498,7 +2094,7 @@ func _update_era(out: Array[Dictionary]) -> void:
 	_era_idx = idx
 	if not era_years.has(idx):
 		era_years[idx] = year
-	if idx == Eras.MESOZOIC and scenario == SCENARIO_PROLOGUE and _meso_dt <= 0.0:
+	if idx == Eras.MESOZOIC and _deep_time() and _meso_dt <= 0.0:
 		_meso_dt = clampf((Eras.CRETACEOUS_END - year) / MESOZOIC_STEPS, MESOZOIC_DT_MIN, MESOZOIC_DT_MAX)
 	var text := "Le monde entre dans l'ère : %s" % ERAS[idx]
 	if lead < 0 and STAGE_TEXT.has(idx):
@@ -1629,9 +2225,9 @@ func _oxygenic_origin() -> int:
 ## thermostat lent du CO2 (altération des roches, accélérée par les plantes), Terre boule de
 ## neige quand le froid l'emporte, dégel quand les volcans ont rechargé l'air en CO2.
 func _climate_step(dt: float, out: Array[Dictionary]) -> void:
-	var sun := FAINT_SUN * clampf(-year / 3.8e9, 0.0, 1.0)
+	var sun := _sun_term()
 	# Les méthanogènes survivent dans les eaux profondes sans oxygène tant que les puits tiennent.
-	var ch4 := METHANE_MAX * maxf(_methane, 0.6 * smoothstep(0.1, 0.25, _sink)) * (1.0 - smoothstep(0.03, 0.08, oxygen))
+	var ch4 := METHANE_MAX * maxf(_methane, 0.6 * smoothstep(0.1, 0.25, _sink) * _life_present()) * (1.0 - smoothstep(0.03, 0.08, oxygen))
 	var forcing := sun + ch4
 	var co2_eq := clampf(-0.85 * forcing - 0.02 * land_flora, -0.15, 0.4)
 	if dt <= 0.0 and _co2 == 0.0 and not snowball:
@@ -1728,6 +2324,7 @@ func _act_meteor(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> voi
 				var ev := _event("collapse", a.cell, id, "Âge sombre : l'impact plonge les %s dans le chaos" % sp.name, impact.id, out)
 				_note(id, ev.id)
 	_add_climate_shock(-0.3 * sev, unit * 1.5, impact.id)
+	_ozone_damage = maxf(_ozone_damage, OZONE_DAMAGE_METEOR * sev)
 	_climate_cause_until = year + unit * 4.0
 	causal_log.schedule(year + unit * 3.0, "impact_winter_end", impact.id, a.cell, -1)
 	causal_log.schedule(year + unit * 2.0, "radiation", impact.id, a.cell, -1)
@@ -1866,6 +2463,7 @@ func _act_volcano(a: Dictionary, root: Dictionary, out: Array[Dictionary]) -> vo
 		_iron = minf(1.0, _iron + 0.1)
 	_sink = minf(1.0, _sink + 0.15)
 	_co2 = minf(0.5, _co2 + 0.06)
+	_ozone_damage = maxf(_ozone_damage, OZONE_DAMAGE_VOLCANO)
 	_planet_cause = ev.id
 
 
@@ -2042,6 +2640,10 @@ func _revive(id: int, r: int, rrad: int) -> int:
 
 
 func _carve_crater(cell: Vector2i, radius: int) -> void:
+	if _tect != null:
+		_craters.append({anchor = make_anchor(cell), radius = mini(radius, 24), year = year})
+		if _craters.size() > 32:
+			_craters.pop_front()
 	var rc := mini(radius, 24)
 	for dy in range(-rc, rc + 1):
 		var y := cell.y + dy
@@ -2072,4 +2674,6 @@ func _action_label(type: String, target: int) -> String:
 		"volcano": return "les volcans s'éveillent"
 		"oxygenate": return "souffle d'oxygène"
 		"soothe": return "apaisement de la Terre"
+		"seed": return "une semence de vie"
+		"drift": return "la croûte se déplace"
 	return type

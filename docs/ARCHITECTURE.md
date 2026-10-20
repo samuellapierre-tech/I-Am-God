@@ -289,15 +289,98 @@ d'effondrement spontané des civilisations accomplies, pas de renaissance d'un m
   runtime_records}` ; journal ≤ 4096 (+512) événements, ≤ 1024 actions divines épinglées, ≤ 2048
   fiches d'espèces, ≤ 128 espèces vivantes, historique de parcelle ≤ 512.
 
-### Sauvegarde (à venir)
+### Sauvegarde
 
-Tout l'état est fait de types simples (tableaux compacts, dictionnaires, nombres) ; aucune
-référence circulaire. `WorldSim.fork()` énumère exactement ce qu'il faut sauver :
-`seed`, `scenario`, `year`, les grilles (`elevation`, `temperature`, `population`, `tech`,
-`dominant_species`, `moisture`, `biome`, `_base_temp`), `species`, `_rt`, `_alive`, l'état de
-l'aléa (`_rng.seed`, `_rng.state`), `causal_log` (`next_id`, `history`, `_pinned`, `scheduled`),
-les tableaux de l'écosystème (`Ecosystem.copy()` les liste ; `band_cells` se recalcule avec
-`build_static()`), et les scalaires listés dans `fork()` (oxygène, climat, niveau marin, cycles…).
-`ParcelSim` ne référence que son monde : sauver `cell` et ses champs (publics et privés, tous
-simples) ; le recréer par `ParcelSim.new(world, cell)` puis réappliquer ces champs.
+Voir § « Genèse » ci-dessous, « État à sauvegarder ».
+
+## Genèse : la planète (contrat d'octobre 2026, GENESE.md)
+
+`WorldSim.new(seed, generate := true, scenario := SCENARIO_GENESIS, planet := {})`. Le scénario par
+défaut est **SCENARIO_GENESIS** : à -4 Ga, roche, océans, atmosphère primitive (CO₂ ~ 25 000 ppm,
+pas d'O₂), **aucune espèce** ; la vie ne naît pas d'elle-même. `SCENARIO_PROLOGUE` (microbes à
+-3,8 Ga, carte fixe) et `SCENARIO_CRETACEOUS` (roster à -66 Ma) servent aux tests. La simulation
+tourne toujours en mode sans fin.
+
+`planet` (copie dans `WorldSim.planet`) : `ocean_fraction` (0,64), `axial_tilt` (23,4°),
+`star_luminosity` (1), `plates` (10) — la réincarnation en tire d'autres.
+
+### Semer : action `seed`
+
+`{type: "seed", region: Vector2i, species_id: -1, radius: int, kind: String, traits: Dictionary (facultatif)}`.
+`kind` : `spark` (chimiosynthèse, anaérobie, marin), `light` (photosynthèse oxygénique, marin),
+`spore` (plante pionnière des terres), `animal_germ` (`traits.role` : `filter` / `grazer` /
+`hunter`, marin), `shaped` (les traits du joueur). Une espèce est créée dans la région visée (ou la
+plus proche qui convient), événement `seeding` dont `cause_id` est le geste divin. **La simulation
+juge** : une spore sans ozone, un germe d'animal sans oxygène dépérissent d'eux-mêmes. Les traits
+viennent de `Species.seed_template(kind: String, rng: RandomNumberGenerator, env: Dictionary) ->
+Dictionary` si la session Vie l'a écrite (appelée par réflexion ; elle peut renvoyer
+`{name, traits}` ou directement les traits, avec `name` facultatif), sinon d'un repli local
+(`WorldSim._seed_fallback`). `env` = `{oxygen, ozone, year, max_complexity, temperature (région),
+land (bool), traits (ceux de l'action)}`. Ensuite tout naît par évolution : aucun clade garanti.
+
+### Tectonique (`src/sim/tectonics.gd`)
+
+Une dizaine de plaques rigides (vitesse, rotation) portent des particules de croûte continentale.
+Cycle de Wilson produit par l'état : dispersion → rassemblement (les croûtes qui se touchent se
+soudent et soulèvent des montagnes : `orogeny`) → supercontinent (`supercontinent`, ~70 % de la
+croûte d'un bloc) → fracture 160 Ma plus tard (`breakup`), puis isolement des espèces terrestres
+(`vicariance`, 20 Ma après). Dorsales, fosses et arcs volcaniques aux frontières. Période observée
+~420 Ma ; le dernier supercontinent avant -150 Ma s'appelle la Pangée.
+
+- La géographie est recalculée tous les ~2 Ma simulés, **sur un fil de travail**, rejoint 12 sous-pas
+  plus tard (ou dès que la géographie a 6 Ma de retard) : déterministe, sans à-coup à 60 images/s.
+- Lecture seule pour la carte : `plate_id: PackedInt32Array`, `plate_boundary: PackedByteArray`
+  (0 aucune, 1 divergente, 2 convergente, 3 coulissante), `geography_version: int` + signal
+  `geography_changed(version)` (re-téléverser les textures), `supercontinent_fraction` (part des
+  terres émergées dans la plus grande masse), `tectonics_phase() -> String`.
+- `elevation` est relative au niveau marin courant ; `crust_elevation(i)` donne l'altitude de la
+  croûte, `water_depth(i)` la profondeur d'eau. Biomes, températures (continentalité : intérieur plus
+  sec) et agrégats de l'écosystème suivent ; la vie migre ou meurt quand une côte devient terre ou mer.
+- Suivre la croûte : `make_anchor(cell) -> Dictionary` (`{plate, ox, oy}`), `anchor_cell(anchor) ->
+  Vector2i`, `track_cell(cell, years) -> Vector2i` (prédiction). `ParcelSim` garde une ancre : sa
+  `cell` suit le même terrain quand les plaques bougent.
+- Geste `drift` : `{type: "drift", region, species_id, radius, target: Vector2i (facultatif)}` —
+  pousse la plaque visée vers `target`, sinon la détache de son bloc (rift) ou la lance vers la
+  croûte la plus proche. Événement `drift` ; les collisions qui s'ensuivent ont pour cause ce geste.
+- Les cratères d'impact sont gardés par la tectonique (ils dérivent avec la croûte, s'effacent en 60 Ma).
+
+### Atmosphère, mers, Soleil
+
+- `ozone` (0..1) : fait par l'oxygène ; abîmé par les volcans (geste), les météores, l'industrie
+  (technologie ≥ 5) et les UV d'un Soleil vieilli ; protège les terres (sans lui, rien n'y vit).
+- `sea_level` : émergence des continents, climat (glaces), phase tectonique, évaporation finale.
+- `ice_cover` (0..1), `sun_luminosity` (0,65 à -4 Ga, 1 aujourd'hui, +8,7 %/Ga),
+  `habitability` (0..1) : la vie complexe devient impossible vers +1 Ga, les océans s'évaporent
+  entre 1,2 et 1,4 fois la luminosité actuelle.
+- **Fin des temps** : quand `habitability == 0` et qu'il ne reste aucune vie, événement
+  `end_of_times` (une fois), `end_of_times = true` ; le monde reste stérile, `step()` continue.
+
+### Statistiques planétaires
+
+`planet_stats() -> Dictionary` : `year, global_temperature_c, ozone, oxygen, co2 (ppm), methane (ppm),
+sea_level, sea_level_m, ice_cover, biomass, biodiversity (espèces vivantes), recent_extinctions,
+sun_luminosity, habitability, supercontinent_fraction`. `planet_history: Array[Dictionary]` (≤ 512,
+un point tous les 3 pas idéaux) : `{year, global_temperature_c, ozone, oxygen, co2, sea_level,
+ice_cover, biomass, biodiversity}`. `memory_report()` donne les tailles des structures bornées.
+
+### État à sauvegarder
+
+Tout est en types simples (tableaux compacts, dictionnaires, nombres), sans référence circulaire ;
+`WorldSim.fork()` en est la liste exacte. Avant de sauver, appeler `fork()` ou attendre la fin d'un
+recalcul de géographie en cours (`fork()` le fait) : le résultat en attente (`_geo_result`) est
+une donnée simple à sauver aussi.
+
+- **WorldSim** : `seed`, `scenario`, `planet`, `year`, `endless` ; grilles `elevation`,
+  `temperature`, `population`, `tech`, `dominant_species`, `moisture`, `biome`, `_base_temp`,
+  `_temp_lat`, `_moist_lat`, `_ocean_noise`, `_coast_dist`, `plate_id`, `plate_boundary` ; `species`,
+  `_rt`, `_alive`, `_next_species_id`, `era_years`, `_groups`, `_rule_ready` ; aléa `_rng.seed` +
+  `_rng.state` ; `causal_log` (`next_id`, `history`, `_pinned`, `scheduled`) ; écosystème (tous les
+  tableaux listés par `Ecosystem.copy()`, `free_idx`, `pending_free`, `next_idx`, `explicit_flora`,
+  `land_open` ; `band_cells` se recalcule par `compute_static`) ; tectonique (`Tectonics.copy()` :
+  tableaux `p_*` et `c_*`, phase, cible, cycles…) ; `_craters`, `_ext_years`, `_recent_ext`,
+  `planet_history` ; et les scalaires listés dans `fork()` (oxygène, fer, puits, CO₂, méthane, ozone,
+  niveau marin, phases, compteurs, horloges).
+- **ParcelSim** : `cell`, `_anchor`, `_geo_seen` et tous ses champs (publics et privés : `_track`,
+  `_snap`, `history`, niveaux, hystérésis…) ; la recréer par `ParcelSim.new(world, cell)` puis
+  réappliquer ces champs.
 

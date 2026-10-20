@@ -212,6 +212,9 @@ var _barren := false
 var _swamp := false
 var _sea_iced := false
 var _shore_changed := ""
+## Ancre de croûte (WorldSim.make_anchor) : la parcelle suit son terrain quand les plaques bougent.
+var _anchor := {}
+var _geo_seen := -1
 ## id -> densité régionale pondérée (niches de la région et de ses voisines).
 var _regional := {}
 ## id -> {fast, slow, peak, trend, hold, present, cause}
@@ -267,6 +270,7 @@ static func step_level(d: float, current: int) -> int:
 ## qui changent l'usage du sol portent aussi land_use et previous_land_use.
 func update(world_events: Array) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
+	_follow_crust()
 	var i := _index(cell)
 	_ideal = maxf(world.ideal_step_years(), 1e-6)
 	var dt := 0.0
@@ -295,6 +299,22 @@ func update(world_events: Array) -> Array[Dictionary]:
 	return out
 
 
+## La croûte dérive : la parcelle reste sur le même terrain (mêmes repères), donc sa cellule
+## change avec la géographie. Le relief de référence (cratères) est alors relu sans fausse alerte.
+func _follow_crust() -> void:
+	if _fresh or _anchor.is_empty():
+		_anchor = world.make_anchor(cell)
+		_geo_seen = world.geography_version
+		return
+	if world.geography_version == _geo_seen:
+		return
+	_geo_seen = world.geography_version
+	var moved: Vector2i = world.anchor_cell(_anchor)
+	if moved != cell:
+		cell = moved
+	_elev = NAN
+
+
 func _index(c: Vector2i) -> int:
 	return c.y * WorldSim.WIDTH + c.x
 
@@ -307,9 +327,9 @@ func _relax(cur: float, target: float, dt: float, tau: float) -> float:
 
 ## Rivage : mer, estran ou terre selon la profondeur sous le niveau marin (hystérésis).
 func _update_shore(i: int) -> void:
-	var tide := TIDE if world.scenario == WorldSim.SCENARIO_PROLOGUE else 0.0
+	var tide := TIDE if world.scenario != WorldSim.SCENARIO_CRETACEOUS else 0.0
 	var margin := SHORE_MARGIN if tide > 0.0 else 0.0
-	var depth: float = world.sea_level - world.elevation[i]
+	var depth: float = world.water_depth(i)
 	water_depth_m = depth * METERS_PER_UNIT
 	var old := shore
 	var now := old
@@ -350,7 +370,7 @@ static func pick_start_cell(w: WorldSim) -> Vector2i:
 	for y in range(8, WorldSim.HEIGHT - 8):
 		for x in W:
 			var i := y * W + x
-			var e: float = w.elevation[i]
+			var e: float = w.crust_elevation(i)
 			if e < START_ELEVATION.x or e > START_ELEVATION.y:
 				continue
 			var t: float = w.temperature[i]
@@ -360,7 +380,7 @@ static func pick_start_cell(w: WorldSim) -> Vector2i:
 			var coast := false
 			for dy in range(-2, 3):
 				for dx in range(-2, 3):
-					if w.elevation[(y + dy) * W + posmod(x + dx, W)] < 0.0:
+					if w.crust_elevation((y + dy) * W + posmod(x + dx, W)) < 0.0:
 						coast = true
 			if not coast:
 				continue
@@ -370,7 +390,7 @@ static func pick_start_cell(w: WorldSim) -> Vector2i:
 				for dx in range(-6, 7, 2):
 					var yy := clampi(y + dy, 0, WorldSim.HEIGHT - 1)
 					total += 1
-					if w.elevation[yy * W + posmod(x + dx, W)] >= 0.0:
+					if w.crust_elevation(yy * W + posmod(x + dx, W)) >= 0.0:
 						land += 1
 			var share := float(land) / float(total)
 			if share < 0.6:
@@ -675,7 +695,7 @@ func _update_land_use(i: int, out: Array[Dictionary]) -> void:
 			use = "ice"
 		elif _marine_cx < 0.0:
 			use = "barren" if shore == "intertidal" else "ocean"
-		elif world.sea_level - world.elevation[i] > -SHALLOW_SEA:
+		elif world.water_depth(i) > -SHALLOW_SEA:
 			use = "seabed"
 		else:
 			use = "reef" if _marine_cx >= 3.0 else "microbial_mat"
@@ -759,7 +779,7 @@ func _shore_text(from: String, to: String) -> String:
 
 
 func _explicit_flora() -> bool:
-	return world.scenario == WorldSim.SCENARIO_PROLOGUE
+	return world.scenario != WorldSim.SCENARIO_CRETACEOUS
 
 
 ## La vie (et non un peuple) change la parcelle : mers peuplées, terres conquises.

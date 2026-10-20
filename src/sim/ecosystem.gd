@@ -149,41 +149,62 @@ func bind_grids(sim: RefCounted) -> void:
 
 
 func build_static() -> void:
-	g_detail.resize(W * H)
-	band_cells.clear()
+	apply_static(compute_static(g_elev, g_base_temp, g_biome))
+
+
+## Agrégats régionaux et listes de cellules d'un relief (fonction pure : la tectonique l'appelle
+## sur un fil de travail, puis apply_static() les installe entre deux pas).
+static func compute_static(elev: PackedFloat32Array, base_temp: PackedFloat32Array, biome: PackedByteArray) -> Dictionary:
+	var land := PackedFloat32Array()
+	var fert := PackedFloat32Array()
+	var temp := PackedFloat32Array()
+	var relev := PackedFloat32Array()
+	var sea := PackedFloat32Array()
+	for a in [land, fert, temp, relev, sea]:
+		a.resize(NR)
+	var detail := PackedFloat32Array()
+	detail.resize(W * H)
+	var bands: Array[PackedInt32Array] = []
 	for b in BANDS:
-		band_cells.append(PackedInt32Array())
+		bands.append(PackedInt32Array())
 	var land_cnt := PackedInt32Array()
 	land_cnt.resize(NR)
-	r_land.fill(0.0)
-	r_fert.fill(0.0)
-	r_temp.fill(0.0)
-	r_elev.fill(0.0)
-	r_sea.fill(0.0)
 	for y in H:
 		for x in W:
 			var i := y * W + x
 			@warning_ignore("integer_division")
 			var r := (y / RS) * RW + x / RS
-			var e := g_elev[i]
-			r_temp[r] += g_base_temp[i]
+			var e := elev[i]
+			temp[r] += base_temp[i]
 			if e < 0.0:
 				# Les mers peu profondes (plateaux) sont bien plus productives que les abysses.
-				r_sea[r] += (0.9 if e > -0.35 else 0.25) / float(RS * RS)
+				sea[r] += (0.9 if e > -0.35 else 0.25) / float(RS * RS)
 			else:
 				land_cnt[r] += 1
-				r_fert[r] += WorldGen.BIOME_FERTILITY[g_biome[i]]
-				r_elev[r] += e
-				g_detail[i] = 1.0 - clampf(e, 0.0, 1.0) * 0.45
+				fert[r] += WorldGen.BIOME_FERTILITY[biome[i]]
+				relev[r] += e
+				detail[i] = 1.0 - clampf(e, 0.0, 1.0) * 0.45
 				@warning_ignore("integer_division")
-				band_cells[(y / RS) / ROWS_PER_BAND].append(i)
+				bands[(y / RS) / ROWS_PER_BAND].append(i)
 	for r in NR:
-		r_temp[r] /= float(RS * RS)
+		temp[r] /= float(RS * RS)
 		var c := land_cnt[r]
-		r_land[r] = float(c) / float(RS * RS)
+		land[r] = float(c) / float(RS * RS)
 		if c > 0:
-			r_fert[r] /= float(c)
-			r_elev[r] /= float(c)
+			fert[r] /= float(c)
+			relev[r] /= float(c)
+	return {r_land = land, r_fert = fert, r_temp = temp, r_elev = relev, r_sea = sea, g_detail = detail,
+		band_cells = bands}
+
+
+func apply_static(d: Dictionary) -> void:
+	r_land = d.r_land
+	r_fert = d.r_fert
+	r_temp = d.r_temp
+	r_elev = d.r_elev
+	r_sea = d.r_sea
+	g_detail = d.g_detail
+	band_cells = d.band_cells
 
 
 func region_of_cell(cell: Vector2i) -> int:
@@ -250,8 +271,12 @@ func region_fits(idx: int, r: int) -> bool:
 ## exige, il empoisonne les anaérobies, et sans couche d'ozone les terres restent stériles.
 ## `complex_room` (0..1) : part de capacité laissée à la vie complexe (complexité ≥ 3) par la
 ## chaleur du Soleil vieillissant.
-func set_oxygen(oxygen: float, needs: Array[float], complex_room := 1.0) -> void:
-	land_open = smoothstep(0.08, 0.3, oxygen) if explicit_flora == 1 else 1.0
+## `land_room` (0..1, facultatif) : terres habitables (ozone, eau) ; sinon déduit de l'oxygène.
+func set_oxygen(oxygen: float, needs: Array[float], complex_room := 1.0, land_room := -1.0) -> void:
+	if land_room >= 0.0:
+		land_open = land_room
+	else:
+		land_open = smoothstep(0.08, 0.3, oxygen) if explicit_flora == 1 else 1.0
 	for s in MAXS:
 		if t_alive[s] == 0:
 			continue
