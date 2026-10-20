@@ -325,19 +325,6 @@ const PRAYER_REQUESTS := {
 	"generic": ["Parle-nous, ou laisse-nous choisir seuls notre chemin.", "Montre-nous la voie."],
 }
 
-## Choix moraux proposés au joueur face à une prière (action divine au format du contrat, ou null = ne rien faire).
-const PRAYER_CHOICES := {
-	"famine": [["Exaucer : bénir leurs terres", "bless"], ["Ignorer leur prière", ""], ["Les éprouver : envoyer la peste", "plague"]],
-	"war": [["Protéger ce peuple", "save"], ["Laisser la guerre décider", ""], ["Élever leurs ennemis", "uplift"]],
-	"plague": [["Les guérir", "save"], ["Laisser le mal suivre son cours", ""], ["Bénir les survivants", "bless"]],
-	"disaster": [["Les sauver", "save"], ["Ne rien faire", ""], ["Achever l'œuvre du destin", "meteor"]],
-	"cold": [["Bénir leurs foyers", "bless"], ["Laisser l'hiver les endurcir", ""], ["Prolonger l'âge glaciaire", "ice_age"]],
-	"flood": [["Les sauver des eaux", "save"], ["Laisser les eaux monter", ""], ["Achever le déluge", "flood"]],
-	"decline": [["Élever leur esprit", "uplift"], ["Les laisser s'éteindre", ""], ["Les effacer", "extinct"]],
-	"prosperity": [["Bénir encore", "bless"], ["Rester silencieux", ""], ["Rappeler leur humilité : une épidémie", "plague"]],
-	"generic": [["Bénir", "bless"], ["Garder le silence", ""], ["Éprouver leur foi", "plague"]],
-}
-
 const ORACLE_OUVERTURES := [
 	"Les fils du temps se sont écartés devant moi, Seigneur.",
 	"J'ai regardé dans le puits des âges.",
@@ -630,23 +617,6 @@ static func prayer_key(situation_type: Variant) -> String:
 		"extinction", "decay": return "decline"
 		"bless", "growth", "golden_age": return "prosperity"
 	return "generic"
-
-
-## Choix moraux associés à une prière : [{label, action}] ; action = {} pour « ne rien faire ».
-static func prayer_choices(species: Dictionary, situation: Dictionary) -> Array:
-	var out := []
-	var region: Variant = situation.get("region", Vector2i.ZERO)
-	var sid := int(species.get("id", situation.get("species_id", -1)))
-	var enemy_id := int(situation.get("enemy_id", sid))
-	for c in PRAYER_CHOICES[prayer_key(situation.get("type", "generic"))]:
-		var action := {}
-		if c[1] != "":
-			action = {
-				"type": c[1], "region": region, "radius": 8,
-				"species_id": enemy_id if c[1] == "uplift" and situation.has("enemy_id") else sid,
-			}
-		out.append({"label": c[0], "action": action})
-	return out
 
 
 ## Prophétie à partir d'une projection du futur (WorldSim.project_future()).

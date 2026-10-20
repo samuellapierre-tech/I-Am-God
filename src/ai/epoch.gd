@@ -45,7 +45,7 @@ const ALIASES := {"Trias": 7, "Jurassique": 7, "Crétacé": 7, "Industrielle": 1
 
 ## Mots interdits avant une époque : [motif d'expression régulière (insensible à la casse), époque minimale, libellé].
 ## Les faits réels (facts/) n'y passent pas : ils sont vrais à leur date. Le texte du narrateur, de
-## l'adversaire, des dilemmes et du LLM, si.
+## et du LLM, si.
 const WORDS := [
 	# Âge de l'information.
 	["\\bIA\\b", INFORMATION, "IA"], ["intelligences? artificielles?", INFORMATION, "intelligence artificielle"],

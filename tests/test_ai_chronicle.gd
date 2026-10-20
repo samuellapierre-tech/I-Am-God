@@ -234,7 +234,6 @@ func test_criteres_de_divergence() -> String:
 		[{"era": "Mésozoïque", "year": -64_000_000.0, "species": [dino]}, []],
 		[{"era": "Cénozoïque", "year": -63_000_000.0, "species": [dino], "divine": [{"type": "meteor", "year": -66_000_000.0}]}, ["dinosaurs_survived"]],
 		[{"era": "Cénozoïque", "year": -65_500_000.0, "species": [dino], "divine": [{"type": "meteor", "year": -66_000_000.0}]}, []],
-		[{"era": "Mésozoïque", "year": -65_900_000.0, "species": [dino], "choices": [{"trigger": "meteor_decision", "action_type": ""}]}, ["dinosaurs_spared"]],
 		[{"era": "Préhistoire", "year": -100_000.0, "species": [humans]}, []],
 		[{"era": "Antiquité", "year": -500.0, "species": [humans]}, []],
 		[{"era": "Moderne", "year": 2020.0, "species": [humans]}, []],

@@ -7,9 +7,6 @@ const ParcelNarrator := preload("res://src/ai/parcel_narrator.gd")
 const AiConfig := preload("res://src/ai/ai_config.gd")
 const Epoch := preload("res://src/ai/epoch.gd")
 
-## Mode Éternité : consigne de ton ajoutée aux prompts.
-const ETERNITY_TONE := "Ton : contemplatif et apaisé, comme au coin du feu ; rien ne presse, ni urgence ni alarme. L'adversaire, s'il parle, est un rival doux qui lance des paris."
-
 ## Contraintes communes à tout ce que le narrateur écrit.
 const STYLE_RULES := "Réponds TOUJOURS en français correct. Pas de liste, pas de titre, pas de guillemets, pas de méta-commentaire, ne te présente pas."
 
@@ -42,20 +39,6 @@ static func vet_output(text: String, max_sentences: int, epoch: int) -> String:
 	if epoch >= 0 and not Epoch.is_clean(out, epoch):
 		return ""
 	return out
-
-
-## L'adversaire parle (persona de AiConfig) : il commente, il ne décide rien.
-static func adversary_system() -> String:
-	return "%s Réponds en une phrase, deux au plus, glaciale et élégante, en tutoyant Dieu. N'invente ni règle, ni carte, ni chiffre. %s" % [AiConfig.adversary_text(), STYLE_RULES]
-
-
-## line : réplique procédurale de l'adversaire ({text, kind, reason}) ; ctx : contexte du fil.
-static func build_adversary_prompt(line: Dictionary, ctx: Dictionary) -> String:
-	var lines := PackedStringArray()
-	lines.append(_world_header(ctx))
-	lines.append("Moment : %s%s." % [str(line.get("kind", "")), (" (raison du coup : %s)" % str(line["reason"])) if str(line.get("reason", "")) != "" else ""])
-	lines.append("Réplique de base, à reformuler sans rien ajouter : " + str(line.get("text", "")))
-	return "\n".join(lines)
 
 
 static func narration_system() -> String:
@@ -142,6 +125,41 @@ static func build_invention_prompt(line: Dictionary, ctx: Dictionary) -> String:
 	return "\n".join(lines)
 
 
+## Portrait d'une espèce (présentation à sa naissance, ou épitaphe) : c'est là que l'IA locale apporte le
+## plus. Elle n'invente rien de contraire aux traits réels ; le nom de l'espèce doit figurer dans la réponse
+## (sinon repli sur le texte procédural).
+static func species_system() -> String:
+	return ("%s Tu es aussi le naturaliste de ce monde : quand une espèce naît, tu la présentes comme dans un "
+		+ "carnet de terrain ; quand elle s'éteint, tu écris son épitaphe. 2 ou 3 phrases, au présent pour une "
+		+ "naissance et au passé pour une épitaphe, à la première personne, en tutoyant Dieu. Décris ce qu'on "
+		+ "VOIT (taille comparée à une chose familière de l'époque, forme du corps, peau, couleurs, façon de se "
+		+ "déplacer) puis comment elle vit (ce qu'elle mange, où, avec qui, ce qu'elle craint), en déduisant tout "
+		+ "des traits fournis, sans rien leur contredire. Écris le nom de l'espèce tel quel. Aucun mot d'une "
+		+ "époque plus tardive que celle indiquée. %s") % [AiConfig.persona_text(), STYLE_RULES]
+
+
+## sp : l'espèce (traits réels, génome étendu éventuel) ; base : le texte procédural ; kind : "presentation" | "epitaph".
+static func build_species_prompt(sp: Dictionary, ctx: Dictionary, base: String, kind: String) -> String:
+	var lines := PackedStringArray()
+	lines.append(_world_header(ctx))
+	var keep := {}
+	for k in ["name", "clade", "traits", "genome", "body_plan", "locomotion", "covering", "colors", "habitat",
+			"diet", "sapient", "tech_level", "born_year", "extinct_year", "parent", "description"]:
+		if sp.has(k) and not (typeof(sp[k]) == TYPE_FLOAT and is_nan(float(sp[k]))):
+			keep[k] = sp[k]
+	lines.append("Espèce (données réelles de la simulation, JSON) : " + JSON.stringify(_jsonable(keep)))
+	lines.append("Nom à écrire tel quel : %s." % str(sp.get("name", "")))
+	lines.append("Traits : size 0 = microscopique, 1 = géant ; intelligence 0..1 ; aggression 0..1 ; temp_opt 0 = froid polaire, 1 = chaleur tropicale ; diet = régime.")
+	lines.append("")
+	lines.append("Texte de base, juste mais sec (garde ses faits, enrichis-le) : " + base)
+	if kind == "epitaph":
+		lines.append("Écris son ÉPITAPHE : ce qu'elle a été, ce qui l'a fait disparaître (garde la cause donnée), et ce qui reste d'elle. 2 ou 3 phrases, au passé, sobres.")
+	else:
+		lines.append("PRÉSENTE-la à Dieu, qui la voit pour la première fois : apparence, puis mode de vie. 2 ou 3 phrases, au présent, concrètes et vivantes.")
+	return "
+".join(lines)
+
+
 ## Demande d'enrichissement (JSON) d'un peuple inventé ; la réponse passe par Inventor.enrich_from_llm.
 static func build_enrich_prompt(profile: Dictionary, ctx: Dictionary) -> String:
 	var lines := PackedStringArray()
@@ -170,65 +188,6 @@ static func _world_header(ctx: Dictionary) -> String:
 	if not acts.is_empty():
 		lines.append("Gestes divins passés : %s." % ", ".join(acts))
 	return "\n".join(lines)
-
-
-## Maître du jeu : le LLM rédige un dilemme dont les options ont été fixées par les règles.
-static func dilemma_system() -> String:
-	return "%s Tu poses à Dieu un dilemme. Réponds UNIQUEMENT par un objet JSON valide, sans texte autour : {\"title\": \"...\", \"text\": \"...\", \"options\": [{\"label\": \"...\", \"hint\": \"...\"}]}. Le titre fait quelques mots ; le texte fait 2 à 4 phrases de mise en scène, en tutoyant Dieu ; chaque option garde le sens de l'action indiquée, dans le même ordre ; le libellé « Ne rien faire » reste tel quel ; chaque indice est une conséquence pressentie, floue, jamais certaine. Tout en français correct." % AiConfig.persona_text()
-
-
-static func build_dilemma_prompt(d: Dictionary, ctx: Dictionary) -> String:
-	var lines := PackedStringArray()
-	lines.append(_world_header(ctx))
-	lines.append("Déclencheur : %s." % str(d.get("trigger", "")))
-	var past: Array = ctx.get("choices", [])
-	if not past.is_empty():
-		var mem := PackedStringArray()
-		for c in past.slice(maxi(0, past.size() - 4)):
-			mem.append("%s (%s)" % [str(c.get("label", "")), str(c.get("era", ""))])
-		lines.append("Choix passés de Dieu, que tu peux lui rappeler : %s." % "; ".join(mem))
-	var draft := {"title": d.get("title", ""), "text": d.get("text", ""), "options": []}
-	for o in d.get("options", []):
-		draft["options"].append({"label": o["label"], "hint": o["hint"],
-			"action": str(o["action"].get("type", "rien")) if not o["action"].is_empty() else "rien"})
-	lines.append("Brouillon à réécrire à ta manière (même nombre d'options, même ordre, mêmes actions) : " + JSON.stringify(_jsonable(draft)))
-	return "\n".join(lines)
-
-
-## Fusionne la réponse JSON du LLM dans le dilemme ; garde le brouillon pour tout champ invalide.
-static func merge_dilemma_text(d: Dictionary, raw: String, epoch := -1) -> Dictionary:
-	var out := d.duplicate(true)
-	var a := raw.find("{")
-	var b := raw.rfind("}")
-	if a < 0 or b <= a:
-		return out
-	var data: Variant = JSON.parse_string(raw.substr(a, b - a + 1))
-	if not (data is Dictionary):
-		return out
-	var ok_epoch := func(s: String) -> bool: return epoch < 0 or Epoch.is_clean(s, epoch)
-	var title := sanitize_output(str(data.get("title", "")), 1, 80).trim_suffix(".")
-	if title != "" and not title.contains("{") and ok_epoch.call(title):
-		out["title"] = title
-	var text := sanitize_output(str(data.get("text", "")), 4, 600)
-	var n := 0
-	for i in text.length():
-		if text[i] in [".", "!", "?", "…"] and (i + 1 == text.length() or text[i + 1] == " "):
-			n += 1
-	if n >= 2 and n <= 4 and not text.contains("{") and ok_epoch.call(text):
-		out["text"] = text
-	var opts: Variant = data.get("options", [])
-	if opts is Array and (opts as Array).size() == (out["options"] as Array).size():
-		for i in opts.size():
-			if not (opts[i] is Dictionary):
-				continue
-			var o: Dictionary = out["options"][i]
-			var label := str(opts[i].get("label", "")).strip_edges()
-			var hint := str(opts[i].get("hint", "")).strip_edges()
-			if not (o["action"] as Dictionary).is_empty() and label != "" and label.length() <= 60 and not label.contains("{") and ok_epoch.call(label):
-				o["label"] = label
-			if hint != "" and hint.length() <= 160 and not hint.contains("{") and ok_epoch.call(hint):
-				o["hint"] = hint
-	return out
 
 
 ## Narration d'un moment de la parcelle (ParcelNarrator) : le fait, puis l'état du terrain.
