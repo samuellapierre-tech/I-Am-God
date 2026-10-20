@@ -10,8 +10,9 @@ extends Node
 const GLOBE_SCENE := "res://scenes/globe.tscn"
 const PARCEL_SCENE := "res://scenes/parcel_view.tscn"
 const STATS_SCENE := "res://scenes/stats_panel.tscn"
-## Fil de narration d'Ézéchiel, le compagnon.
-const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn"]
+## Fil de narration d'Ézéchiel, le compagnon (docs/GENESE.md).
+## Menu (src/ui/menu/) : Continuer / Nouvelle planète / Panthéon, fin des temps, réincarnation.
+const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn", "res://scenes/main_menu.tscn"]
 const ParcelPowers := preload("res://src/ui/parcel_powers.gd")
 const ViewRouter := preload("res://src/globe/view_router.gd")
 
