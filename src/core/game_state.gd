@@ -127,36 +127,12 @@ func _refresh_parcel() -> void:
 	parcel_updated.emit()
 
 
-## Parcelle de départ : la terre la plus vivante du monde (plusieurs espèces établies, climat
-## tempéré à chaud, humide), pour que la partie s'ouvre sur des dinosaures et non sur un désert.
-## Une cellule testée par région écologique (4×4) ; déterministe à graine égale.
+## Parcelle de départ : sur une planète vierge, une côte (un haut-fond qui émergera) ; déterministe.
 func _liveliest_cell() -> Vector2i:
-	if sim.is_prologue() and sim.land_flora <= 0.0:
-		# Avant toute vie terrestre : un estran à stromatolites qui émergera (voir ParcelSim).
-		return ParcelSim.pick_start_cell(sim)
-	var best := _first_land_cell(DEFAULT_PARCEL)
-	var best_score := -1.0
-	for y in range(2, WorldSim.HEIGHT, 4):
-		for x in range(2, WorldSim.WIDTH, 4):
-			var i := y * WorldSim.WIDTH + x
-			if sim.elevation[i] < 0.0:
-				continue
-			var niches := sim.region_niches(Vector2i(x, y))
-			if niches.is_empty():
-				continue
-			var density := 0.0
-			for n in niches:
-				density += float(n.density)
-			var t := sim.temperature[i]
-			var climate := clampf(1.0 - absf(t - 0.6) * 3.0, 0.05, 1.0)
-			var score := density * niches.size() * climate * (0.5 + sim.moisture[i])
-			if score > best_score:
-				best_score = score
-				best = Vector2i(x, y)
-	return best
+	# Planète vierge : le départ se fait sur une côte (haut-fond qui émergera), voir ParcelSim.
+	return ParcelSim.pick_start_cell(sim)
 
 
-## Première cellule de terre en partant de `start` (balayage en spirale grossière).
 func _first_land_cell(start: Vector2i) -> Vector2i:
 	for r in range(0, 40):
 		for dy in range(-r, r + 1):

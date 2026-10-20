@@ -101,7 +101,7 @@ func test_trial_mode_has_no_exodus() -> String:
 
 
 func test_life_restarts_after_total_extinction_of_complex_life() -> String:
-	var sim := WorldSim.new(11)
+	var sim := WorldSim.new(11, true, WorldSim.SCENARIO_PROLOGUE)
 	_fast(sim, -300.0e6)
 	if sim.max_complexity < 4.0:
 		return "pas de vie complexe à -300 Ma (complexité %.0f)" % sim.max_complexity
@@ -125,7 +125,7 @@ func test_life_restarts_after_total_extinction_of_complex_life() -> String:
 
 func test_life_reappears_on_a_dead_world_only_in_endless_mode() -> String:
 	for endless in [true, false]:
-		var sim := WorldSim.new(5)
+		var sim := WorldSim.new(5, true, WorldSim.SCENARIO_PROLOGUE)
 		sim.set_endless(endless)
 		_fast(sim, -3.5e9)
 		for id in sim.get_alive_species():
@@ -140,7 +140,7 @@ func test_life_reappears_on_a_dead_world_only_in_endless_mode() -> String:
 
 
 func test_start_parcel_is_a_tidal_flat_that_emerges() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_PROLOGUE)
 	var cell := ParcelSim.pick_start_cell(sim)
 	var parcel := ParcelSim.new(sim, cell)
 	if parcel.shore == "land" or parcel.land_use != "microbial_mat":

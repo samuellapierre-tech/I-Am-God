@@ -23,8 +23,15 @@ static func _cyl_noise(noise: FastNoiseLite, x: int, y: int, w: int, _h: int, sc
 
 
 ## Remplit elevation, temperature (température de base, sans anomalie), moisture, biome.
+## params (facultatifs) : land_fraction (part des terres), axial_tilt (degrés : une forte
+## inclinaison adoucit les pôles). temp_lat / moist_lat (facultatifs, même taille) reçoivent la
+## part du climat qui ne dépend pas du relief : la tectonique les réutilise (derive_climate).
 static func generate(seed_value: int, w: int, h: int, elevation: PackedFloat32Array,
-		temperature: PackedFloat32Array, moisture: PackedFloat32Array, biome: PackedByteArray) -> void:
+		temperature: PackedFloat32Array, moisture: PackedFloat32Array, biome: PackedByteArray,
+		params := {}, temp_lat := PackedFloat32Array(), moist_lat := PackedFloat32Array()) -> void:
+	var land_fraction := clampf(float(params.get("land_fraction", LAND_FRACTION)), 0.05, 0.95)
+	var tilt := float(params.get("axial_tilt", 23.4))
+	var pole_cold := clampf(0.95 * (1.0 - (tilt - 23.4) / 70.0), 0.5, 1.2)
 	var n := w * h
 	var relief := FastNoiseLite.new()
 	relief.seed = seed_value
@@ -53,7 +60,7 @@ static func generate(seed_value: int, w: int, h: int, elevation: PackedFloat32Ar
 	# Niveau de la mer au percentile voulu : la part de terres est garantie quelle que soit la graine.
 	var sorted := raw.duplicate()
 	sorted.sort()
-	var sea := sorted[int(n * (1.0 - LAND_FRACTION))]
+	var sea := sorted[clampi(int(n * (1.0 - land_fraction)), 0, n - 1)]
 	var lo := sorted[0]
 	var hi := sorted[n - 1]
 	for i in n:
@@ -62,14 +69,19 @@ static func generate(seed_value: int, w: int, h: int, elevation: PackedFloat32Ar
 
 	for y in h:
 		var lat := absf((float(y) + 0.5) / float(h) * 2.0 - 1.0)
-		var base_t := 1.0 - pow(lat, 1.35) * 0.95
+		var base_t := 1.0 - pow(lat, 1.35) * pole_cold
 		# Ceintures d'humidité : équateur humide, déserts subtropicaux, latitudes moyennes humides.
 		var band_wet := 0.55 + 0.35 * cos(lat * PI * 3.0)
 		for x in w:
 			var i := y * w + x
 			var e := elevation[i]
-			temperature[i] = clampf(base_t - maxf(e, 0.0) * 0.45 + _cyl_noise(wet, x, y, w, h, 2.0) * 0.04, 0.0, 1.0)
-			moisture[i] = clampf(band_wet * 0.6 + (_cyl_noise(wet, x, y, w, h, 1.0) * 0.5 + 0.5) * 0.5 - maxf(e, 0.0) * 0.2, 0.0, 1.0)
+			var tl := base_t + _cyl_noise(wet, x, y, w, h, 2.0) * 0.04
+			var ml := band_wet * 0.6 + (_cyl_noise(wet, x, y, w, h, 1.0) * 0.5 + 0.5) * 0.5
+			if temp_lat.size() == n:
+				temp_lat[i] = tl
+				moist_lat[i] = ml
+			temperature[i] = clampf(tl - maxf(e, 0.0) * 0.45, 0.0, 1.0)
+			moisture[i] = clampf(ml - maxf(e, 0.0) * 0.2, 0.0, 1.0)
 			biome[i] = classify(e, temperature[i], moisture[i])
 
 
@@ -93,3 +105,17 @@ static func classify(e: float, t: float, m: float) -> int:
 	if m < 0.3:
 		return Biome.DESERT
 	return Biome.RAINFOREST if m > 0.6 else Biome.SAVANNA
+
+
+## Climat de base d'un relief donné (tectonique) : température (latitude, altitude), humidité
+## (latitude, altitude, continentalité : l'intérieur des continents est plus sec), biome.
+static func derive_climate(elevation: PackedFloat32Array, temp_lat: PackedFloat32Array,
+		moist_lat: PackedFloat32Array, coast_dist: PackedFloat32Array, temperature: PackedFloat32Array,
+		moisture: PackedFloat32Array, biome: PackedByteArray) -> void:
+	for i in elevation.size():
+		var e := elevation[i]
+		var inland := smoothstep(3.0, 18.0, coast_dist[i]) if e >= 0.0 else 0.0
+		temperature[i] = clampf(temp_lat[i] - maxf(e, 0.0) * 0.45 - inland * 0.03, 0.0, 1.0)
+		moisture[i] = clampf(moist_lat[i] - maxf(e, 0.0) * 0.2 - inland * 0.25, 0.0, 1.0)
+		biome[i] = classify(e, temperature[i], moisture[i])
+

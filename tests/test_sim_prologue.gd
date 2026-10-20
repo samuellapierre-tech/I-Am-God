@@ -25,7 +25,7 @@ func _fast(sim: RefCounted, until_year: float) -> void:
 ## Boucle du HUD à x1 : MapMath.base_years_per_second(ideal) × GameState.opening_pace(temps de jeu)
 ## tant qu'aucun peuple n'est conscient. Renvoie {mesozoic_time, end_time, dinos_before_66, ...}.
 func _play(seed_value: int) -> Dictionary:
-	var sim := WorldSim.new(seed_value)
+	var sim := WorldSim.new(seed_value, true, WorldSim.SCENARIO_PROLOGUE)
 	var t := 0.0
 	var res := {sim = sim, mesozoic_time = -1.0, end_time = -1.0, dino_year = NAN, sapience_year = NAN}
 	while sim.year < Eras.CRETACEOUS_END and t < 3600.0:
@@ -46,7 +46,7 @@ func _play(seed_value: int) -> Dictionary:
 
 
 func test_starts_with_marine_microbes() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_PROLOGUE)
 	if sim.year != WorldSim.PROLOGUE_START_YEAR or sim.era_index() != Eras.ARCHEAN:
 		return "départ inattendu : %.0f, ère %s" % [sim.year, sim.current_era()]
 	if sim.current_period() != "Archéen" or sim.current_era() != "Archéen":
@@ -64,8 +64,8 @@ func test_starts_with_marine_microbes() -> String:
 
 
 func test_prologue_is_deterministic() -> String:
-	var a := WorldSim.new(5)
-	var b := WorldSim.new(5)
+	var a := WorldSim.new(5, true, WorldSim.SCENARIO_PROLOGUE)
+	var b := WorldSim.new(5, true, WorldSim.SCENARIO_PROLOGUE)
 	_fast(a, -1.5e9)
 	_fast(b, -1.5e9)
 	var fa := "%f|%f|%s|%d|%d" % [a.year, a.oxygen, str(a.era_years), a.causal_log.next_id, a.get_alive_species().size()]
@@ -113,8 +113,8 @@ func test_stages_follow_and_pace_at_x1() -> String:
 
 
 func test_preventing_oxidation_changes_the_outcome() -> String:
-	var base := WorldSim.new(7)
-	var held := WorldSim.new(7)
+	var base := WorldSim.new(7, true, WorldSim.SCENARIO_PROLOGUE)
+	var held := WorldSim.new(7, true, WorldSim.SCENARIO_PROLOGUE)
 	_fast(base, -3.2e9)
 	_fast(held, -3.2e9)
 	# Dieu anéantit les cyanobactéries et réveille les volcans : le fer et les gaz réducteurs
@@ -137,7 +137,7 @@ func test_preventing_oxidation_changes_the_outcome() -> String:
 
 
 func test_divine_powers_act_during_prologue() -> String:
-	var sim := WorldSim.new(11)
+	var sim := WorldSim.new(11, true, WorldSim.SCENARIO_PROLOGUE)
 	_fast(sim, -3.0e9)
 	var cell := Vector2i(120, 60)
 	for type in ["meteor", "flood", "bless", "spawn_species", "plague", "save", "uplift", "extinct", "soothe"]:
@@ -167,7 +167,7 @@ func test_divine_powers_act_during_prologue() -> String:
 
 
 func test_parcel_shows_living_sea_and_barren_land() -> String:
-	var sim := WorldSim.new(7)
+	var sim := WorldSim.new(7, true, WorldSim.SCENARIO_PROLOGUE)
 	_fast(sim, -3.5e9)
 	var sea := Vector2i(-1, -1)
 	var land := Vector2i(-1, -1)
