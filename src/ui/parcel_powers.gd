@@ -4,6 +4,7 @@ extends Node
 ## via bind_map() sans changement : toute l'interaction vise la cellule de GameState.parcel.
 ## Clic gauche n'importe où (hors interface) avec un pouvoir sélectionné = pouvoir sur la parcelle.
 
+const ToolStateScript := preload("res://src/ui/tools/tool_state.gd")
 const Powers := preload("res://src/map/divine_powers.gd")
 const WorldSim := preload("res://src/sim/world_sim.gd")
 
@@ -79,9 +80,37 @@ func dominant_species_at(region: Vector2i) -> int:
 	return sim.dominant_species[i] if i >= 0 and i < sim.dominant_species.size() else -1
 
 
-## Applique le pouvoir sélectionné, via GameState (contrat d'action divine).
+## Outil de la palette (src/ui/tools/tool_state.gd) : semence ou pouvoir, avec recharge.
+func _tools() -> Node:
+	return ToolStateScript.shared(get_tree())
+
+
+func _has_tool() -> bool:
+	return power != "" or _tools().has_tool()
+
+
+## Applique l'outil sélectionné (semence ou pouvoir) sur une région, via GameState. La palette
+## démarre la recharge ; sans outil de palette, on retombe sur le pouvoir de la vue.
 func apply_power_at(region: Vector2i) -> void:
-	if power == "" or GameState.sim == null:
+	if GameState.sim == null or region.x < 0:
+		return
+	var tools := _tools()
+	if tools.has_tool():
+		var tool: Dictionary = tools.selected_tool()
+		if str(tool.get("kind", "")) == "power":
+			var params: Dictionary = tool.get("params", {})
+			params.radius = radius
+			params.species_id = target_species
+			tool.params = params
+		var a: Dictionary = tools.use(tool, region)
+		if a.is_empty():
+			return
+		var p := Powers.get_power(str(a.get("type", "")))
+		if p.get("needs_species", false) and int(a.get("species_id", -1)) < 0:
+			a.species_id = dominant_species_at(region)
+		GameState.apply_divine_action(a)
+		return
+	if power == "":
 		return
 	var p := Powers.get_power(power)
 	var species_id := target_species
@@ -96,7 +125,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	var mb := event as InputEventMouseButton
 	if mb == null or not mb.pressed:
 		return
-	if mb.button_index == MOUSE_BUTTON_LEFT and power != "":
+	if mb.button_index == MOUSE_BUTTON_LEFT and _has_tool():
 		apply_power_at(parcel_cell())
 		get_viewport().set_input_as_handled()
 	elif mb.shift_pressed and mb.button_index == MOUSE_BUTTON_WHEEL_UP:

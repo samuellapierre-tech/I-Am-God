@@ -51,6 +51,8 @@ func _ready() -> void:
 	_fade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fade_layer.add_child(_fade)
 
+	if hud.has_signal("focus_species"):
+		hud.focus_species.connect(_focus_species)
 	GameState.view_mode_changed.connect(_apply_view_mode)
 	if globe == null:
 		GameState.set_view_mode(ViewRouter.GROUND)
@@ -133,3 +135,32 @@ func _input(event: InputEvent) -> void:
 	if ViewRouter.should_ascend(float(cam.get("target_zoom")), cam.zoom.x, float(cam.call("min_zoom"))):
 		switch_to(ViewRouter.GLOBE)
 		get_viewport().set_input_as_handled()
+
+
+## Arbre de la vie -> « Centrer sur le globe » : on remonte au globe et on vise une région où vit
+## l'espèce (dominante d'une cellule, sinon établie dans une région écologique).
+func _focus_species(species_id: int) -> void:
+	var sim = GameState.sim
+	if sim == null or globe == null:
+		return
+	var cell := Vector2i(-1, -1)
+	var dom: PackedInt32Array = sim.dominant_species
+	var i := dom.find(species_id)
+	if i >= 0:
+		cell = Vector2i(i % sim.WIDTH, i / sim.WIDTH)
+	elif sim.has_method("region_niches"):
+		for y in range(2, sim.HEIGHT, 4):
+			for x in range(2, sim.WIDTH, 4):
+				for n in sim.region_niches(Vector2i(x, y)):
+					if int(n.species_id) == species_id:
+						cell = Vector2i(x, y)
+						break
+				if cell.x >= 0:
+					break
+			if cell.x >= 0:
+				break
+	if cell.x < 0:
+		return
+	if GameState.view_mode != ViewRouter.GLOBE:
+		switch_to(ViewRouter.GLOBE)
+	globe.focus_region(cell)
