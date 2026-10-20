@@ -289,7 +289,7 @@ d'effondrement spontané des civilisations accomplies, pas de renaissance d'un m
   runtime_records}` ; journal ≤ 4096 (+512) événements, ≤ 1024 actions divines épinglées, ≤ 2048
   fiches d'espèces, ≤ 128 espèces vivantes, historique de parcelle ≤ 512.
 
-### Sauvegarde (à venir)
+### Sauvegarde (voir la section « Sauvegarde, fin des temps et réincarnation »)
 
 Tout l'état est fait de types simples (tableaux compacts, dictionnaires, nombres) ; aucune
 référence circulaire. `WorldSim.fork()` énumère exactement ce qu'il faut sauver :
@@ -301,3 +301,84 @@ les tableaux de l'écosystème (`Ecosystem.copy()` les liste ; `band_cells` se r
 `ParcelSim` ne référence que son monde : sauver `cell` et ses champs (publics et privés, tous
 simples) ; le recréer par `ParcelSim.new(world, cell)` puis réappliquer ces champs.
 
+
+## Sauvegarde, fin des temps et réincarnation (contrat d'octobre 2026, `src/save/`)
+
+Branche `feature/save`. Vision : [`GENESE.md`](GENESE.md).
+
+### Ce qui est sauvé
+
+`src/save/serializer.gd` relit par réflexion **toutes les variables de script** de `WorldSim`,
+`ParcelSim` et de leurs sous-objets (`Ecosystem`, `Causality`, tout `RefCounted` à script). Un champ
+ajouté est sauvé sans rien changer ; un champ disparu est ignoré au chargement ; un champ nouveau
+garde sa valeur par défaut ; un type changé est converti si possible. L'identité des objets est
+gardée (la parcelle pointe vers le même monde). `RandomNumberGenerator` : graine et état exacts.
+Adaptateurs (`src/save/adapters.gd`) :
+
+- champs jamais sauvés : `WorldSim.last_step_usec`, `last_substeps` (mesures), `Ecosystem.g_*`
+  (grilles partagées, rebranchées par `bind_grids`), `Causality._by_id` (index reconstruit) ;
+- construction : arguments de `_init` passés **par nom** (préfixe `p_` accepté) depuis les champs
+  sauvés ; `WorldSim` est construit avec `generate = false` ;
+- après chargement, un objet peut exposer `post_load()` (appelée si elle existe).
+
+Garantie testée (`tests/test_save*.gd`) : sauver, recharger et avancer de N pas donne **exactement**
+le même état, octet pour octet, que sans sauvegarde (prologue et `SCENARIO_CRETACEOUS`, monde seul ou
+partie complète via `GameState`).
+
+Instantané d'une partie (`src/save/save_service.gd`, nœud `GameState/Saver`) :
+`{world: graphe {sim, parcel}, game: {play_time, world_name, world_index, planet, peaks, created,
+parcel_timer, pending_events}, narrator, participants}`.
+
+- **Ézéchiel** : si l'autoload `Narrator` expose `save_state() -> Dictionary` et
+  `load_state(state)`, ils sont utilisés (types `var_to_bytes` seulement, clés absentes tolérées) ;
+  sinon repli par réflexion sur `chronicle`, `lens`, `variety`, `_divine_history`, `_recent_events`,
+  `_last_era`, `_last_stage`.
+- **Épingles, statistiques, tout autre état d'interface** : un nœud du groupe `save_state` qui expose
+  `save_state() -> Dictionary` et `load_state(state)` est sauvé sous son `name`.
+
+### Fichiers
+
+`user://saves/<emplacement>.igsave` (emplacements `auto`, `quick`, `slot_1`…`slot_3`) : enveloppe
+`{magic, version, created_unix, meta, check, payload}` compressée en zstd, écriture **atomique**
+(`.tmp` relu et vérifié, puis renommé ; l'ancien fichier sert de secours `.bak` pendant le
+remplacement). `<emplacement>.igsave.meta` (JSON) : métadonnées pour le menu. Chargement : refus
+propre d'un fichier corrompu (`check`) ou d'une version future, migration des versions anciennes
+(`SaveStore.migrate()`, `SaveStore.VERSION`). Sauvegarde automatique toutes les 5 minutes et à la fermeture
+(`-- --no-autosave` pour la couper).
+
+### `GameState` (ajouts)
+
+- `save_game(slot := "quick") -> String`, `load_game(slot := "auto") -> String` ("" = réussi).
+- `world_name`, `world_index` (n-ième vie du joueur), `planet_params`, `saver`, `pantheon`.
+- `new_world(seed, params := {})` : `params` (réincarnation) transmis à `WorldSim._init` par nom
+  (`ocean_fraction`, `axial_tilt`, `star_luminosity`, `plates`…) s'il les accepte, le reste à
+  `configure_planet(params)` s'il existe.
+- `adopt_world(sim, parcel, info)` : remplace le monde courant (reprise d'une sauvegarde).
+- `reincarnate(params := {}) -> info` : les espèces marquantes rejoignent le Panthéon, puis nouvelle
+  planète vierge (paramètres tirés au hasard si `params` est vide).
+- `reseed_from_pantheon(entry, cell)` : ressème une espèce du Panthéon comme semence « façonnée » ;
+  utilise `WorldSim.sow(action)` s'il existe (action `{type: "spawn_species", kind: "shaped",
+  region, radius, traits, name, shaped: true}`), sinon le pouvoir Création, dont l'espèce reçoit le
+  nom et les traits.
+- Signaux :
+  - `end_of_times(summary)` : sur l'événement `end_of_times` de la simulation (une fois par
+    planète). `summary = {world_name, world_index, year, age_years, species_total,
+    species_max_alive, extinctions, civilizations, notable: [{name, description, clade, sapient}],
+    cause}` : **Ézéchiel le raconte**.
+  - `world_reborn(info)` : `info = {world_name, world_index, params, previous}`.
+  - `game_saved(slot)`, `game_loaded(slot)`.
+
+### Panthéon (`src/save/pantheon.gd`)
+
+`user://pantheon/pantheon.igsave`, à part des sauvegardes : il survit à toutes les réincarnations.
+`entries: [{key, name, description, clade, traits, sapient, created_by_god, reason
+("conscience"|"création"|"règne"), world_name, world_index, born_year, extinct_year,
+peak_regions}]`, `worlds`, `lives`. Retenues à la réincarnation : les peuples conscients, les espèces
+créées par Dieu, les 6 plus répandues à leur apogée. Borné à 300 espèces et 100 mondes.
+
+### Menu (`src/ui/menu/`, `scenes/main_menu.tscn`)
+
+Au lancement : Continuer / Nouvelle planète / Panthéon (`-- --no-menu` pour l'éviter). En jeu :
+bouton « Menu » en bas à gauche ou F10 (Reprendre, Sauvegarder, Reprendre la dernière sauvegarde,
+Panthéon avec « Ressemer », Renaître… avec confirmation, Quitter). Écran calme de fin des temps
+(« Contempler encore » ou « Renaître »).

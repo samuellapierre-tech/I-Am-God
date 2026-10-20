@@ -8,7 +8,8 @@ const PARCEL_SCENE := "res://scenes/parcel_view.tscn"
 const STATS_SCENE := "res://scenes/stats_panel.tscn"
 ## Fil de narration d'Ézéchiel, le compagnon (docs/GENESE.md).
 ## Couche stratégique : menaces, pistes, actions, écrans de lancement et de fin.
-const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn"]
+## Menu (src/ui/menu/) : Continuer / Nouvelle planète / Panthéon, fin des temps, réincarnation.
+const OVERLAY_SCENES := ["res://scenes/narration_feed.tscn", "res://scenes/main_menu.tscn"]
 const ParcelPowers := preload("res://src/ui/parcel_powers.gd")
 
 var parcel_view: Node
