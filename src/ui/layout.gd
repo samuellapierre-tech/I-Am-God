@@ -20,6 +20,9 @@ const REF_SIZE := Vector2(1920, 1080)
 
 ## Fine barre du haut (hud.gd) : année, ère, vitesse, tiroirs. Centrée, largeur selon le contenu.
 const TOP_BAR := Rect2(500, 8, 920, 46)
+## Bouton « Menu » (src/ui/menu/) : coin haut droit, au-dessus du tiroir Monde (la barre du haut,
+## large selon son contenu, peut dépasser sa zone).
+const MENU_BUTTON := Rect2(1808, 12, 100, 40)
 ## Statistiques de la parcelle (src/ui/stats/), repliables avec S. Hauteur avec 6 espèces ; elle
 ## peut atteindre STATS_MAX_BOTTOM le temps qu'une espèce disparue s'efface.
 const STATS := Rect2(12, 12, 360, 560)
@@ -39,7 +42,7 @@ const TREE := Rect2(528, 64, 992, 780)
 
 ## Zones visibles au repos (tiroirs fermés, aucun outil choisi).
 const REST_ZONES := {
-	top_bar = TOP_BAR, stats = STATS, feed = FEED, tool_bar = TOOL_BAR,
+	top_bar = TOP_BAR, stats = STATS, feed = FEED, tool_bar = TOOL_BAR, menu_button = MENU_BUTTON,
 }
 const MAX_REST_COVERAGE := 0.30
 

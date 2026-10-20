@@ -465,6 +465,6 @@ créées par Dieu, les 6 plus répandues à leur apogée. Borné à 300 espèces
 ### Menu (`src/ui/menu/`, `scenes/main_menu.tscn`)
 
 Au lancement : Continuer / Nouvelle planète / Panthéon (`-- --no-menu` pour l'éviter). En jeu :
-bouton « Menu » en bas à gauche ou F10 (Reprendre, Sauvegarder, Reprendre la dernière sauvegarde,
+bouton « Menu » dans le coin haut droit (`Layout.MENU_BUTTON`) ou F10 (Reprendre, Sauvegarder, Reprendre la dernière sauvegarde,
 Panthéon avec « Ressemer », Renaître… avec confirmation, Quitter). Écran calme de fin des temps
 (« Contempler encore » ou « Renaître »).

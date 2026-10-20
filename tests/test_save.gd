@@ -40,7 +40,14 @@ static func _write_raw_envelope(path: String, env: Variant) -> void:
 
 ## Sauver, recharger, continuer N pas == continuer sans sauvegarde (octet pour octet).
 func _roundtrip(seed_value: int, scenario: String, before: int, after: int) -> String:
-	var sim := WorldSim.new(seed_value) if scenario == "" else WorldSim.new(seed_value, true, scenario)
+	var sim: RefCounted
+	if scenario == "planet":
+		# Planète de réincarnation (paramètres passés à WorldSim) : tectonique et géographie actives.
+		sim = Planet.make_world({seed = seed_value, ocean_fraction = 0.7, axial_tilt = 30.0, star_luminosity = 1.1, plates = 11})
+	elif scenario == "":
+		sim = WorldSim.new(seed_value)
+	else:
+		sim = WorldSim.new(seed_value, true, scenario)
 	var parcel := ParcelSim.new(sim, Vector2i(70, 40))
 	_step(sim, parcel, before)
 	var data := Serializer.encode({sim = sim, parcel = parcel})
@@ -64,7 +71,7 @@ func _roundtrip(seed_value: int, scenario: String, before: int, after: int) -> S
 
 
 func test_roundtrip_is_deterministic() -> String:
-	for c in [[7, "", 60, 120], [42, WorldSim.SCENARIO_CRETACEOUS, 200, 200]]:
+	for c in [[7, "", 60, 120], [42, WorldSim.SCENARIO_CRETACEOUS, 200, 200], [13, "planet", 400, 300]]:
 		var err := _roundtrip(c[0], c[1], c[2], c[3])
 		if err != "":
 			return err
