@@ -2,7 +2,7 @@ extends CanvasLayer
 ## Fil de narration : l'histoire racontée en continu par le Narrateur (Narrator.narration_ready).
 ## Le plus récent en bas ; les dernières lignes restent visibles puis s'estompent (FeedMath).
 ## Au survol (ou PageUp / PageDown) le fond apparaît et tout l'historique se relit à la molette.
-## En tête : le nom du narrateur (DilemmaMath.speaker_name : NARRATOR_NAME de ai_config.gd, sinon
+## En tête : le nom du narrateur (Speaker.speaker_name : NARRATOR_NAME de ai_config.gd, sinon
 ## le nom par défaut), visible dès qu'il a parlé.
 ##
 ## Placé dans le bas de la colonne droite, sous le tiroir « Espèces vivantes » du HUD (y < 540) :
@@ -13,7 +13,7 @@ extends CanvasLayer
 
 const FeedMath := preload("res://src/ui/chronicle/feed_math.gd")
 const StatsMath := preload("res://src/ui/stats/stats_math.gd")
-const DilemmaMath := preload("res://src/ui/dilemma/dilemma_math.gd")
+const Speaker := preload("res://src/ui/chronicle/speaker.gd")
 
 const Layout := preload("res://src/ui/layout.gd")
 const TEXT_SIZE := 18
@@ -106,7 +106,7 @@ func _build() -> void:
 	_header.modulate.a = 0.0
 	root.add_child(_header)
 	_speaker_label = Label.new()
-	_speaker_label.text = DilemmaMath.speaker_name(null, DilemmaMath.load_config_constants())
+	_speaker_label.text = Speaker.speaker_name(null, Speaker.load_config_constants())
 	_speaker_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_speaker_label.add_theme_font_size_override("font_size", 17)
 	_speaker_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
