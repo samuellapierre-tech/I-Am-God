@@ -10,6 +10,8 @@ extends RefCounted
 ## Altitude de la caméra au-dessus de la surface, en rayons planétaires.
 const MIN_ALTITUDE := 0.035
 const MAX_ALTITUDE := 3.2
+## Altitude atteinte en remontant du sol : on voit la courbure de la planète et ses côtes.
+const ARRIVAL_ALTITUDE := 1.0
 ## Inclinaison maximale de la caméra vers l'horizon près du sol (radians).
 const MAX_TILT := deg_to_rad(48.0)
 ## La caméra s'incline entre ces deux altitudes (droite au-dessus, inclinée près du sol).
@@ -129,7 +131,7 @@ static func drag_rate(altitude: float, viewport_height: float, fov_deg: float) -
 
 
 ## Molette : altitude suivante (facteur multiplicatif), bornée.
-static func wheel_altitude(altitude: float, notches: float, step := 1.18) -> float:
+static func wheel_altitude(altitude: float, notches: float, step := 1.3) -> float:
 	return clampf(altitude * pow(step, notches), MIN_ALTITUDE, MAX_ALTITUDE)
 
 

@@ -241,8 +241,10 @@ func center_cell() -> Vector2i:
 func arrive_from_ground(cell: Vector2i) -> void:
 	var ll := GlobeMath.cell_lat_lon(cell, grid)
 	orbit.jump_to(ll.x, ll.y)
+	# On repart du sol puis la caméra s'élève d'elle-même jusqu'à voir la courbure de la planète :
+	# arriver à 0,18 remplissait l'écran de mer (« carte toute brune » à l'Archéen).
 	orbit.set_altitude(GlobeMath.MIN_ALTITUDE, true)
-	orbit.set_altitude(0.18)
+	orbit.set_altitude(GlobeMath.ARRIVAL_ALTITUDE)
 	_apply_camera(0.0)
 
 

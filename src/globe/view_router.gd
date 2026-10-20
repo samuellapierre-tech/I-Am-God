@@ -32,6 +32,11 @@ static func set_active(node: Node, active: bool) -> void:
 	node.process_mode = Node.PROCESS_MODE_INHERIT if active else Node.PROCESS_MODE_DISABLED
 	if "visible" in node:
 		node.set("visible", active)
+	# Un CanvasLayer n'hérite pas de la visibilité de son parent (Node2D ou Node3D) : le voile d'eau et
+	# l'atmosphère de la vue au sol restaient dessinés par-dessus le globe (écran brun au dézoom), et
+	# les boutons du globe par-dessus le sol.
+	for layer in node.find_children("*", "CanvasLayer", true, false):
+		(layer as CanvasLayer).visible = active
 	for child in node.get_children():
 		if child is Camera3D:
 			(child as Camera3D).current = active

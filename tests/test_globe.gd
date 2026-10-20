@@ -276,6 +276,32 @@ func test_view_switch() -> String:
 	return err
 
 
+## Régression (écran brun au dézoom) : les CanvasLayer d'une vue (voile d'eau, atmosphère au sol ;
+## boutons du globe) suivent la vue active, car ils n'héritent pas de la visibilité de leur parent.
+func test_view_switch_hides_canvas_layers() -> String:
+	var g := FakeView.new()
+	var g_ui := CanvasLayer.new()
+	g.add_child(g_ui)
+	var p := FakeView.new()
+	var sky := CanvasLayer.new()
+	p.add_child(sky)
+	var deep := Node.new()
+	sky.add_child(deep)
+	var nested := CanvasLayer.new()
+	deep.add_child(nested)
+	var views := {"globe": [g], "ground": [p]}
+	var err := ""
+	ViewRouter.apply("ground", views)
+	if not sky.visible or not nested.visible or g_ui.visible:
+		err = "au sol : calques du sol visibles, calques du globe cachés"
+	ViewRouter.apply("globe", views)
+	if err == "" and (sky.visible or nested.visible or not g_ui.visible):
+		err = "au globe : le voile et l'atmosphère du sol doivent être cachés"
+	g.free()
+	p.free()
+	return err
+
+
 func test_no_double_power_application() -> String:
 	var g := FakeView.new()
 	var p := FakeView.new()
