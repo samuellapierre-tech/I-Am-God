@@ -17,6 +17,20 @@ extends RefCounted
 ## - anaerobic : l'oxygène l'empoisonne ; oxygenic : produit de l'oxygène (photosynthèse)
 ## Les dinosaures, les ancêtres des mammifères, etc. naissent par transitions de clade à la
 ## spéciation (TRANSITIONS), sous conditions d'oxygène, de flore terrestre et de niches libres.
+##
+## Génome étendu (src/life/genome.gd) : plan corporel, squelette, membres, locomotion, milieu,
+## couverture, métabolisme, sens, armes, mœurs, couleurs… sous des clés plates de `traits`.
+## Chaque espèce en reçoit un (rosters compris) ; il mute à chaque spéciation dans le respect des
+## contraintes physiques. Les lignées semées par le joueur (seed_template) et les chimères ont
+## `free_evolution` : leurs grandes innovations naissent du génome, et leur clade en est déduit.
+## Ces calculs utilisent un générateur local dérivé de l'état du générateur partagé, sans jamais
+## y puiser : la suite des tirages de la simulation est inchangée.
+## Noms (binômes latins, noms vernaculaires) : src/life/naming.gd ; descriptions :
+## src/life/description.gd ; arbre de la vie : src/life/phylogeny.gd.
+
+const Genome := preload("res://src/life/genome.gd")
+const Naming := preload("res://src/life/naming.gd")
+const Description := preload("res://src/life/description.gd")
 
 const SAPIENCE_THRESHOLD := 0.78
 
@@ -34,8 +48,8 @@ const OXYGEN_NEED: Array[float] = [0.0, 0.002, 0.012, 0.08, 0.15, 0.25, 0.3]
 
 ## Roster de départ du prologue (-3,8 Ga) : la vie n'est que microbienne et marine.
 const PROLOGUE_ROSTER := [
-	{name = "Archées méthanogènes", clade = "microbe", size = 0.01, intelligence = 0.0, adaptability = 0.75, aggression = 0.2, diet = "autotrophe", temp_opt = 0.72, temp_tol = 0.4, complexity = 0.0, habitat = "marine", anaerobic = true, oxygenic = false},
-	{name = "Bactéries pourpres", clade = "microbe", size = 0.012, intelligence = 0.0, adaptability = 0.7, aggression = 0.2, diet = "autotrophe", temp_opt = 0.62, temp_tol = 0.4, complexity = 0.0, habitat = "marine", anaerobic = true, oxygenic = false},
+	{name = "Archées méthanogènes", metabolism = "chimiosynthèse", clade = "microbe", size = 0.01, intelligence = 0.0, adaptability = 0.75, aggression = 0.2, diet = "autotrophe", temp_opt = 0.72, temp_tol = 0.4, complexity = 0.0, habitat = "marine", anaerobic = true, oxygenic = false},
+	{name = "Bactéries pourpres", metabolism = "photosynthèse", clade = "microbe", size = 0.012, intelligence = 0.0, adaptability = 0.7, aggression = 0.2, diet = "autotrophe", temp_opt = 0.62, temp_tol = 0.4, complexity = 0.0, habitat = "marine", anaerobic = true, oxygenic = false},
 	{name = "Cyanobactéries", clade = "microbe", size = 0.011, intelligence = 0.0, adaptability = 0.7, aggression = 0.3, diet = "autotrophe", temp_opt = 0.6, temp_tol = 0.38, complexity = 0.0, habitat = "marine", anaerobic = false, oxygenic = true},
 ]
 
@@ -147,7 +161,7 @@ static func is_autotroph(traits: Dictionary) -> bool:
 
 ## Sans précision (roster du Crétacé), une espèce est un amniote terrestre aérobie.
 static func traits_from_def(def: Dictionary) -> Dictionary:
-	return {
+	var t := {
 		size = float(def["size"]), intelligence = float(def.intelligence),
 		adaptability = float(def.adaptability), aggression = float(def.aggression),
 		diet = String(def.diet), temp_opt = float(def.temp_opt), temp_tol = float(def.temp_tol),
@@ -155,6 +169,15 @@ static func traits_from_def(def: Dictionary) -> Dictionary:
 		habitat = String(def.get("habitat", "land")), anaerobic = bool(def.get("anaerobic", false)),
 		oxygenic = bool(def.get("oxygenic", false)),
 	}
+	# Génome typique du clade, tiré d'une graine propre au nom (déterministe).
+	var g := RandomNumberGenerator.new()
+	g.seed = hash(["genome", String(def.get("name", def.clade))])
+	var keep := {}
+	for key in Genome.GENOME_KEYS:
+		if def.has(key):
+			keep[key] = def[key]
+	Genome.fill(t, g, 1.0, keep)
+	return t
 
 
 ## Traits aléatoires adaptés au climat local (espèce créée ex nihilo par spawn_species).
@@ -162,7 +185,7 @@ static func traits_from_def(def: Dictionary) -> Dictionary:
 ## habitables (sinon la créature naît dans la mer).
 static func random_traits(rng: RandomNumberGenerator, local_temp: float, complexity := 6.0, land := true) -> Dictionary:
 	var animal := complexity >= 3.0
-	return {
+	var t := {
 		size = rng.randf_range(0.05, 0.8) if animal else rng.randf_range(0.005, 0.05),
 		intelligence = rng.randf_range(0.1, 0.4) if complexity >= 6.0 else rng.randf_range(0.0, 0.1),
 		adaptability = rng.randf_range(0.3, 0.8), aggression = rng.randf_range(0.1, 0.9),
@@ -170,8 +193,18 @@ static func random_traits(rng: RandomNumberGenerator, local_temp: float, complex
 		temp_opt = clampf(local_temp, 0.05, 0.95),
 		temp_tol = rng.randf_range(0.18, 0.32), clade = "chimère", complexity = floorf(complexity),
 		habitat = "land" if land and complexity >= 5.0 else "marine", anaerobic = false,
-		oxygenic = not animal,
+		oxygenic = not animal, free_evolution = true,
 	}
+	# Une chimère est une lignée libre ; son génome est tiré sans puiser dans `rng`.
+	Genome.fill(t, _local_rng(rng, "chimère"), 1.0)
+	return t
+
+
+## Générateur local dérivé de l'état d'un générateur, sans le faire avancer.
+static func _local_rng(rng: RandomNumberGenerator, salt: Variant) -> RandomNumberGenerator:
+	var g := RandomNumberGenerator.new()
+	g.seed = hash([rng.state, salt])
+	return g
 
 
 ## Applique une transition de clade (TRANSITIONS) à des traits fraîchement mutés.
@@ -200,6 +233,8 @@ static func apply_transition(t: Dictionary, rule: Dictionary, rng: RandomNumberG
 		var c: Array = CLADE_CLIMATE[to]
 		t.temp_opt = lerpf(float(t.temp_opt), float(c[0]), 0.7)
 		t.temp_tol = maxf(float(t.temp_tol), float(c[1]))
+	# Le nouveau clade remodèle le corps (plan, squelette, milieu, couverture…).
+	Genome.conform_to_clade(t, _local_rng(rng, ["transition", to, int(t.get("gseed", 0))]))
 
 
 ## Mutation à la spéciation. `radiation` > 0 : niches vides, la taille dérive vers le haut ;
@@ -232,6 +267,8 @@ static func mutate(parent: Dictionary, rng: RandomNumberGenerator, founder_temp:
 			t.anaerobic = false
 		if t.anaerobic and rng.randf() < 0.15 * clampf(oxygen / 0.01, 0.0, 1.0):
 			t.anaerobic = false
+	# Génome : petites mutations à chaque naissance, grandes innovations rares (lignées libres).
+	Genome.evolve(t, parent, _local_rng(rng, ["mutation", int(parent.get("gseed", 0))]), oxygen)
 	if t.complexity < 4.0:
 		t.intelligence = minf(t.intelligence, 0.05 + 0.02 * t.complexity)
 	return t
@@ -251,12 +288,103 @@ static func _word(rng: RandomNumberGenerator, n: int) -> String:
 	return s
 
 
-## Nom binomial : le genre est hérité tant que la lignée ne diverge pas trop.
-static func make_name(parent_name: String, rng: RandomNumberGenerator, new_genus: bool) -> String:
+## Nom binomial latinisé : le genre est hérité tant que la lignée ne diverge pas trop (les espèces
+## sœurs le partagent), l'épithète s'accorde au genre grammatical du nom de genre. Un groupe nommé
+## en français (« Tyrannosauridés ») transmet son genre type (« Tyrannosaurus »). `traits`
+## (facultatif) rend les racines parlantes (Bathy- pour les abysses, -spinus pour les épines…).
+## Les tirages dans `rng` sont exactement ceux de l'ancien nommage : la simulation n'en dévie pas.
+static func make_name(parent_name: String, rng: RandomNumberGenerator, new_genus: bool, traits := {}) -> String:
 	var genus := parent_name.split(" ")[0]
-	if new_genus or genus.length() < 3:
-		genus = _word(rng, rng.randi_range(2, 3)).capitalize()
-	return "%s %s%s" % [genus, _word(rng, 2), _EPITHET_ENDS[rng.randi_range(0, _EPITHET_ENDS.size() - 1)]]
+	var draws := [parent_name]
+	var fresh := new_genus or genus.length() < 3
+	if fresh:
+		var n := rng.randi_range(2, 3)
+		for i in n:
+			draws.append(rng.randi_range(0, _SYLLABLES.size() - 1))
+	for i in 2:
+		draws.append(rng.randi_range(0, _SYLLABLES.size() - 1))
+	draws.append(rng.randi_range(0, _EPITHET_ENDS.size() - 1))
+	var g := RandomNumberGenerator.new()
+	g.seed = hash(draws)
+	var latin := "" if fresh else Naming.genus_of(parent_name)
+	if latin == "":
+		latin = Naming.latin_genus(g, traits)
+	return Naming.binomial(g, latin, traits)
+
+
+# =============================================================================================
+# Génome, semences, noms et descriptions (chantier « Espèces infinies »)
+# =============================================================================================
+
+## Traits complets d'une semence du joueur : "spark" (microbe chimiosynthétique), "light"
+## (cyanobactérie), "spore" (colonisatrice des terres), "animal_germ" (env.role : "filtreur",
+## "brouteur" ou "chasseur"), "shaped" (env.traits : traits partiels complétés avec cohérence).
+## env : {temp, oxygen, role, traits}. Consomme `rng`. La lignée est libre (free_evolution).
+static func seed_template(kind: String, rng: RandomNumberGenerator, env: Dictionary) -> Dictionary:
+	return Genome.seed_template(kind, rng, env)
+
+
+## Binôme latin d'une lignée fondée par le joueur (nouveau genre, racines tirées des traits).
+static func seed_name(traits: Dictionary, rng: RandomNumberGenerator) -> String:
+	return Naming.binomial(rng, "", traits)
+
+
+## Complète sur place le génome d'une espèce qui n'en a pas (anciennes sauvegardes).
+static func ensure_genome(traits: Dictionary) -> void:
+	if Genome.has_genome(traits):
+		return
+	var g := RandomNumberGenerator.new()
+	g.seed = hash(["genome", String(traits.get("clade", "")), float(traits.get("size", 0.0)),
+		float(traits.get("temp_opt", 0.0)), float(traits.get("aggression", 0.0))])
+	Genome.fill(traits, g, 1.0)
+
+
+static func _with_genome(traits: Dictionary) -> Dictionary:
+	if Genome.has_genome(traits):
+		return traits
+	var t := traits.duplicate(true)
+	ensure_genome(t)
+	return t
+
+
+## Deux ou trois phrases (apparence, mode de vie) tirées des traits.
+static func describe(traits: Dictionary) -> String:
+	return Description.describe(_with_genome(traits))
+
+
+## Nom vernaculaire français (« Rampeur à épines bleues ») ; `plural` : « Rampeurs à épines bleues ».
+static func vernacular_name(traits: Dictionary, plural := false) -> String:
+	return Naming.vernacular(_with_genome(traits), plural)
+
+
+## Clade déduit du génome (« inédit » si aucune lignée connue ne lui ressemble).
+static func derive_clade(traits: Dictionary) -> String:
+	return Genome.derive_clade(_with_genome(traits), String(traits.get("clade", "")))
+
+
+## Contraintes physiques violées par un génome (vide s'il est cohérent).
+static func genome_violations(traits: Dictionary, oxygen := 1.0) -> Array:
+	return Genome.violations(traits, oxygen)
+
+
+## Innovations apparues entre deux jeux de traits (ex. ["sortie des eaux"]).
+static func innovations_between(parent: Dictionary, child: Dictionary) -> Array:
+	return Genome.innovations_between(parent, child)
+
+
+static func is_major_innovation(innovation: String) -> bool:
+	return Genome.is_major(innovation)
+
+
+## Couleur de base de l'espèce (la vue rapprochée peut teinter ses créatures avec).
+static func color_of(traits: Dictionary) -> Color:
+	var t := _with_genome(traits)
+	return Color.from_hsv(float(t.hue), float(t.sat), float(t.val))
+
+
+## Nom de la couleur de base (« bleu sombre »).
+static func color_name(traits: Dictionary) -> String:
+	return Naming.color_name(_with_genome(traits))
 
 
 static func sapient_title(traits: Dictionary) -> String:
