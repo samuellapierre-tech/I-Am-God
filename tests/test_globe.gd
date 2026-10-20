@@ -400,3 +400,30 @@ func test_pins() -> String:
 	if pins.pins.size() != GlobePins.MAX_PINS - 1:
 		return "retrait d'une épingle"
 	return ""
+
+
+## Les moyennes des rangées polaires (convergence de la texture au pôle) suivent la simulation.
+func test_pole_averages() -> String:
+	var sim := StubSim.new()
+	var tex := GlobeTextures.new()
+	tex.pack(sim)
+	# Rangée 0 : élévations -0.5 et 0.3 en alternance -> moyenne -0.1 ; température 0.5.
+	var err := _near(tex.pole_data[0].x, -0.1, "élévation moyenne au pôle Nord")
+	if err == "":
+		err = _near(tex.pole_data[1].y, 0.5, "température moyenne au pôle Sud")
+	if err != "":
+		return err
+	for x in StubSim.WIDTH:
+		sim.temperature[(StubSim.HEIGHT - 1) * StubSim.WIDTH + x] = 0.1
+	tex.pack(sim)
+	err = _near(tex.pole_data[1].y, 0.1, "la moyenne polaire suit la simulation")
+	if err != "":
+		return err
+	for i in 10:
+		if tex.update_life(sim, 1):
+			break
+	# Pôle Nord : moitié ouest marine (0.6), moitié est terrestre (0.4).
+	err = _near(tex.pole_aux[0].x, 0.3, "vie marine moyenne au pôle")
+	if err == "":
+		err = _near(tex.pole_aux[0].y, 0.2, "vie terrestre moyenne au pôle")
+	return err

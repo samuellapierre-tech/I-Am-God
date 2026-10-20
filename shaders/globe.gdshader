@@ -16,6 +16,13 @@ uniform sampler2D aux_tex : filter_nearest, repeat_enable;
 uniform sampler2D aux_smooth : filter_linear, repeat_enable;
 uniform sampler2D prev_elev_tex : filter_linear, repeat_enable;
 uniform float geo_fade = 1.0;
+// Moyennes exactes des rangées polaires (nord, sud), calculées par src/globe/globe_textures.gd.
+uniform vec4 pole_data_n = vec4(0.0);
+uniform vec4 pole_data_s = vec4(0.0);
+uniform vec4 pole_aux_n = vec4(0.0);
+uniform vec4 pole_aux_s = vec4(0.0);
+uniform vec4 pole_prev_n = vec4(0.0);
+uniform vec4 pole_prev_s = vec4(0.0);
 uniform vec2 grid_size = vec2(256.0, 128.0);
 
 // 0 nature, 1 vie, 2 température, 3 ozone, 4 plaques, 5 espèces, 6 civilisations
@@ -66,15 +73,12 @@ float hash13(vec3 p) {
 	return fract((p.x + p.y) * p.z);
 }
 
+// Bruit 3D lu dans une texture sans raccord (NoiseTexture3D, créée par globe.gd) : une lecture filtrée
+// au lieu de huit hachages. Une unité de p ≈ un motif ; période de 16 unités.
+uniform sampler3D noise_tex : filter_linear, repeat_enable;
+
 float noise3(vec3 p) {
-	vec3 i = floor(p);
-	vec3 f = fract(p);
-	vec3 u = f * f * (3.0 - 2.0 * f);
-	float a = mix(hash13(i), hash13(i + vec3(1, 0, 0)), u.x);
-	float b = mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), u.x);
-	float c = mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), u.x);
-	float d = mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), u.x);
-	return mix(mix(a, b, u.y), mix(c, d, u.y), u.z);
+	return textureLod(noise_tex, p * (1.0 / 16.0), 0.0).r;
 }
 
 float fbm3(vec3 p, int octaves) {
@@ -170,10 +174,103 @@ vec3 ozone_ramp(float x) {
 	return mix(c, vec3(0.9, 0.95, 0.5), smoothstep(0.7, 1.0, x));
 }
 
-vec2 dir_to_uv(vec3 d) {
+// --- Échantillonnage de la grille par direction ---
+// La grille équirectangulaire est lue à partir de la direction (jamais des UV du maillage). La couture
+// est absorbée par repeat_enable (uv.x n'est pas ramené dans [0, 1[, aucune discontinuité de dérivée
+// puisque tout est lu avec textureLod, sans mips). Près des pôles, une colonne de texels couvre une
+// bande de plus en plus étroite : on moyenne alors plusieurs texels en longitude, sur une largeur
+// physique égale à une rangée, ce qui fait converger la texture vers une valeur unique au pôle au lieu
+// d'une étoile de rayons.
+
+// Nombre maximal de texels moyennés en longitude. La calotte (au-delà de ~85°, où il en faudrait plus)
+// prend la moyenne exacte de sa rangée, calculée sur le CPU (pole_* ci-dessous).
+const int MAX_POLE_TAPS = 16;
+
+vec2 grid_uv(vec3 d) {
 	float lat = asin(clamp(d.y, -1.0, 1.0));
-	float lon = atan(d.x, d.z);
-	return vec2(fract(lon / TAU), 0.5 - lat / PI);
+	vec2 uv = vec2(atan(d.x, d.z) / TAU, 0.5 - lat / PI);
+	float ty = 1.0 / grid_size.y;
+	uv.y = clamp(uv.y, ty * 0.5, 1.0 - ty * 0.5);
+	return uv;
+}
+
+// Largeur (en uv.x) à moyenner pour une empreinte isotrope : une rangée couvre PI / H radians, une
+// colonne TAU · cos(lat) / W ; on moyenne donc 1 / cos(lat) colonnes (aucune de plus à l'équateur).
+float pole_spread(vec3 d) {
+	float c = max(length(d.xz), 1e-4);
+	float tx = 1.0 / grid_size.x;
+	return clamp(tx / c - tx, 0.0, 1.0);
+}
+
+// Part de la moyenne de calotte : 0 sous ~76° de latitude, 1 à ~85° (là, 1 / cos(lat) ≈ 11,5 colonnes).
+float pole_cap(vec3 d) {
+	return smoothstep(0.97, 0.996, abs(d.y));
+}
+
+// Lecture d'une grille filtrée (linéaire) par direction : filtre en boîte exact, un texel par pas, sur la
+// largeur isotrope (pas de crénelage), puis fondu vers la valeur moyenne de la calotte polaire.
+// max_taps borne le coût (les dérivées du relief se contentent de peu).
+vec4 grid_sample(sampler2D tex, vec3 d, vec4 north_avg, vec4 south_avg, int max_taps) {
+	vec2 uv = grid_uv(d);
+	float cap = pole_cap(d);
+	vec4 polar = d.y > 0.0 ? north_avg : south_avg;
+	if (cap >= 1.0) {
+		return polar;
+	}
+	float tx = 1.0 / grid_size.x;
+	float w = pole_spread(d);
+	int n = clamp(int(ceil(w / tx)) + 1, 1, max_taps);
+	vec4 s = vec4(0.0);
+	if (n <= 1) {
+		s = textureLod(tex, uv, 0.0);
+	} else {
+		float step_x = w / float(n - 1);
+		for (int i = 0; i < MAX_POLE_TAPS; i++) {
+			if (i >= n) break;
+			s += textureLod(tex, uv + vec2((float(i) - float(n - 1) * 0.5) * step_x, 0.0), 0.0);
+		}
+		s /= float(n);
+	}
+	return mix(s, polar, cap);
+}
+
+// Direction de lecture de la grille : près des pôles, légèrement déformée par un bruit 3D pour que les
+// formes de la grille (étirées en pointes par la projection) ne dessinent pas de rayons rectilignes.
+vec3 grid_dir(vec3 p) {
+	float polar = smoothstep(0.55, 0.97, abs(p.y));
+	if (polar <= 0.0) {
+		return p;
+	}
+	vec3 v = vec3(noise3(p * 7.0), noise3(p * 7.0 + vec3(31.7, 7.3, 2.1)), noise3(p * 7.0 + vec3(5.9, 43.1, 19.4))) - 0.5;
+	v += (vec3(noise3(p * 19.0), noise3(p * 19.0 + vec3(3.3)), noise3(p * 19.0 + vec3(8.8))) - 0.5) * 0.5;
+	v -= p * dot(v, p);
+	return normalize(p + v * 0.16 * polar);
+}
+
+// Identifiants (espèces, plaques) : pas de moyenne possible, lecture au plus proche.
+vec4 grid_id(sampler2D tex, vec3 d) {
+	return textureLod(tex, grid_uv(d), 0.0);
+}
+
+// Base tangente stable partout, pôles compris (le gradient qu'on y exprime ne dépend pas du choix).
+void tangent_basis(vec3 p, out vec3 t1, out vec3 t2) {
+	vec3 axis = abs(p.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	t1 = normalize(cross(axis, p));
+	t2 = cross(p, t1);
+}
+
+// Bruit vectoriel tangent (détail du relief) sans singularité.
+vec3 tangent_noise(vec3 q, vec3 p) {
+	vec3 v = vec3(noise3(q), noise3(q + vec3(31.7, 7.3, 2.1)), noise3(q + vec3(5.9, 43.1, 19.4))) - 0.5;
+	return v - p * dot(v, p);
+}
+
+// Ombre des nuages : même motif à basse fréquence, sans la seconde passe déformée (bien moins chère).
+float cloud_shadow_density(vec3 p) {
+	float a = anim_time * 0.006;
+	vec3 q = vec3(p.x * cos(a) - p.z * sin(a), p.y, p.x * sin(a) + p.z * cos(a));
+	float c = fbm3(q * 3.5, 2);
+	return smoothstep(0.5, 0.75, c);
 }
 
 float cloud_density(vec3 p) {
@@ -181,7 +278,7 @@ float cloud_density(vec3 p) {
 	float a = anim_time * 0.006;
 	vec3 q = vec3(p.x * cos(a) - p.z * sin(a), p.y, p.x * sin(a) + p.z * cos(a));
 	float w = fbm3(q * 2.2 + vec3(0.0, anim_time * 0.01, 0.0), 3);
-	float c = fbm3(q * 3.5 + vec3(w * 1.8, w * 0.6, -w), 5);
+	float c = fbm3(q * 3.5 + vec3(w * 1.8, w * 0.6, -w), 4);
 	float lat = abs(p.y);
 	float band = 0.06 * cos(lat * PI * 3.0);
 	return smoothstep(0.56 - band, 0.78 - band, c);
@@ -189,42 +286,47 @@ float cloud_density(vec3 p) {
 
 void fragment() {
 	vec3 p = normalize(obj_pos);
-	vec2 uv = dir_to_uv(p);
-	vec2 texel = 1.0 / grid_size;
-	vec2 suv = vec2(uv.x, clamp(uv.y, texel.y * 0.5, 1.0 - texel.y * 0.5));
 	float lat = asin(clamp(p.y, -1.0, 1.0));
-	float lon = atan(p.x, p.z);
-	vec3 east = vec3(cos(lon), 0.0, -sin(lon));
-	vec3 north = vec3(-sin(lat) * sin(lon), cos(lat), -sin(lat) * cos(lon));
+	vec3 t1;
+	vec3 t2;
+	tangent_basis(p, t1, t2);
+	// Pas angulaire d'une rangée de la grille : voisins pour le relief et les frontières.
+	float cell = PI / grid_size.y;
 
-	vec4 d = textureLod(data_tex, suv, 0.0);
-	vec4 sp = textureLod(species_tex, suv, 0.0);
-	vec4 aux = textureLod(aux_tex, suv, 0.0);
-	vec2 life_d = textureLod(aux_smooth, suv, 0.0).rg;
-	aux.rg = life_d;
+	// Toutes les lectures de la grille partent de g (p, déformée près des pôles) ; l'éclairage garde p.
+	vec3 g = grid_dir(p);
+	vec4 d = grid_sample(data_tex, g, pole_data_n, pole_data_s, MAX_POLE_TAPS);
+	vec4 sp = grid_id(species_tex, g);
+	vec4 aux = grid_id(aux_tex, g);
+	aux.rg = grid_sample(aux_smooth, g, pole_aux_n, pole_aux_s, MAX_POLE_TAPS).rg;
 	float elev_now = d.r;
-	float elev_prev = textureLod(prev_elev_tex, suv, 0.0).r;
+	float elev_prev = geo_fade < 1.0 ? grid_sample(prev_elev_tex, g, pole_prev_n, pole_prev_s, MAX_POLE_TAPS).r : elev_now;
 	float elev0 = mix(elev_prev, elev_now, geo_fade) - sea_level;
 
 	// Détail de relief qui apparaît en descendant vers le sol.
-	float fine = fbm3(p * 90.0, 4) - 0.5;
+	// Détail fin seulement en descendant (detail est uniforme : branche gratuite).
+	float fine = detail > 0.05 ? fbm3(p * 90.0, 3) - 0.5 : 0.0;
 	float coarse = fbm3(p * 18.0, 3) - 0.5;
 	float elev = elev0 + coarse * 0.06 + fine * 0.05 * (0.3 + detail);
 	float temp = d.g;
 	float pop = d.b;
 	float tech = d.a;
-	float moist = fbm3(p * 4.0 + vec3(40.0), 4);
+	float moist = fbm3(p * 4.0 + vec3(40.0), 3);
 	bool ocean = elev < 0.0;
 
-	// Normale perturbée par le relief (différences finies est / nord).
-	float eE = textureLod(data_tex, suv + vec2(texel.x, 0.0), 0.0).r;
-	float eW = textureLod(data_tex, suv - vec2(texel.x, 0.0), 0.0).r;
-	float eN = textureLod(data_tex, suv - vec2(0.0, texel.y), 0.0).r;
-	float eS = textureLod(data_tex, suv + vec2(0.0, texel.y), 0.0).r;
-	// Près des pôles, les voisins en longitude se resserrent : relief atténué pour éviter un pincement.
-	float bump = ocean ? 0.0 : 2.2 * smoothstep(0.02, 0.2, cos(lat));
-	vec3 n = normalize(p - bump * ((eE - eW) * 0.5 * east + (eN - eS) * 0.5 * north)
-		- (ocean ? 0.0 : 0.35) * (coarse * east + fine * north) * (0.4 + detail));
+	// Normale perturbée par le relief : différences finies le long de la base tangente (voisins lus
+	// par direction, donc sans pincement aux pôles ni rupture sur la couture).
+	float bump = ocean ? 0.0 : 2.2;
+	vec3 n = p;
+	if (!ocean) {
+		float e1a = grid_sample(data_tex, normalize(g + t1 * cell), pole_data_n, pole_data_s, 4).r;
+		float e1b = grid_sample(data_tex, normalize(g - t1 * cell), pole_data_n, pole_data_s, 4).r;
+		float e2a = grid_sample(data_tex, normalize(g + t2 * cell), pole_data_n, pole_data_s, 4).r;
+		float e2b = grid_sample(data_tex, normalize(g - t2 * cell), pole_data_n, pole_data_s, 4).r;
+		vec3 grad = (e1a - e1b) * 0.5 * t1 + (e2a - e2b) * 0.5 * t2;
+		vec3 micro = detail > 0.05 ? tangent_noise(p * 160.0, p) * (0.4 + detail) : vec3(0.0);
+		n = normalize(p - bump * grad - 0.6 * micro);
+	}
 
 	vec3 view = normalize(cam_obj - obj_pos);
 	vec3 sun = normalize(sun_dir);
@@ -242,17 +344,17 @@ void fragment() {
 		col = mix(shallow, deep, smoothstep(0.0, 0.35, depth));
 		// Vie marine : efflorescences de plancton (vert-turquoise) ou tapis microbiens (vert olive).
 		vec3 bloom = mix(vec3(0.35, 0.42, 0.12), vec3(0.08, 0.5, 0.38), ox);
-		float mlife = aux.r * (0.6 + 0.4 * fbm3(p * 30.0 + vec3(anim_time * 0.02), 3));
+		float mlife = aux.r > 0.001 ? aux.r * (0.6 + 0.4 * fbm3(p * 30.0 + vec3(anim_time * 0.02), 2)) : 0.0;
 		col = mix(col, bloom, clamp(mlife * 0.55, 0.0, 0.55));
 		// Houle au ras de l'eau.
-		float waves = noise3(p * 600.0 + vec3(anim_time * 0.4, 0.0, anim_time * 0.3));
+		float waves = detail > 0.05 ? noise3(p * 600.0 + vec3(anim_time * 0.4, 0.0, anim_time * 0.3)) : 0.5;
 		col *= 0.92 + waves * 0.16 * detail;
 		// Banquise.
 		float sea_ice = 1.0 - smoothstep(0.06, 0.13, temp + coarse * 0.08);
 		col = mix(col, vec3(0.86, 0.92, 0.97), max(sea_ice, snowball * 0.95));
 	} else {
 		vec3 green = biome_color(clamp(elev, 0.0, 1.0), temp, moist);
-		vec3 bare = bare_color(clamp(elev, 0.0, 1.0), fbm3(p * 9.0, 3));
+		vec3 bare = land_flora < 0.999 ? bare_color(clamp(elev, 0.0, 1.0), fbm3(p * 9.0, 2)) : vec3(0.0);
 		float veg = clamp(land_flora, 0.0, 1.0);
 		// Les terres glacées restent blanches même sans plantes.
 		float icy = 1.0 - smoothstep(0.08, 0.16, temp);
@@ -269,10 +371,10 @@ void fragment() {
 	float shown_has = ocean ? step(0.0, marine_id) * step(0.02, aux.r) : has_sp;
 	vec3 scol = species_color(shown_id);
 	float off = 0.6;
-	float nb_id = ocean ? textureLod(aux_tex, suv + vec2(off * texel.x, 0.0), 0.0).b
-		: textureLod(species_tex, suv + vec2(off * texel.x, 0.0), 0.0).r;
-	float nb_id2 = ocean ? textureLod(aux_tex, suv + vec2(0.0, off * texel.y), 0.0).b
-		: textureLod(species_tex, suv + vec2(0.0, off * texel.y), 0.0).r;
+	vec3 q1 = normalize(g + t1 * cell * off);
+	vec3 q2 = normalize(g + t2 * cell * off);
+	float nb_id = ocean ? grid_id(aux_tex, q1).b : grid_id(species_tex, q1).r;
+	float nb_id2 = ocean ? grid_id(aux_tex, q2).b : grid_id(species_tex, q2).r;
 	float border = max(step(0.5, abs(nb_id - shown_id)), step(0.5, abs(nb_id2 - shown_id))) * shown_has;
 	float selected = (selected_species >= 0 && abs(shown_id - float(selected_species)) < 0.5) ? 1.0 : 0.0;
 	float sel_pulse = selected * (0.5 + 0.5 * sin(anim_time * 4.0)) * shown_has;
@@ -306,8 +408,8 @@ void fragment() {
 			col = vec3(lum) * 0.6;
 		} else {
 			col = mix(plate_color(pid), vec3(lum), 0.35);
-			float pe = textureLod(aux_tex, suv + vec2(texel.x, 0.0), 0.0).a;
-			float pn = textureLod(aux_tex, suv + vec2(0.0, texel.y), 0.0).a;
+			float pe = grid_id(aux_tex, normalize(g + t1 * cell)).a;
+			float pn = grid_id(aux_tex, normalize(g + t2 * cell)).a;
 			float edge = max(step(0.5, abs(pe - pid)), step(0.5, abs(pn - pid)));
 			col = mix(col, vec3(1.0, 0.45, 0.2), edge * 0.85);
 		}
@@ -329,7 +431,7 @@ void fragment() {
 	// --- Nuages et ombre ---
 	float cloud_alpha = mix(0.85, 0.25, data_layer) * (1.0 - 0.6 * smoothstep(0.4, 1.0, detail));
 	float clouds = cloud_density(p) * cloud_alpha;
-	float cloud_shadow = cloud_density(normalize(p - sun * 0.01)) * cloud_alpha;
+	float cloud_shadow = cloud_shadow_density(normalize(p - sun * 0.01)) * cloud_alpha;
 	col *= 1.0 - cloud_shadow * 0.3 * day;
 
 	// --- Éclairage ---
@@ -363,9 +465,10 @@ void fragment() {
 	float alat = abs(lat);
 	float aband = smoothstep(1.05, 1.17, alat) * (1.0 - smoothstep(1.25, 1.36, alat));
 	if (aband > 0.0) {
-		float curtain = noise3(vec3(lon * 6.0, anim_time * 0.25, alat * 3.0));
+		// Rideaux tirés d'un bruit 3D (aucune longitude : pas de couture).
+		float curtain = noise3(vec3(p.x * 9.0, p.z * 9.0, anim_time * 0.25 + alat * 3.0));
 		curtain = pow(smoothstep(0.45, 0.9, curtain), 1.5);
-		float flicker = 0.7 + 0.3 * sin(anim_time * 1.7 + lon * 20.0);
+		float flicker = 0.7 + 0.3 * sin(anim_time * 1.7 + dot(p.xz, vec2(19.0, 13.0)));
 		vec3 acol = mix(vec3(0.55, 0.25, 0.95), vec3(0.2, 1.0, 0.45), ox);
 		lit += acol * aband * curtain * flicker * (1.0 - day) * 0.6;
 	}
@@ -412,8 +515,11 @@ void fragment() {
 		float rad = max(cursor_angle, 0.004);
 		float w = max(fwidth(a) * 1.5, 1e-4);
 		float ring = 1.0 - smoothstep(0.0, w, abs(a - rad));
-		vec3 t = normalize(cross(normalize(cursor_dir), p) + vec3(1e-5));
-		float dash = step(0.4, fract(atan(dot(t, north), dot(t, east)) / TAU * 32.0 + anim_time * 0.4));
+		vec3 c1;
+		vec3 c2;
+		tangent_basis(normalize(cursor_dir), c1, c2);
+		vec3 rel = p - normalize(cursor_dir);
+		float dash = step(0.4, fract(atan(dot(rel, c2), dot(rel, c1)) / TAU * 32.0 + anim_time * 0.4));
 		float fill = (1.0 - smoothstep(rad - w, rad, a)) * 0.12;
 		lit = mix(lit, cursor_color.rgb, clamp(ring * (0.45 + 0.55 * dash) + fill, 0.0, 1.0) * cursor_visible);
 	}
