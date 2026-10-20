@@ -8,6 +8,7 @@ const ParcelSim := preload("res://src/sim/parcel_sim.gd")
 const ParcelAssets := preload("res://src/parcel/parcel_assets.gd")
 const CreatureGroup := preload("res://src/parcel/creature_group.gd")
 const TrailLayer := preload("res://src/parcel/trail_layer.gd")
+const Appearance := preload("res://src/parcel/appearance.gd")
 const CREATURE_SHADER := preload("res://shaders/parcel_creature.gdshader")
 
 const THREAD_MIN_AGENTS := 96
@@ -21,6 +22,9 @@ var spots := PackedVector2Array()
 var trail: TrailLayer
 ## 0 (jour) .. 1 (nuit) : les animaux dorment plus la nuit.
 var night := 0.0
+## Traits d'une espèce : Callable(species_id) -> Dictionary (branché par la vue sur la simulation ;
+## les tests y mettent leurs propres génomes). Non branché => apparence déduite de parcel.fauna.
+var traits_of := Callable()
 
 var _groups := {} ## species_id -> CreatureGroup
 var _list: Array = []
@@ -49,7 +53,8 @@ func apply_parcel(p: ParcelSim) -> void:
 			g = CreatureGroup.new(id, p.cell)
 			_groups[id] = g
 			_give_river(g)
-		if g.set_species(f, aquatic) or g.mmi == null:
+		var traits: Dictionary = traits_of.call(id) if traits_of.is_valid() else {}
+		if g.set_species(f, aquatic, traits) or g.mmi == null:
 			_refresh_look(g)
 		g.set_target(int(f.count))
 	for id in _groups:
@@ -196,13 +201,11 @@ func _refresh_look(g: CreatureGroup) -> void:
 	var mat := ShaderMaterial.new()
 	mat.shader = CREATURE_SHADER
 	mat.set_shader_parameter("use_texture", tex != null)
-	mat.set_shader_parameter("shape", g.shape)
-	var swimmer := g.locomotion == ParcelLogic.Locomotion.SWIM
-	mat.set_shader_parameter("variant", 1 if swimmer and g.shape in [ParcelLogic.Shape.ARTHROPOD, ParcelLogic.Shape.MOLLUSK] else 0)
+	Appearance.to_material(mat, g.app)
 	g.mmi.material = mat
 	g.mmi.texture = tex
 	# Les volants au-dessus, puis les plus gros au-dessus des petits.
-	g.mmi.z_index = 3 if g.locomotion == ParcelLogic.Locomotion.FLY else (2 if g.shape == ParcelLogic.Shape.BIRD else 1)
+	g.mmi.z_index = 3 if g.locomotion == ParcelLogic.Locomotion.FLY else (2 if g.flies() else 1)
 	# Les organismes fixés (tapis, algues, éponges, plantes) restent sous les animaux.
 	if g.locomotion == ParcelLogic.Locomotion.SESSILE:
 		g.mmi.z_index = 0

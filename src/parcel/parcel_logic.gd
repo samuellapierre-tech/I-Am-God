@@ -13,11 +13,6 @@ const STRUCTURE_DIR := "res://assets/parcel/structures/"
 enum Ground { GRASS, LUSH, DRY, SAND, TUNDRA, SNOW, ROCK, WATER, MUD, CRATER, DIRT, PAVED, URBAN, RUBBLE, TAIGA,
 	SEABED, MAT, REEF, BARREN, SWAMP }
 
-## Silhouettes des créatures de remplacement (mêmes indices dans shaders/parcel_creature.gdshader).
-## GENERIC : tout clade inconnu (jamais d'erreur, juste une forme neutre).
-enum Shape { QUADRUPED, BIPED, BIRD, LONG_NECK, REPTILE, HUMANOID, GENERIC, MICROBE, ALGA, SPONGE,
-	ARTHROPOD, MYRIAPOD, MOLLUSK, JELLY, FISH, PLANT, AMPHIBIAN, DRAGONFLY, SYNAPSID }
-
 ## Façons de bouger : marcher, nager en banc, rester fixé (colonies, algues, éponges, plantes),
 ## ramper sur le fond, voler en zigzag.
 enum Locomotion { WALK, SWIM, SESSILE, CRAWL, FLY }
@@ -52,15 +47,6 @@ const LAND_USE_VEGETATION := {
 	"megacity": 0.15, "arcology": 0.2, "crater": 0.0, "ice": 0.0, "ocean": 0.0, "flooded": 0.4,
 }
 
-const ROLE_COLORS := {
-	"herbivore": Color("e9d8a6"), "carnivore": Color("d1495b"), "omnivore": Color("edae49"),
-	"sapient": Color("8ecae6"),
-}
-
-const SESSILE_COLORS := {
-	Shape.MICROBE: Color(0.32, 0.62, 0.5), Shape.ALGA: Color(0.36, 0.55, 0.22),
-	Shape.SPONGE: Color(0.9, 0.62, 0.38), Shape.PLANT: Color(0.24, 0.52, 0.2),
-}
 ## Les colonies microbiennes sont minuscules : on les dessine en taches plus grandes que nature.
 const MICROBE_SCALE := 3.0
 
@@ -112,65 +98,6 @@ static func creature_length(size: float) -> float:
 	return lerpf(MIN_CREATURE_LENGTH, MAX_CREATURE_LENGTH, clampf(size, 0.0, 1.0))
 
 
-## aquatic : la parcelle est sous l'eau (un arthropode y est trilobite ou anomalocaris, à terre
-## mille-pattes).
-static func shape_for(clade: String, role: String, size: float, aquatic := false) -> int:
-	if role == "sapient":
-		return Shape.HUMANOID
-	match slug(clade):
-		"oiseau", "pterosaure":
-			return Shape.BIRD
-		"reptile":
-			return Shape.REPTILE
-		"dinosaure":
-			if role == "carnivore" or role == "omnivore":
-				return Shape.BIPED
-			return Shape.LONG_NECK if size >= 0.9 else Shape.QUADRUPED
-		"mammifere", "primate", "chimere":
-			return Shape.QUADRUPED
-		"microbe", "bacterie", "cyanobacterie", "archee":
-			return Shape.MICROBE
-		"algue":
-			return Shape.ALGA
-		"eponge":
-			return Shape.SPONGE
-		"cnidaire", "meduse":
-			return Shape.JELLY
-		"arthropode", "trilobite":
-			return Shape.ARTHROPOD if aquatic else Shape.MYRIAPOD
-		"mollusque":
-			return Shape.MOLLUSK
-		"poisson":
-			return Shape.FISH
-		"plante":
-			return Shape.PLANT
-		"amphibien":
-			return Shape.AMPHIBIAN
-		"insecte":
-			return Shape.DRAGONFLY
-		"synapside":
-			return Shape.SYNAPSID
-	return Shape.GENERIC
-
-
-static func locomotion_for(shape: int, role: String, size: float) -> int:
-	match shape:
-		Shape.MICROBE, Shape.ALGA, Shape.SPONGE, Shape.PLANT:
-			return Locomotion.SESSILE
-		Shape.FISH, Shape.JELLY:
-			return Locomotion.SWIM
-		Shape.ARTHROPOD:
-			# Les grands chasseurs (anomalocaris) nagent ; les trilobites rampent sur le fond.
-			return Locomotion.SWIM if role == "carnivore" and size >= 0.3 else Locomotion.CRAWL
-		Shape.MOLLUSK:
-			return Locomotion.SWIM if size >= 0.3 else Locomotion.CRAWL
-		Shape.MYRIAPOD:
-			return Locomotion.CRAWL
-		Shape.DRAGONFLY:
-			return Locomotion.FLY
-	return Locomotion.WALK
-
-
 ## 1 si la parcelle est sous la mer (prologue), 0 sinon.
 static func submerged(land_use: String) -> float:
 	return 1.0 if land_use in SUBMERGED_USES else 0.0
@@ -202,15 +129,6 @@ static func visual_state(group_state: int) -> float:
 
 
 ## Couleur de remplacement : teinte du rôle, légèrement décalée par espèce pour les distinguer.
-## shape : les organismes fixés (colonies, algues, éponges, plantes) gardent leur couleur
-## naturelle plutôt que celle de leur rôle.
-static func species_color(role: String, species_id: int, shape := -1) -> Color:
-	var base: Color = SESSILE_COLORS.get(shape, ROLE_COLORS.get(role, Color(0.8, 0.8, 0.8)))
-	var h := posmod(hash(species_id), 1000) / 1000.0 - 0.5
-	return Color.from_hsv(fposmod(base.h + h * 0.08, 1.0), clampf(base.s + h * 0.2, 0.0, 1.0),
-		clampf(base.v - absf(h) * 0.25, 0.0, 1.0))
-
-
 ## Vie d'ambiance (purement décorative) : nombre de vols d'oiseaux, d'essaims, d'ombres de
 ## ptérosaures. Rien dans un cratère, peu en ville, pas d'insectes dans le froid.
 ## Les oiseaux n'existent qu'après -150 Ma, les insectes volants après -400 Ma ; sous la mer,

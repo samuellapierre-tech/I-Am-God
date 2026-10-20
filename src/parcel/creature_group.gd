@@ -9,6 +9,7 @@ extends RefCounted
 ## flush() (thread principal) envoie le tampon préparé à la MultiMesh en un seul appel.
 
 const ParcelLogic := preload("res://src/parcel/parcel_logic.gd")
+const Appearance := preload("res://src/parcel/appearance.gd")
 
 const WANDER := 0
 const GRAZE := 1
@@ -40,7 +41,9 @@ var role := ""
 var clade := ""
 var size := 0.3
 var length := 30.0
-var shape := 0
+## Apparence procédurale (Appearance.generate) : forme, couleurs, déplacement.
+var app := {}
+var _signature := 0
 ## ParcelLogic.Locomotion : marche, nage en banc, fixé, rampe, vole.
 var locomotion := 0
 ## La parcelle est sous l'eau (prologue).
@@ -86,22 +89,27 @@ func _init(p_species_id: int, cell: Vector2i) -> void:
 
 ## Met à jour l'apparence depuis une entrée de parcel.fauna. Renvoie true si elle a changé
 ## (texture / silhouette à recharger).
-func set_species(f: Dictionary, p_aquatic := false) -> bool:
-	var new_role := String(f.get("role", "omnivore"))
-	var new_clade := String(f.get("clade", ""))
-	var new_size := float(f.get("size", 0.3))
-	var changed := new_role != role or new_clade != clade or absf(new_size - size) > 0.02 or p_aquatic != aquatic
-	if not changed:
+## traits : traits de l'espèce (génome de la simulation) ; absents => valeurs déduites.
+func set_species(f: Dictionary, p_aquatic := false, traits := {}) -> bool:
+	var new_size := float(f.get("size", traits.get("size", 0.3)))
+	var sig := hash([f.get("role", ""), f.get("clade", ""), f.get("habitat", ""), f.get("diet", ""),
+		roundi(new_size * 50.0), p_aquatic, traits])
+	if sig == _signature and not app.is_empty():
 		return false
-	role = new_role
-	clade = new_clade
+	_signature = sig
+	role = String(f.get("role", "omnivore"))
+	clade = String(f.get("clade", traits.get("clade", "")))
 	size = new_size
 	aquatic = p_aquatic
 	length = ParcelLogic.creature_length(size)
-	shape = ParcelLogic.shape_for(clade, role, size, aquatic)
-	locomotion = ParcelLogic.locomotion_for(shape, role, size)
-	color = ParcelLogic.species_color(role, species_id, shape)
+	app = Appearance.generate(traits, f, species_id)
+	locomotion = int(app.locomotion)
+	color = app.color
 	return true
+
+
+func flies() -> bool:
+	return locomotion == ParcelLogic.Locomotion.FLY or int(app.get("limb_kind", 0)) == Appearance.Limb.WING
 
 
 func active_count() -> int:
@@ -322,7 +330,7 @@ func step(delta: float, ctx: Dictionary) -> void:
 
 ## Empreintes alternées gauche/droite et poussière sous les gros (ou ceux qui courent).
 func _footsteps(i: int, p: Vector2, moved: float, speed: float, walk: float, st: int) -> void:
-	if shape == ParcelLogic.Shape.BIRD or alpha[i] < 0.5 or aquatic or locomotion != ParcelLogic.Locomotion.WALK:
+	if flies() or alpha[i] < 0.5 or aquatic or locomotion != ParcelLogic.Locomotion.WALK:
 		return
 	stride[i] += moved
 	var step_len := length * 0.4
@@ -468,8 +476,9 @@ func _fill_buffer(run_speed: float) -> void:
 	if buffer.size() != capacity * STRIDE:
 		buffer.resize(capacity * STRIDE)
 	buffer.fill(0.0)
-	var quad := length * 1.35 # carré englobant queue, ailes et ombre
-	if shape == ParcelLogic.Shape.MICROBE:
+	# Carré englobant corps, queue, ailes, tentacules et ombre.
+	var quad := length * 1.2 * Appearance.quad_scale(app)
+	if int(app.colony) > 0:
 		quad *= ParcelLogic.MICROBE_SCALE
 	for i in n:
 		var st := state[i]
@@ -535,7 +544,7 @@ func _can_drink() -> bool:
 
 ## Les petits animaux ne traversent pas la rivière (eau libre) : on les garde sur la berge.
 func _wades() -> bool:
-	return size >= 0.6 or shape == ParcelLogic.Shape.BIRD or aquatic or locomotion == ParcelLogic.Locomotion.FLY or locomotion == ParcelLogic.Locomotion.SWIM
+	return size >= 0.6 or flies() or aquatic or locomotion == ParcelLogic.Locomotion.FLY or locomotion == ParcelLogic.Locomotion.SWIM
 
 
 func _random_point(inset: float) -> Vector2:

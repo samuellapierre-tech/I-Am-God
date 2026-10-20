@@ -58,6 +58,7 @@ func _ready() -> void:
 	structures.assets = assets
 	creatures.assets = assets
 	creatures.trail = trail
+	creatures.traits_of = _species_traits
 	structures.trail = trail
 	GameState.parcel_updated.connect(_on_parcel_updated)
 	GameState.divine_action_applied.connect(_on_divine_action)
@@ -199,6 +200,14 @@ func _crater_smoke(at: Vector2, radius: float) -> void:
 	add_child(smoke)
 	get_tree().create_timer(25.0).timeout.connect(func() -> void: smoke.emitting = false)
 	get_tree().create_timer(33.0).timeout.connect(smoke.queue_free)
+
+
+## Génome d'une espèce (lecture seule dans la simulation) : l'apparence en découle.
+func _species_traits(species_id: int) -> Dictionary:
+	if GameState.sim == null:
+		return {}
+	var sp: Dictionary = GameState.sim.species.get(species_id, {})
+	return sp.get("traits", {})
 
 
 func _fx_radius(cells: int) -> float:
